@@ -1,0 +1,15 @@
+os
+tempfile
+requests
+pandas
+matplotlib
+music21
+IPython
+numpy
+scipy
+scikit-image
+seaborn
+tqdm
+verovio
+bokeh
+jupyter
