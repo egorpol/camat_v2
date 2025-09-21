@@ -1,0 +1,11 @@
+numpy
+pandas
+matplotlib
+ipython
+ipywidgets
+ipycanvas
+music21
+requests
+verovio
+bokeh
+jupyter
