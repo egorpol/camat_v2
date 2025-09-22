@@ -1,0 +1,21 @@
+﻿# Python artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Jupyter notebooks
+.ipynb_checkpoints/
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+.env
+
+# IDE settings
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db

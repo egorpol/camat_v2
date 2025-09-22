@@ -74,9 +74,9 @@ def get_file_path(file_source: str, *, timeout_seconds: int = 30) -> str:
         raise FileNotFoundError(f"Local file does not exist: {file_source}")
 
 
-def extract_voice_data(score) -> List[Tuple[int, float, float, float, str]]:
+def extract_voice_data(score) -> List[Tuple[int, float, float, float, str, str]]:
     """
-    Extract measure number, global onset, local onset, duration, and pitch from a music21 score.
+    Extract measure number, onset, duration, pitch, and voice/channel labels from a music21 score.
 
     Parameters
     ----------
@@ -86,9 +86,55 @@ def extract_voice_data(score) -> List[Tuple[int, float, float, float, str]]:
     Returns
     -------
     list[tuple]
-        Each tuple contains (Measure, Local Onset, Global Onset, Duration, Pitch).
+        Each tuple contains (Measure, Local Onset, Global Onset, Duration, Pitch, Voice).
     """
-    voice_data: List[Tuple[int, float, float, float, str]] = []
+
+    def _resolve_voice_label(element: Any) -> str:
+        labels: List[str] = []
+
+        part = element.getContextByClass("Part")
+        if part is not None:
+            part_name = getattr(part, "partName", None) or getattr(part, "partAbbreviation", None) or getattr(part, "id", None)
+            if part_name:
+                part_label = str(part_name).strip()
+                if part_label and part_label not in labels:
+                    labels.append(part_label)
+
+        try:
+            instrument_obj = element.getInstrument(returnDefault=False)
+        except Exception:
+            instrument_obj = None
+
+        if instrument_obj is not None:
+            inst_name = getattr(instrument_obj, "instrumentName", None) or getattr(instrument_obj, "partName", None) or getattr(instrument_obj, "instrumentAbbreviation", None)
+            if inst_name:
+                inst_label = str(inst_name).strip()
+                if inst_label and inst_label not in labels:
+                    labels.append(inst_label)
+
+        voice_ctx = element.getContextByClass("Voice")
+        voice_label = None
+        if voice_ctx is not None:
+            raw_voice = getattr(voice_ctx, "id", None) or getattr(voice_ctx, "name", None)
+            if raw_voice:
+                voice_label = str(raw_voice).strip()
+                if voice_label.isdigit():
+                    voice_label = f"Voice {voice_label}"
+            else:
+                voice_index = getattr(voice_ctx, "index", None)
+                if voice_index is not None:
+                    voice_label = f"Voice {voice_index}"
+                else:
+                    voice_label = "Voice"
+            if voice_label and voice_label not in labels:
+                labels.append(voice_label)
+
+        if not labels:
+            return "Unknown"
+
+        return " / ".join(labels)
+
+    voice_data: List[Tuple[int, float, float, float, str, str]] = []
     notes_and_chords = score.flatten().notesAndRests.stream()
 
     for element in notes_and_chords:
@@ -113,9 +159,11 @@ def extract_voice_data(score) -> List[Tuple[int, float, float, float, str]]:
             else:
                 pitches = [str(p) for p in element.pitches]
 
+            voice_label = _resolve_voice_label(element)
+
             # Append data for each pitch
             for p in pitches:
-                voice_data.append((measure_num, local_onset, global_onset, duration, p))
+                voice_data.append((measure_num, local_onset, global_onset, duration, p, voice_label))
 
     return voice_data
 
@@ -480,14 +528,20 @@ def parse_files(
                 score = _converter.parse(file_path)
 
                 voice_data = extract_voice_data(score)
-                df = pd.DataFrame(voice_data, columns=["Measure", "Local Onset", "Global Onset", "Duration", "Pitch"])
+                df = pd.DataFrame(
+                    voice_data,
+                    columns=["Measure", "Local Onset", "Global Onset", "Duration", "Pitch", "Voice"],
+                )
                 df["MIDI"] = df["Pitch"].apply(lambda p: pitch_module.Pitch(p).midi)
+                df = df[["Measure", "Local Onset", "Global Onset", "Duration", "Pitch", "MIDI", "Voice"]]
+                df = df.sort_values("Global Onset").reset_index(drop=True)
 
                 df_processed = filter_and_adjust_durations(
                     df,
                     filter_zero_duration=filter_zero_duration,
                     adjust_fractional_duration=adjust_fractional_duration,
                 )
+                df_processed = df_processed.sort_values("Global Onset").reset_index(drop=True)
 
                 measure_offsets = get_measure_offsets(score)
 
