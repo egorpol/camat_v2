@@ -9,6 +9,10 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from music21 import note, chord, pitch as pitch_module
+try:
+    from tqdm.auto import tqdm as _tqdm  # Notebook/terminal-friendly progress bar
+except Exception:  # pragma: no cover - optional dependency at runtime
+    _tqdm = None
 
 
 __all__ = [
@@ -124,6 +128,10 @@ def draw_piano_roll(
     show_measure_lines: bool = True,
     pitch_labels: bool = True,
     show: bool = True,
+    plot_width: Optional[int] = None,
+    plot_height: Optional[int] = None,
+    zoom_drag_dim: Optional[str] = None,
+    zoom_wheel_dim: Optional[str] = None,
 ) -> Any:
     """
     Draw a piano roll visualization using the selected backend.
@@ -142,6 +150,14 @@ def draw_piano_roll(
         Whether to use pitch names on the y-axis when supported.
     show : bool
         Whether to immediately show the plot (where applicable).
+    plot_width : int, optional
+        Width (pixels) for the Bokeh plot. If None, defaults to 900.
+    plot_height : int, optional
+        Height (pixels) for the Bokeh plot. If None, defaults to 600.
+    zoom_drag_dim : {"width", "height", "both"}, optional
+        Dimension for box zoom drag tool. None defaults to "both".
+    zoom_wheel_dim : {"width", "height", "both"}, optional
+        Dimension for wheel zoom tool. None defaults to "both".
 
     Returns
     -------
@@ -186,7 +202,7 @@ def draw_piano_roll(
     if backend == "bokeh":
         try:
             from bokeh.plotting import figure, show as bokeh_show
-            from bokeh.models import Span, ColumnDataSource
+            from bokeh.models import Span, ColumnDataSource, BoxZoomTool, WheelZoomTool, PanTool
             # Initialize inline output in notebooks once
             global BOKEH_NOTEBOOK_INITIALIZED
             if not BOKEH_NOTEBOOK_INITIALIZED:
@@ -218,16 +234,48 @@ def draw_piano_roll(
         y_min = int(min(midi_values)) - 1
         y_max = int(max(midi_values)) + 1
 
+        # Normalize zoom dimension options
+        def _norm_dim(val: Optional[str]) -> str:
+            if val is None:
+                return "both"
+            v = str(val).strip().lower()
+            if v in {"x", "width"}:
+                return "width"
+            if v in {"y", "height"}:
+                return "height"
+            return "both"
+
+        drag_dim = _norm_dim(zoom_drag_dim)
+        wheel_dim = _norm_dim(zoom_wheel_dim)
+
         p = figure(
-            height=600,
-            width=900,
+            height=(int(plot_height) if plot_height is not None else 600),
+            width=(int(plot_width) if plot_width is not None else 900),
             title="Piano Roll Visualization",
             x_axis_label="Global Onset (Quarter Lengths)",
             y_axis_label="Pitch",
             y_range=(y_min, y_max),
-            tools="pan,wheel_zoom,reset,save",
+            tools="pan,reset,save",
         )
         p.hbar(y="y", left="left", right="right", height=0.6, source=source, fill_color="#87CEEB")
+
+        # Configure tools: keep pan active by default, wheel zoom active for scroll
+        try:
+            # Ensure wheel/box are present with requested dimensions
+            box_tool = BoxZoomTool(dimensions=drag_dim)
+            wheel_tool = WheelZoomTool(dimensions=wheel_dim)
+            p.add_tools(box_tool, wheel_tool)
+
+            # Prefer existing pan tool if present; otherwise add one
+            pan_tool = p.select_one(PanTool)
+            if pan_tool is None:
+                pan_tool = PanTool()
+                p.add_tools(pan_tool)
+
+            p.toolbar.active_drag = pan_tool
+            p.toolbar.active_scroll = wheel_tool
+        except Exception:
+            pass
 
         if show_measure_lines and measure_offsets is not None:
             for m_offset in measure_offsets:
@@ -348,6 +396,12 @@ def parse_files(
     preview_rows: int = 20,
     cleanup_remote: bool = True,
     return_plots: bool = False,
+    plot_width: Optional[int] = None,
+    plot_height: Optional[int] = None,
+    zoom_drag_dim: Optional[str] = None,
+    zoom_wheel_dim: Optional[str] = None,
+    show_progress: bool = True,
+    progress_desc: Optional[str] = None,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, pd.DataFrame], Optional[pd.DataFrame]]:
     """
     Parse multiple symbolic music files, build DataFrames and optionally render piano rolls.
@@ -377,6 +431,18 @@ def parse_files(
         If True, delete downloaded temp files after processing.
     return_plots : bool
         If True, include the created plot objects in results under 'plot'.
+    plot_width : int, optional
+        Width (pixels) for the Bokeh plot. If None, defaults to library default.
+    plot_height : int, optional
+        Height (pixels) for the Bokeh plot. If None, defaults to library default.
+    zoom_drag_dim : {"width", "height", "both"}, optional
+        Dimension for box zoom drag tool.
+    zoom_wheel_dim : {"width", "height", "both"}, optional
+        Dimension for wheel zoom tool.
+    show_progress : bool
+        If True and multiple files provided, show a tqdm progress bar. Default True.
+    progress_desc : str, optional
+        Custom description for the progress bar (default: "Parsing files").
 
     Returns
     -------
@@ -395,60 +461,78 @@ def parse_files(
     except Exception:
         ipy_display = None  # Not in a notebook
 
-    for idx, file_source in enumerate(file_sources):
-        try:
-            name = _source_to_name(file_source, idx)
-            short_name = os.path.basename(file_source).split("?")[0].split("#")[0]
-            print(f"Processing: {short_name} -> {name}")
+    sources: List[str] = list(file_sources)
+    use_progress = bool(show_progress) and (_tqdm is not None) and (len(sources) > 1)
+    pbar = _tqdm(total=len(sources), desc=(progress_desc or "Parsing files"), unit="file") if use_progress else None
+    log = (_tqdm.write if use_progress else print)
 
-            file_path = get_file_path(file_source)
-            from music21 import converter as _converter
-            score = _converter.parse(file_path)
+    try:
+        for idx, file_source in enumerate(sources):
+            try:
+                name = _source_to_name(file_source, idx)
+                short_name = os.path.basename(file_source).split("?")[0].split("#")[0]
+                log(f"Processing: {short_name} -> {name}")
+                if pbar is not None:
+                    pbar.set_postfix_str(short_name)
 
-            voice_data = extract_voice_data(score)
-            df = pd.DataFrame(voice_data, columns=["Measure", "Local Onset", "Global Onset", "Duration", "Pitch"])
-            df["MIDI"] = df["Pitch"].apply(lambda p: pitch_module.Pitch(p).midi)
+                file_path = get_file_path(file_source)
+                from music21 import converter as _converter
+                score = _converter.parse(file_path)
 
-            df_processed = filter_and_adjust_durations(
-                df,
-                filter_zero_duration=filter_zero_duration,
-                adjust_fractional_duration=adjust_fractional_duration,
-            )
+                voice_data = extract_voice_data(score)
+                df = pd.DataFrame(voice_data, columns=["Measure", "Local Onset", "Global Onset", "Duration", "Pitch"])
+                df["MIDI"] = df["Pitch"].apply(lambda p: pitch_module.Pitch(p).midi)
 
-            measure_offsets = get_measure_offsets(score)
-
-            plot_obj = None
-            if return_plots or backend != "none":
-                plot_obj = draw_piano_roll(
-                    df_processed,
-                    measure_offsets=measure_offsets,
-                    backend=backend,
-                    show_measure_lines=show_measure_lines,
-                    show=True,
+                df_processed = filter_and_adjust_durations(
+                    df,
+                    filter_zero_duration=filter_zero_duration,
+                    adjust_fractional_duration=adjust_fractional_duration,
                 )
 
-            if display_preview and ipy_display is not None:
-                ipy_display(df_processed.head(preview_rows))
-                print(f"Rows: {len(df_processed)}, unique pitches: {df_processed['MIDI'].nunique()}")
+                measure_offsets = get_measure_offsets(score)
 
-            results.append({
-                "name": name,
-                "source": file_source,
-                "df": df_processed,
-                "measure_offsets": measure_offsets,
-                **({"plot": plot_obj} if return_plots else {}),
-            })
-            dfs_by_name[name] = df_processed
-            last_df = df_processed
+                plot_obj = None
+                if return_plots or backend != "none":
+                    plot_obj = draw_piano_roll(
+                        df_processed,
+                        measure_offsets=measure_offsets,
+                        backend=backend,
+                        show_measure_lines=show_measure_lines,
+                        show=True,
+                        plot_width=plot_width,
+                        plot_height=plot_height,
+                        zoom_drag_dim=zoom_drag_dim,
+                        zoom_wheel_dim=zoom_wheel_dim,
+                    )
 
-            if cleanup_remote and file_source.startswith(("http://", "https://")):
-                try:
-                    os.remove(file_path)
-                except OSError:
-                    pass
+                if display_preview and ipy_display is not None:
+                    ipy_display(df_processed.head(preview_rows))
+                    log(f"Rows: {len(df_processed)}, unique pitches: {df_processed['MIDI'].nunique()}")
 
-        except Exception as exc:
-            print(f"An error occurred while processing {file_source}: {exc}")
+                results.append({
+                    "name": name,
+                    "source": file_source,
+                    "df": df_processed,
+                    "measure_offsets": measure_offsets,
+                    **({"plot": plot_obj} if return_plots else {}),
+                })
+                dfs_by_name[name] = df_processed
+                last_df = df_processed
+
+                if cleanup_remote and file_source.startswith(("http://", "https://")):
+                    try:
+                        os.remove(file_path)
+                    except OSError:
+                        pass
+
+            except Exception as exc:
+                log(f"An error occurred while processing {file_source}: {exc}")
+            finally:
+                if pbar is not None:
+                    pbar.update(1)
+    finally:
+        if pbar is not None:
+            pbar.close()
 
     return results, dfs_by_name, last_df
 def _determine_resolution(
@@ -695,7 +779,7 @@ def plot_binary_matrix(
     if backend == "bokeh":
         try:
             from bokeh.plotting import figure, show as bokeh_show
-            from bokeh.models import Span, LinearColorMapper, ColorBar, BasicTicker
+            from bokeh.models import Span, LinearColorMapper, ColorBar, BasicTicker, BoxZoomTool, WheelZoomTool, PanTool
             # Initialize inline output in notebooks once
             global BOKEH_NOTEBOOK_INITIALIZED
             if not BOKEH_NOTEBOOK_INITIALIZED:
@@ -720,7 +804,7 @@ def plot_binary_matrix(
             title="Binary Matrix Representation",
             x_axis_label="Time (in duration units)",
             y_axis_label=("Pitch Class" if y_mode == "chroma" else "MIDI Number"),
-            tools="pan,wheel_zoom,reset,save",
+            tools="pan,wheel_zoom,box_zoom,reset,save",
         )
 
         color_mapper = LinearColorMapper(palette=["#ffffff", "#000000"], low=0, high=1)
@@ -758,6 +842,21 @@ def plot_binary_matrix(
 
         color_bar = ColorBar(color_mapper=color_mapper, label_standoff=8, location=(0, 0))
         p.add_layout(color_bar, "right")
+
+        # Make pan the default drag and wheel zoom the default scroll
+        try:
+            pan_tool = p.select_one(PanTool)
+            wheel_tool = p.select_one(WheelZoomTool)
+            if pan_tool is None:
+                pan_tool = PanTool()
+                p.add_tools(pan_tool)
+            if wheel_tool is None:
+                wheel_tool = WheelZoomTool()
+                p.add_tools(wheel_tool)
+            p.toolbar.active_drag = pan_tool
+            p.toolbar.active_scroll = wheel_tool
+        except Exception:
+            pass
 
         if show:
             bokeh_show(p)
