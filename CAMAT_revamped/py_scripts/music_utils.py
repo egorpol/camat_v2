@@ -25,6 +25,7 @@ __all__ = [
     "parse_files",
     "create_binary_matrix",
     "plot_binary_matrix",
+    "orient_binary_matrix",
     "parse_prototype_notation",
     "parse_notation",
     "create_prototype_binary_matrix",
@@ -340,6 +341,7 @@ def draw_piano_roll(
     raise ValueError("Unsupported backend. Choose from 'plt' or 'bokeh'.")
 
 
+
 def create_piano_roll(df: pd.DataFrame, measure_offsets: Optional[List[float]] = None) -> Any:
     """
     Backward-compatible wrapper that draws using matplotlib backend.
@@ -642,6 +644,7 @@ def create_binary_matrix(
     y_mode: str = "minmax",  # "full" | "minmax" | "chroma"
     midi_low: Optional[int] = None,
     midi_high: Optional[int] = None,
+    row_order: str = "low_to_high",
 ) -> Tuple[np.ndarray, Dict[str, Any]]:
     """
     Convert a processed DataFrame to a binary piano-roll-like matrix.
@@ -663,20 +666,28 @@ def create_binary_matrix(
         Override lower MIDI bound when y_mode == 'minmax'. Ignored otherwise.
     midi_high : int, optional
         Override upper MIDI bound when y_mode == 'minmax'. Ignored otherwise.
+    row_order : {"low_to_high", "high_to_low"}
+        Controls how MIDI rows are ordered in the matrix. "low_to_high" stores the
+        lowest MIDI pitch at row 0 (matrix origin at the bottom). "high_to_low" stores
+        the highest MIDI pitch at row 0 (matrix origin at the top).
 
     Returns
     -------
     (matrix, meta)
         matrix : np.ndarray of shape (num_pitches, num_cols), dtype=int
         meta : dict with keys: resolution, num_cols, time_end, y_mode, y_min, y_max,
-               midi_low, midi_high, pitch_class_labels (when chroma)
+               midi_low, midi_high, row_order, origin, pitch_class_labels (when chroma)
     """
     required_columns = {"MIDI", "Global Onset", "Duration"}
     missing = required_columns.difference(df.columns)
     if missing:
         raise ValueError(f"DataFrame is missing required columns: {sorted(missing)}")
 
-    resolution = _determine_resolution(df, resolution_method=resolution_method, manual_resolution=manual_resolution)
+    resolution = _determine_resolution(
+        df,
+        resolution_method=resolution_method,
+        manual_resolution=manual_resolution,
+    )
 
     # Determine time axis
     total_duration = float(df["Global Onset"].max() + df["Duration"].max())
@@ -692,11 +703,19 @@ def create_binary_matrix(
     if mode not in {"full", "minmax", "chroma"}:
         raise ValueError("y_mode must be one of {'full', 'minmax', 'chroma'}")
 
+    row_order_normalized = (row_order or "low_to_high").lower()
+    if row_order_normalized not in {"low_to_high", "high_to_low"}:
+        raise ValueError("row_order must be 'low_to_high' or 'high_to_low'.")
+    origin = "lower" if row_order_normalized == "low_to_high" else "upper"
+
     if mode == "full":
         y_min = 0
         y_max = 127
         num_rows = y_max - y_min + 1
-        row_index_for_midi = lambda m: int(m) - y_min  # noqa: E731
+        if row_order_normalized == "low_to_high":
+            row_index_for_midi = lambda m: int(m) - y_min  # noqa: E731
+        else:
+            row_index_for_midi = lambda m: y_max - int(m)  # noqa: E731
         pitch_class_labels: Optional[List[str]] = None
         midi_low_final = y_min
         midi_high_final = y_max
@@ -708,7 +727,10 @@ def create_binary_matrix(
         if y_min > y_max:
             y_min, y_max = y_max, y_min
         num_rows = y_max - y_min + 1
-        row_index_for_midi = lambda m: int(m) - y_min  # noqa: E731
+        if row_order_normalized == "low_to_high":
+            row_index_for_midi = lambda m: int(m) - y_min  # noqa: E731
+        else:
+            row_index_for_midi = lambda m: y_max - int(m)  # noqa: E731
         pitch_class_labels = None
         midi_low_final = y_min
         midi_high_final = y_max
@@ -716,10 +738,16 @@ def create_binary_matrix(
         y_min = 0
         y_max = 11
         num_rows = 12
-        row_index_for_midi = lambda m: int(m) % 12  # noqa: E731
-        pitch_class_labels = [
-            "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
-        ]
+        if row_order_normalized == "low_to_high":
+            row_index_for_midi = lambda m: int(m) % 12  # noqa: E731
+            pitch_class_labels = [
+                "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
+            ]
+        else:
+            row_index_for_midi = lambda m: 11 - (int(m) % 12)  # noqa: E731
+            pitch_class_labels = [
+                "B", "A#", "A", "G#", "G", "F#", "F", "E", "D#", "D", "C#", "C",
+            ]
         midi_low_final = None
         midi_high_final = None
 
@@ -751,6 +779,8 @@ def create_binary_matrix(
         "y_max": y_max,
         "midi_low": midi_low_final,
         "midi_high": midi_high_final,
+        "row_order": row_order_normalized,
+        "origin": origin,
         **({"pitch_class_labels": pitch_class_labels} if pitch_class_labels is not None else {}),
     }
 
@@ -797,12 +827,22 @@ def plot_binary_matrix(
     y_min = int(meta.get("y_min", 0))
     y_max = int(meta.get("y_max", matrix.shape[0] - 1))
     y_mode = str(meta.get("y_mode", "minmax"))
+    origin = str(meta.get("origin", "lower")).lower()
+    if origin not in {"lower", "upper"}:
+        origin = "lower"
+
+    matrix_for_display = matrix if origin == "lower" else np.flipud(matrix)
+    labels_display = meta.get("pitch_class_labels", [])
+    if labels_display:
+        labels_display = list(labels_display)
+        if origin == "upper":
+            labels_display.reverse()
 
     if backend == "plt":
         fig, ax = plt.subplots(figsize=(12, 6))
         extent = [0, time_end, y_min, y_max]
         ax.imshow(
-            matrix,
+            matrix_for_display,
             aspect="auto",
             origin="lower",
             cmap=cmap,
@@ -814,10 +854,9 @@ def plot_binary_matrix(
         ax.set_title("Binary Matrix Representation")
 
         if y_mode == "chroma":
-            labels = meta.get("pitch_class_labels", [])
-            ax.set_yticks(list(range(0, matrix.shape[0])))
-            if labels:
-                ax.set_yticklabels(labels)
+            ax.set_yticks(list(range(0, matrix_for_display.shape[0])))
+            if labels_display:
+                ax.set_yticklabels(labels_display)
 
         if show_measure_lines and measure_offsets is not None:
             for m_offset in measure_offsets:
@@ -852,6 +891,8 @@ def plot_binary_matrix(
         except ImportError as exc:
             raise ImportError("Bokeh is not installed. Install bokeh to use the 'bokeh' backend.") from exc
 
+        matrix_for_bokeh = np.ascontiguousarray(matrix_for_display)
+
         p = figure(
             height=600,
             width=900,
@@ -864,14 +905,14 @@ def plot_binary_matrix(
         color_mapper = LinearColorMapper(palette=["#ffffff", "#000000"], low=0, high=1)
 
         # Ensure y-range covers one unit per row so that integer ticks align with row indices
-        rows, cols = matrix.shape
+        rows, cols = matrix_for_bokeh.shape
         p.y_range.start = y_min
         p.y_range.end = y_min + rows
         p.x_range.start = 0
         p.x_range.end = time_end
 
         p.image(
-            image=[matrix],
+            image=[matrix_for_bokeh],
             x=0,
             y=y_min,
             dw=time_end,
@@ -885,11 +926,9 @@ def plot_binary_matrix(
 
         # Configure y-axis ticks/labels
         if y_mode == "chroma":
-            labels = meta.get("pitch_class_labels", [])
-            if labels:
-                # Ticks at integers 0..11
-                p.yaxis.ticker = BasicTicker(desired_num_ticks=12)
-                p.yaxis.major_label_overrides = {i: lbl for i, lbl in enumerate(labels)}
+            if labels_display:
+                p.yaxis.ticker = BasicTicker(desired_num_ticks=len(labels_display))
+                p.yaxis.major_label_overrides = {i: lbl for i, lbl in enumerate(labels_display)}
         else:
             # Let Bokeh auto-decide ticks; when possible it will align to integers
             pass
@@ -917,6 +956,43 @@ def plot_binary_matrix(
         return p
 
     raise ValueError("Unsupported backend. Choose from 'plt' or 'bokeh'.")
+
+def orient_binary_matrix(
+    matrix: np.ndarray,
+    meta: Dict[str, Any],
+    *,
+    target_origin: str = "lower",
+) -> np.ndarray:
+    """
+    Return a binary matrix oriented for the requested origin.
+
+    Parameters
+    ----------
+    matrix : np.ndarray
+        Matrix returned by create_binary_matrix.
+    meta : dict
+        Metadata dictionary returned alongside the matrix.
+    target_origin : {"lower", "upper"}
+        Desired orientation. "lower" keeps the lowest MIDI pitch at the bottom;
+        "upper" places the lowest MIDI pitch at the top.
+
+    Returns
+    -------
+    np.ndarray
+        Matrix oriented toward the requested origin. When a flip is required the
+        returned view shares data via numpy.flipud.
+    """
+    current_origin = str(meta.get("origin", "lower")).lower()
+    requested_origin = str(target_origin or "lower").lower()
+    valid = {"lower", "upper"}
+    if current_origin not in valid:
+        current_origin = "lower"
+    if requested_origin not in valid:
+        raise ValueError("target_origin must be 'lower' or 'upper'.")
+    if current_origin == requested_origin:
+        return matrix
+    return np.flipud(matrix)
+
 
 
 # -----------------------------
