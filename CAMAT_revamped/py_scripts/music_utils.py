@@ -26,6 +26,10 @@ __all__ = [
     "create_binary_matrix",
     "plot_binary_matrix",
     "orient_binary_matrix",
+    "binary_matrix_to_df",
+    "binary_matrix_to_df_from_meta",
+    "binary_matrix_to_df_from_bounds",
+    "round_trip_sanity_check",
     "parse_prototype_notation",
     "parse_notation",
     "create_prototype_binary_matrix",
@@ -992,6 +996,164 @@ def orient_binary_matrix(
     if current_origin == requested_origin:
         return matrix
     return np.flipud(matrix)
+
+
+
+# ----------------------------------------
+# Binary matrix -> DataFrame (inverse ops)
+# ----------------------------------------
+def binary_matrix_to_df(
+    matrix: np.ndarray,
+    bottom_left_midi: int,
+    resolution: float,
+    *,
+    increasing_upwards: bool = True,
+) -> pd.DataFrame:
+    """
+    Parse a binary piano-roll matrix into a DataFrame using a bottom-left MIDI anchor and time resolution.
+
+    Orientation:
+    - If the matrix is a display/view (e.g., flipped with bottom being low MIDI), set increasing_upwards=True
+      and pass bottom_left_midi = lowest MIDI (y_min).
+    - If the matrix is a data matrix from create_binary_matrix (row 0 is low MIDI at the top),
+      set increasing_upwards=False and pass bottom_left_midi = highest MIDI (y_max).
+
+    Assumptions:
+    - matrix shape is (num_rows, num_cols) where columns are time steps and rows are pitch bins.
+    - The bottom-left cell corresponds to MIDI == bottom_left_midi at time 0.
+    - Each column spans 'resolution' time units (e.g., quarterLength multiples).
+    - Contiguous 1s in the same row form a note with Duration = (#cols) * resolution.
+    """
+    if resolution <= 0:
+        raise ValueError("resolution must be a positive number")
+
+    mat = np.asarray(matrix)
+    if mat.ndim != 2:
+        raise ValueError("matrix must be 2D (rows, cols)")
+
+    rows, cols = mat.shape
+    # Treat any positive value as 1
+    mat_bin = (mat > 0).astype(int)
+
+    midi_values: list[int] = []
+    onsets: list[float] = []
+    durations: list[float] = []
+
+    # Iterate rows top-to-bottom in the array, but map to MIDI bottom-up
+    for row_top in range(rows):
+        row_from_bottom = rows - 1 - row_top
+        if increasing_upwards:
+            midi_value = int(bottom_left_midi + row_from_bottom)
+        else:
+            midi_value = int(bottom_left_midi - row_from_bottom)
+        row_data = mat_bin[row_top]
+
+        c = 0
+        while c < cols:
+            if row_data[c] == 1:
+                start_c = c
+                while c < cols and row_data[c] == 1:
+                    c += 1
+                end_c = c  # exclusive
+                midi_values.append(midi_value)
+                onsets.append(float(start_c * resolution))
+                durations.append(float((end_c - start_c) * resolution))
+            else:
+                c += 1
+
+    df = pd.DataFrame({
+        "MIDI": midi_values,
+        "Global Onset": onsets,
+        "Duration": durations,
+    })
+    if len(df):
+        df = df.sort_values(["Global Onset", "MIDI"]).reset_index(drop=True)
+    return df
+
+
+def _normalize_df(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+    out["MIDI"] = out["MIDI"].astype(int)
+    out["Global Onset"] = out["Global Onset"].astype(float).round(6)
+    out["Duration"] = out["Duration"].astype(float).round(6)
+    return out.sort_values(["Global Onset", "MIDI"]).reset_index(drop=True)
+
+
+def binary_matrix_to_df_from_meta(matrix: np.ndarray, meta: dict, *, flipped: bool = False) -> pd.DataFrame:
+    """
+    Convenience wrapper to convert a matrix back to DataFrame using meta from create_binary_matrix.
+    - flipped=False for raw data matrices (row 0 is lowest MIDI at the top)
+    - flipped=True for views like np.flipud(matrix) where bottom is lowest MIDI
+    """
+    resolution = float(meta["resolution"])
+    if flipped:
+        return binary_matrix_to_df(
+            matrix,
+            bottom_left_midi=int(meta["y_min"]),
+            resolution=resolution,
+            increasing_upwards=True,
+        )
+    return binary_matrix_to_df(
+        matrix,
+        bottom_left_midi=int(meta["y_max"]),
+        resolution=resolution,
+        increasing_upwards=False,
+    )
+
+
+def binary_matrix_to_df_from_bounds(
+    matrix: np.ndarray,
+    *,
+    resolution: float,
+    midi_low: int | None = None,
+    midi_high: int | None = None,
+    flipped: bool = False,
+) -> pd.DataFrame:
+    """
+    Convert without meta by specifying either midi_low (lowest MIDI) or midi_high (highest MIDI).
+    - flipped=False for raw data matrices where row 0 is visually "top" and corresponds to lowest MIDI.
+    - flipped=True for UI/display matrices where the bottom row is lowest MIDI (e.g., np.flipud view).
+    Provide at least one of midi_low or midi_high. If one is missing, it will be inferred from the other.
+    """
+    rows = int(np.asarray(matrix).shape[0])
+    if resolution <= 0:
+        raise ValueError("resolution must be positive")
+
+    if flipped:
+        if midi_low is None and midi_high is None:
+            raise ValueError("Provide midi_low or midi_high when flipped=True")
+        if midi_low is None:
+            midi_low = int(midi_high) - (rows - 1)
+        return binary_matrix_to_df(matrix, bottom_left_midi=int(midi_low), resolution=resolution, increasing_upwards=True)
+
+    # Not flipped: raw data orientation
+    if midi_low is None and midi_high is None:
+        raise ValueError("Provide midi_low or midi_high when flipped=False")
+    if midi_high is None:
+        midi_high = int(midi_low) + (rows - 1)
+    return binary_matrix_to_df(matrix, bottom_left_midi=int(midi_high), resolution=resolution, increasing_upwards=False)
+
+
+def round_trip_sanity_check(sample_df: pd.DataFrame, *, resolution: float = 0.5) -> tuple[bool, pd.DataFrame]:
+    """
+    Convert df -> binary (at resolution) -> df and report equality after normalization.
+    Returns (ok, reconstructed_df).
+    """
+    mat, meta = create_binary_matrix(
+        sample_df,
+        resolution_method="manual",
+        manual_resolution=resolution,
+        y_mode="minmax",
+    )
+    # Try both orientations to be robust
+    df_back_data = binary_matrix_to_df_from_meta(mat, meta, flipped=False)
+    df_back_view = binary_matrix_to_df_from_meta(np.flipud(mat), meta, flipped=True)
+    if _normalize_df(sample_df).equals(_normalize_df(df_back_data)):
+        return True, df_back_data
+    if _normalize_df(sample_df).equals(_normalize_df(df_back_view)):
+        return True, df_back_view
+    # Fallback: return the data-oriented reconstruction
+    return False, df_back_data
 
 
 
