@@ -462,77 +462,59 @@ def binary_matrix_designer(
         new_matrix[:min_r, :min_c] = curr[:min_r, :min_c]
         set_matrix(new_matrix, update_inputs=False)
 
-    def start_draw(x, y):
+    def locate_view_cell(x, y):
         r, c = state['matrix'].shape
         if r == 0 or c == 0:
             return None
         gutter = LABEL_GUTTER_PX if state['show_helper'] else 0
-        if x < gutter:
+        if x < gutter or y < 0:
             return None
-        # Find which column was clicked by checking boundaries
         x_offset = x - gutter
-        view_col = None
-        for col in range(c):
-            col_x = get_col_x_position(col) - gutter
-            if col_x <= x_offset < col_x + cell_size:
-                view_col = col
-                break
-        if view_col is None:
+        y_offset = y
+        col_span = cell_size + (COLUMN_GAP_PX if c > 1 else 0)
+        row_span = cell_size + (COLUMN_GAP_PX if r > 1 else 0)
+        if col_span <= 0 or row_span <= 0:
             return None
-        # Find which row was clicked by checking boundaries (account for row gaps)
-        view_row = None
-        for row in range(r):
-            row_y = get_row_y_position(row)
-            if row_y <= y < row_y + cell_size:
-                view_row = row
-                break
-        if 0 <= view_row < r and 0 <= view_col < c:
-            data_row = view_to_data_row(view_row)
-            current = state['matrix'][data_row, view_col]
-            target = 0 if current == 1 else 1
-            state['draw_value'] = target
-            return data_row, view_col
-        return None
+        col = int(x_offset // col_span)
+        row = int(y_offset // row_span)
+        if col < 0 or row < 0 or col >= c or row >= r:
+            return None
+        if (x_offset - col * col_span) >= cell_size:
+            return None
+        if (y_offset - row * row_span) >= cell_size:
+            return None
+        return row, col
+
+    def start_draw(x, y):
+        cell = locate_view_cell(x, y)
+        if cell is None:
+            return None
+        view_row, view_col = cell
+        data_row = view_to_data_row(view_row)
+        current = state['matrix'][data_row, view_col]
+        target = 0 if current == 1 else 1
+        state['draw_value'] = target
+        return data_row, view_col
 
     def apply_draw(x, y):
-        r, c = state['matrix'].shape
-        if r == 0 or c == 0:
+        cell = locate_view_cell(x, y)
+        if cell is None:
+            state['last_drawn_cell'] = None
             return
-        gutter = LABEL_GUTTER_PX if state['show_helper'] else 0
-        if x < gutter:
+        view_row, view_col = cell
+        data_row = view_to_data_row(view_row)
+        cell_key = (data_row, view_col)
+        if state['last_drawn_cell'] == cell_key:
             return
-        # Find which column was clicked by checking boundaries
-        x_offset = x - gutter
-        view_col = None
-        for col in range(c):
-            col_x = get_col_x_position(col) - gutter
-            if col_x <= x_offset < col_x + cell_size:
-                view_col = col
-                break
-        if view_col is None:
-            return
-        # Find which row was clicked by checking boundaries (account for row gaps)
-        view_row = None
-        for row in range(r):
-            row_y = get_row_y_position(row)
-            if row_y <= y < row_y + cell_size:
-                view_row = row
-                break
-        if 0 <= view_row < r and 0 <= view_col < c:
-            data_row = view_to_data_row(view_row)
-            # Performance optimization: skip if same cell as last draw
-            cell_key = (data_row, view_col)
-            if state['last_drawn_cell'] == cell_key:
-                return
-            state['last_drawn_cell'] = cell_key
-            
-            value = state['draw_value']
-            if state['matrix'][data_row, view_col] != value:
-                state['matrix'][data_row, view_col] = value
-                update_toggle_cell(data_row, view_col, value)
-                # Optimized: draw single cell instead of full refresh
-                draw_single_cell(data_row, view_col, value)
-                render_matrix()
+        state['last_drawn_cell'] = cell_key
+
+        value = state['draw_value']
+        if state['matrix'][data_row, view_col] != value:
+            state['matrix'][data_row, view_col] = value
+            update_toggle_cell(data_row, view_col, value)
+            # Optimized: draw single cell instead of full refresh
+            draw_single_cell(data_row, view_col, value)
+            render_matrix()
 
     def on_canvas_down(x, y):
         cell = start_draw(x, y)
