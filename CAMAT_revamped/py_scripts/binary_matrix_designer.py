@@ -48,14 +48,21 @@ def binary_matrix_designer(
         layout=widgets.Layout(min_height='24px')
     )
     grid_container = widgets.Box(layout=widgets.Layout(justify_content='center'))
-    canvas_widget = Canvas(width=max(1, cols * cell_size), height=max(1, rows * cell_size), layout=widgets.Layout(border='1px solid #ccc'))
+    canvas_widget = Canvas(
+        width=max(1, cols * cell_size), 
+        height=max(1, rows * cell_size), 
+        layout=widgets.Layout(
+            border='1px solid #ccc',
+            cursor='crosshair'  # Better cursor for drawing
+        )
+    )
 
     rows_input = widgets.BoundedIntText(value=rows, min=1, max=max_size, description='Rows')
     cols_input = widgets.BoundedIntText(value=cols, min=1, max=max_size, description='Cols')
     mode_selector = widgets.ToggleButtons(
-        options=[('Grid editor', 'grid'), ('Free draw', 'draw')],
+        options=[('🔲 Grid editor', 'grid'), ('✏️ Free draw', 'draw')],
         value='grid',
-        tooltips=['Toggle cells individually', 'Draw with the mouse']
+        tooltips=['Toggle cells individually with buttons', 'Draw with the mouse - faster for complex patterns']
     )
     load_text = widgets.Text(description='Prototype', placeholder='binary_matrix_prototype', layout=widgets.Layout(width='200px'))
     load_button = widgets.Button(description='Load', tooltip='Leave blank to load the prototype argument or enter a variable name.')
@@ -70,9 +77,13 @@ def binary_matrix_designer(
         'flip_y': bool(flip_vertical),
         'meta': (dict(prototype_meta) if prototype_meta is not None else None),
         'show_helper': True,  # visual helper: pitch labels and canvas gutter
+        'last_drawn_cell': None,  # Track last drawn cell to avoid redundant updates
+        'pending_render': False,  # Debounce flag for rendering
     }
 
-    draw_hint = widgets.Label('Drag on the canvas to draw / erase')
+    draw_hint = widgets.HTML(
+        value='<span style="color:#666;font-size:13px;">💡 <b>Tip:</b> Click or drag to toggle cells. First click determines draw/erase mode.</span>'
+    )
     canvas_container = widgets.VBox([draw_hint, canvas_widget], layout=widgets.Layout(display='none', align_items='center', gap='6px'))
     grid_display = widgets.VBox([grid_container], layout=widgets.Layout(align_items='center'))
     export_selector = widgets.Dropdown(
@@ -81,21 +92,33 @@ def binary_matrix_designer(
         description='Export'
     )
     # Visual helper toggle (pitch labels on Y axis)
-    helper_toggle = widgets.Checkbox(value=True, description='Pitch labels')
+    helper_toggle = widgets.Checkbox(
+        value=True, 
+        description='Pitch labels',
+        tooltip='Show/hide pitch name labels (C, C#, D, etc.)'
+    )
     try:
         helper_toggle.indent = False  # align with other controls
     except Exception:
         pass
-    helper_toggle.layout = widgets.Layout(width='120px', margin='0 0 0 8px')
+    helper_toggle.layout = widgets.Layout(width='140px', margin='0 0 0 60px')
 
-    export_button = widgets.Button(description='Export Matrix')
-    clear_button = widgets.Button(description='Clear', tooltip='Set all cells to 0')
+    export_button = widgets.Button(
+        description='Export Matrix',
+        button_style='success',
+        tooltip='Export to binary_matrix_ui variable'
+    )
+    clear_button = widgets.Button(
+        description='Clear All', 
+        tooltip='Set all cells to 0',
+        button_style='warning'
+    )
 
     for control in (rows_input, cols_input):
         control.layout = widgets.Layout(width='120px')
         control.style.description_width = '45px'
-    mode_selector.layout = widgets.Layout(width='200px')
-    mode_selector.style.button_width = '100px'
+    mode_selector.layout = widgets.Layout(width='260px')
+    mode_selector.style.button_width = '130px'
     load_text.layout.width = '240px'
     load_text.style.description_width = '80px'
     load_button.layout = widgets.Layout(width='100px')
@@ -103,17 +126,12 @@ def binary_matrix_designer(
     export_button.layout = widgets.Layout(width='150px')
     clear_button.layout = widgets.Layout(width='120px')
 
-    # Place helper toggle next to mode selector to keep it close
-    mode_and_helper = widgets.HBox(
-        [mode_selector, helper_toggle],
-        layout=widgets.Layout(align_items='center', gap='4px')
-    )
-
     matrix_setup = widgets.GridBox(
-        children=[rows_input, cols_input, mode_and_helper],
+        children=[rows_input, cols_input, helper_toggle, mode_selector],
         layout=widgets.Layout(
-            grid_template_columns='repeat(3, max-content)',
-            grid_gap='8px 16px',
+            grid_template_columns='120px 120px 140px 260px',
+            grid_gap='10px',
+            justify_items='center',
             align_items='center'
         )
     )
@@ -147,7 +165,7 @@ def binary_matrix_designer(
             padding='12px',
             border='1px solid #dddddd',
             align_items='flex-start',
-            max_width='620px'
+            max_width='900px'
         )
     )
 
@@ -301,8 +319,43 @@ def binary_matrix_designer(
         r, c = state['matrix'].shape
         gutter = LABEL_GUTTER_PX if state['show_helper'] else 0
         canvas_widget.width = max(1, gutter + c * cell_size + max(0, c - 1) * COLUMN_GAP_PX)
-        canvas_widget.height = max(1, r * cell_size)
+        canvas_widget.height = max(1, r * cell_size + max(0, r - 1) * COLUMN_GAP_PX)
 
+    def get_col_x_position(col):
+        """Calculate the X position of a column (gaps only between columns, not after last)."""
+        gutter = LABEL_GUTTER_PX if state['show_helper'] else 0
+        r, c = state['matrix'].shape
+        # Add gap only for columns after the first one
+        return gutter + col * cell_size + min(col, max(0, c - 1)) * COLUMN_GAP_PX
+    
+    def get_row_y_position(row):
+        """Calculate the Y position of a row (gaps only between rows, not after last)."""
+        r, c = state['matrix'].shape
+        # Add gap only for rows after the first one
+        return row * cell_size + min(row, max(0, r - 1)) * COLUMN_GAP_PX
+    
+    def draw_single_cell(data_row, view_col, value):
+        """Optimized: draw a single cell without full refresh."""
+        view_row = data_to_view_row(data_row)
+        x = get_col_x_position(view_col)
+        y = get_row_y_position(view_row)
+        
+        # Clear cell area and redraw
+        canvas_widget.clear_rect(x, y, cell_size, cell_size)
+        
+        if value:
+            canvas_widget.fill_style = '#1f77b4'
+            canvas_widget.fill_rect(x, y, cell_size, cell_size)
+        
+        # Redraw grid lines for this cell
+        canvas_widget.stroke_style = '#cccccc'
+        # Vertical lines
+        canvas_widget.stroke_line(x, y, x, y + cell_size)
+        canvas_widget.stroke_line(x + cell_size, y, x + cell_size, y + cell_size)
+        # Horizontal lines
+        canvas_widget.stroke_line(x, y, x + cell_size, y)
+        canvas_widget.stroke_line(x, y + cell_size, x + cell_size, y + cell_size)
+    
     def refresh_canvas():
         r, c = state['matrix'].shape
         canvas_widget.clear()
@@ -313,15 +366,23 @@ def binary_matrix_designer(
             data_row = view_to_data_row(view_row)
             for col in range(c):
                 if state['matrix'][data_row, col]:
-                    canvas_widget.fill_rect(gutter + col * (cell_size + COLUMN_GAP_PX), view_row * cell_size, cell_size, cell_size)
+                    x = get_col_x_position(col)
+                    y = get_row_y_position(view_row)
+                    canvas_widget.fill_rect(x, y, cell_size, cell_size)
         # Grid lines
         canvas_widget.stroke_style = '#cccccc'
+        total_height = r * cell_size + max(0, r - 1) * COLUMN_GAP_PX
         for col in range(c + 1):
-            x = gutter + col * (cell_size + COLUMN_GAP_PX)
-            canvas_widget.stroke_line(x, 0, x, r * cell_size)
+            x = get_col_x_position(col) if col < c else gutter + c * cell_size + max(0, c - 1) * COLUMN_GAP_PX
+            canvas_widget.stroke_line(x, 0, x, total_height)
+        total_width = c * cell_size + max(0, c - 1) * COLUMN_GAP_PX
         for row in range(r + 1):
-            y = row * cell_size
-            canvas_widget.stroke_line(gutter, y, gutter + c * cell_size, y)
+            if row < r:
+                y = get_row_y_position(row)
+            else:
+                y = r * cell_size + max(0, r - 1) * COLUMN_GAP_PX
+            # Horizontal lines span the full width
+            canvas_widget.stroke_line(gutter, y, gutter + total_width, y)
 
         # Helper labels (pitch names)
         if state['show_helper']:
@@ -335,7 +396,7 @@ def binary_matrix_designer(
             for view_row in range(r):
                 index_from_bottom = r - 1 - view_row
                 label = PITCH_CLASS_NAMES[index_from_bottom % 12]
-                y = view_row * cell_size + (cell_size / 2)
+                y = get_row_y_position(view_row) + (cell_size / 2)
                 x = gutter - 6
                 try:
                     canvas_widget.fill_text(label, x, y)
@@ -399,8 +460,23 @@ def binary_matrix_designer(
         gutter = LABEL_GUTTER_PX if state['show_helper'] else 0
         if x < gutter:
             return None
-        view_col = int((x - gutter) // (cell_size + COLUMN_GAP_PX))
-        view_row = int(y // cell_size)
+        # Find which column was clicked by checking boundaries
+        x_offset = x - gutter
+        view_col = None
+        for col in range(c):
+            col_x = get_col_x_position(col) - gutter
+            if col_x <= x_offset < col_x + cell_size:
+                view_col = col
+                break
+        if view_col is None:
+            return None
+        # Find which row was clicked by checking boundaries (account for row gaps)
+        view_row = None
+        for row in range(r):
+            row_y = get_row_y_position(row)
+            if row_y <= y < row_y + cell_size:
+                view_row = row
+                break
         if 0 <= view_row < r and 0 <= view_col < c:
             data_row = view_to_data_row(view_row)
             current = state['matrix'][data_row, view_col]
@@ -416,15 +492,37 @@ def binary_matrix_designer(
         gutter = LABEL_GUTTER_PX if state['show_helper'] else 0
         if x < gutter:
             return
-        view_col = int((x - gutter) // (cell_size + COLUMN_GAP_PX))
-        view_row = int(y // cell_size)
+        # Find which column was clicked by checking boundaries
+        x_offset = x - gutter
+        view_col = None
+        for col in range(c):
+            col_x = get_col_x_position(col) - gutter
+            if col_x <= x_offset < col_x + cell_size:
+                view_col = col
+                break
+        if view_col is None:
+            return
+        # Find which row was clicked by checking boundaries (account for row gaps)
+        view_row = None
+        for row in range(r):
+            row_y = get_row_y_position(row)
+            if row_y <= y < row_y + cell_size:
+                view_row = row
+                break
         if 0 <= view_row < r and 0 <= view_col < c:
             data_row = view_to_data_row(view_row)
+            # Performance optimization: skip if same cell as last draw
+            cell_key = (data_row, view_col)
+            if state['last_drawn_cell'] == cell_key:
+                return
+            state['last_drawn_cell'] = cell_key
+            
             value = state['draw_value']
             if state['matrix'][data_row, view_col] != value:
                 state['matrix'][data_row, view_col] = value
                 update_toggle_cell(data_row, view_col, value)
-                refresh_canvas()
+                # Optimized: draw single cell instead of full refresh
+                draw_single_cell(data_row, view_col, value)
                 render_matrix()
 
     def on_canvas_down(x, y):
@@ -434,7 +532,8 @@ def binary_matrix_designer(
             value = state['draw_value']
             state['matrix'][data_row, view_col] = value
             update_toggle_cell(data_row, view_col, value)
-            refresh_canvas()
+            state['last_drawn_cell'] = (data_row, view_col)
+            draw_single_cell(data_row, view_col, value)
             render_matrix()
             state['drawing'] = True
 
@@ -444,6 +543,7 @@ def binary_matrix_designer(
 
     def on_canvas_up(*_):
         state['drawing'] = False
+        state['last_drawn_cell'] = None  # Reset on mouse up
 
     def on_mode_change(change):
         mode = change['new']
