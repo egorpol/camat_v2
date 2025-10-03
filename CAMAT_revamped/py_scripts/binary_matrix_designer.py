@@ -47,10 +47,16 @@ def binary_matrix_designer(
         value='Active cells: <b>0</b>',
         layout=widgets.Layout(min_height='24px')
     )
-    grid_container = widgets.Box(layout=widgets.Layout(justify_content='center'))
+    grid_container = widgets.Box(layout=widgets.Layout(justify_content='center', width='100%'))
+    # Calculate initial canvas dimensions including gutter and gaps
+    # show_helper defaults to True initially
+    gutter = LABEL_GUTTER_PX if True else 0
+    initial_width = max(1, gutter + cols * cell_size + max(0, cols - 1) * COLUMN_GAP_PX)
+    initial_height = max(1, rows * cell_size + max(0, rows - 1) * COLUMN_GAP_PX)
+
     canvas_widget = Canvas(
-        width=max(1, cols * cell_size), 
-        height=max(1, rows * cell_size), 
+        width=initial_width,
+        height=initial_height,
         layout=widgets.Layout(
             border='1px solid #ccc',
             cursor='crosshair'  # Better cursor for drawing
@@ -84,8 +90,8 @@ def binary_matrix_designer(
     draw_hint = widgets.HTML(
         value='<span style="color:#666;font-size:13px;">💡 <b>Tip:</b> Click or drag to toggle cells. First click determines draw/erase mode.</span>'
     )
-    canvas_container = widgets.VBox([draw_hint, canvas_widget], layout=widgets.Layout(display='none', align_items='center', gap='6px'))
-    grid_display = widgets.VBox([grid_container], layout=widgets.Layout(align_items='center'))
+    canvas_container = widgets.VBox([draw_hint, canvas_widget], layout=widgets.Layout(display='none', align_items='center', justify_content='center', gap='6px', width='100%'))
+    grid_display = widgets.VBox([grid_container], layout=widgets.Layout(align_items='center', width='100%'))
     export_selector = widgets.Dropdown(
         options=[('What you see', 'view'), ('Raw data', 'data')],
         value='view',
@@ -117,7 +123,7 @@ def binary_matrix_designer(
     for control in (rows_input, cols_input):
         control.layout = widgets.Layout(width='120px')
         control.style.description_width = '45px'
-    mode_selector.layout = widgets.Layout(width='260px')
+    mode_selector.layout = widgets.Layout(width='260px', margin='0 0 0 -10px')
     mode_selector.style.button_width = '130px'
     load_text.layout.width = '240px'
     load_text.style.description_width = '80px'
@@ -318,8 +324,11 @@ def binary_matrix_designer(
     def resize_canvas():
         r, c = state['matrix'].shape
         gutter = LABEL_GUTTER_PX if state['show_helper'] else 0
-        canvas_widget.width = max(1, gutter + c * cell_size + max(0, c - 1) * COLUMN_GAP_PX)
-        canvas_widget.height = max(1, r * cell_size + max(0, r - 1) * COLUMN_GAP_PX)
+        new_width = max(1, gutter + c * cell_size + max(0, c - 1) * COLUMN_GAP_PX)
+        new_height = max(1, r * cell_size + max(0, r - 1) * COLUMN_GAP_PX)
+        canvas_widget.width = new_width
+        canvas_widget.height = new_height
+        # Remove layout width to avoid conflicts with canvas width
 
     def get_col_x_position(col):
         """Calculate the X position of a column (gaps only between columns, not after last)."""
@@ -373,7 +382,7 @@ def binary_matrix_designer(
         canvas_widget.stroke_style = '#cccccc'
         total_height = r * cell_size + max(0, r - 1) * COLUMN_GAP_PX
         for col in range(c + 1):
-            x = get_col_x_position(col) if col < c else gutter + c * cell_size + max(0, c - 1) * COLUMN_GAP_PX
+            x = get_col_x_position(col) if col < c else get_col_x_position(c-1) + cell_size
             canvas_widget.stroke_line(x, 0, x, total_height)
         total_width = c * cell_size + max(0, c - 1) * COLUMN_GAP_PX
         for row in range(r + 1):
@@ -632,7 +641,7 @@ def binary_matrix_designer(
 
     ui = widgets.VBox(
         [controls_panel, message, matrix_stats, grid_display, canvas_container],
-        layout=widgets.Layout(gap='16px')
+        layout=widgets.Layout(gap='16px', width='100%', align_items='center')
     )
     if display_ui:
         display(ui)
