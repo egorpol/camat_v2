@@ -183,6 +183,7 @@ def draw_piano_roll(
     show: bool = True,
     plot_width: Optional[int] = None,
     plot_height: Optional[int] = None,
+    dpi: float = 100.0,
     zoom_drag_dim: Optional[str] = None,
     zoom_wheel_dim: Optional[str] = None,
 ) -> Any:
@@ -204,18 +205,20 @@ def draw_piano_roll(
     show : bool
         Whether to immediately show the plot (where applicable).
     plot_width : int, optional
-        Width (pixels) for the Bokeh plot. If None, defaults to 900.
+        Width in pixels for both backends. If None, defaults to 900.
     plot_height : int, optional
-        Height (pixels) for the Bokeh plot. If None, defaults to 600.
+        Height in pixels for both backends. If None, defaults to 600.
+    dpi : float, optional
+        DPI for matplotlib backend (used to convert pixels to inches). Default is 100.
     zoom_drag_dim : {"width", "height", "both"}, optional
-        Dimension for box zoom drag tool. None defaults to "both".
+        Dimension for box zoom drag tool (Bokeh only). None defaults to "both".
     zoom_wheel_dim : {"width", "height", "both"}, optional
-        Dimension for wheel zoom tool. None defaults to "both".
+        Dimension for wheel zoom tool (Bokeh only). None defaults to "both".
 
     Returns
     -------
     Any
-        A backend-specific figure object where applicable; otherwise None.
+        A backend-specific figure object when show=False; None when show=True.
     """
     backend = (backend or "plt").lower()
 
@@ -223,8 +226,15 @@ def draw_piano_roll(
     midi_to_pitch = df.drop_duplicates("MIDI").sort_values("MIDI").set_index("MIDI")["Pitch"].to_dict()
     midi_values = list(midi_to_pitch.keys())
 
+    # Set default dimensions if not provided
+    width_pixels = plot_width or 900
+    height_pixels = plot_height or 600
+
     if backend == "plt":
-        fig, ax = plt.subplots(figsize=(12, 8))
+        # Convert pixels to inches for matplotlib
+        width_inches = width_pixels / dpi
+        height_inches = height_pixels / dpi
+        fig, ax = plt.subplots(figsize=(width_inches, height_inches))
         for _, row in df.iterrows():
             ax.barh(
                 row["MIDI"],
@@ -250,6 +260,9 @@ def draw_piano_roll(
         fig.tight_layout()
         if show:
             plt.show()
+            # Prevent Jupyter from auto-displaying the returned figure again
+            plt.close(fig)
+            return None
         return fig
 
     if backend == "bokeh":
@@ -302,8 +315,8 @@ def draw_piano_roll(
         wheel_dim = _norm_dim(zoom_wheel_dim)
 
         p = figure(
-            height=(int(plot_height) if plot_height is not None else 600),
-            width=(int(plot_width) if plot_width is not None else 900),
+            height=height_pixels,
+            width=width_pixels,
             title="Piano Roll Visualization",
             x_axis_label="Global Onset (Quarter Lengths)",
             y_axis_label="Pitch",
@@ -340,6 +353,7 @@ def draw_piano_roll(
 
         if show:
             bokeh_show(p)
+            return None
         return p
 
     raise ValueError("Unsupported backend. Choose from 'plt' or 'bokeh'.")
@@ -349,9 +363,15 @@ def draw_piano_roll(
 def create_piano_roll(df: pd.DataFrame, measure_offsets: Optional[List[float]] = None) -> Any:
     """
     Backward-compatible wrapper that draws using matplotlib backend.
-    Returns the Matplotlib figure.
+    Shows and returns the Matplotlib figure.
+
+    Note: In Jupyter, returning a figure as the last expression will display it.
+    To avoid duplicate display, assign the return value to a variable.
     """
-    return draw_piano_roll(df, measure_offsets=measure_offsets, backend="plt", show=True)
+    fig = draw_piano_roll(df, measure_offsets=measure_offsets, backend="plt", show=False)
+    # Show after obtaining the figure so we can still return it
+    plt.show()
+    return fig
 
 
 def filter_and_adjust_durations(
@@ -800,6 +820,11 @@ def plot_binary_matrix(
     show_measure_lines: bool = True,
     cmap: str = "gray_r",
     show: bool = True,
+    plot_width: Optional[int] = None,
+    plot_height: Optional[int] = None,
+    dpi: float = 100.0,
+    zoom_drag_dim: Optional[str] = None,
+    zoom_wheel_dim: Optional[str] = None,
 ) -> Any:
     """
     Visualize a binary matrix using Matplotlib or Bokeh, similar to draw_piano_roll.
@@ -820,6 +845,16 @@ def plot_binary_matrix(
         Matplotlib colormap for imshow.
     show : bool
         Whether to immediately show the plot.
+    plot_width : int, optional
+        Width in pixels for both backends. If None, defaults to 900.
+    plot_height : int, optional
+        Height in pixels for both backends. If None, defaults to 600.
+    dpi : float, optional
+        DPI for matplotlib backend (used to convert pixels to inches). Default is 100.
+    zoom_drag_dim : {"width", "height", "both"}, optional
+        Dimension for box zoom drag tool (Bokeh only). None defaults to "both".
+    zoom_wheel_dim : {"width", "height", "both"}, optional
+        Dimension for wheel zoom tool (Bokeh only). None defaults to "both".
 
     Returns
     -------
@@ -827,6 +862,11 @@ def plot_binary_matrix(
         Backend-specific figure object.
     """
     backend = (backend or "plt").lower()
+
+    # Set default dimensions if not provided
+    width_pixels = plot_width or 900
+    height_pixels = plot_height or 600
+
     time_end = float(meta["time_end"]) if "time_end" in meta else matrix.shape[1]
     y_min = int(meta.get("y_min", 0))
     y_max = int(meta.get("y_max", matrix.shape[0] - 1))
@@ -843,7 +883,10 @@ def plot_binary_matrix(
             labels_display.reverse()
 
     if backend == "plt":
-        fig, ax = plt.subplots(figsize=(12, 6))
+        # Convert pixels to inches for matplotlib
+        width_inches = width_pixels / dpi
+        height_inches = height_pixels / dpi
+        fig, ax = plt.subplots(figsize=(width_inches, height_inches))
         extent = [0, time_end, y_min, y_max]
         ax.imshow(
             matrix_for_display,
@@ -898,8 +941,8 @@ def plot_binary_matrix(
         matrix_for_bokeh = np.ascontiguousarray(matrix_for_display)
 
         p = figure(
-            height=600,
-            width=900,
+            height=height_pixels,
+            width=width_pixels,
             title="Binary Matrix Representation",
             x_axis_label="Time (in duration units)",
             y_axis_label=("Pitch Class" if y_mode == "chroma" else "MIDI Number"),
@@ -940,16 +983,33 @@ def plot_binary_matrix(
         color_bar = ColorBar(color_mapper=color_mapper, label_standoff=8, location=(0, 0))
         p.add_layout(color_bar, "right")
 
-        # Make pan the default drag and wheel zoom the default scroll
+        # Normalize zoom dimension options
+        def _norm_dim(val: Optional[str]) -> str:
+            if val is None:
+                return "both"
+            v = str(val).strip().lower()
+            if v in {"x", "width"}:
+                return "width"
+            if v in {"y", "height"}:
+                return "height"
+            return "both"
+
+        drag_dim = _norm_dim(zoom_drag_dim)
+        wheel_dim = _norm_dim(zoom_wheel_dim)
+
+        # Configure tools: keep pan active by default, wheel zoom active for scroll
         try:
+            # Ensure wheel/box are present with requested dimensions
+            box_tool = BoxZoomTool(dimensions=drag_dim)
+            wheel_tool = WheelZoomTool(dimensions=wheel_dim)
+            p.add_tools(box_tool, wheel_tool)
+
+            # Prefer existing pan tool if present; otherwise add one
             pan_tool = p.select_one(PanTool)
-            wheel_tool = p.select_one(WheelZoomTool)
             if pan_tool is None:
                 pan_tool = PanTool()
                 p.add_tools(pan_tool)
-            if wheel_tool is None:
-                wheel_tool = WheelZoomTool()
-                p.add_tools(wheel_tool)
+
             p.toolbar.active_drag = pan_tool
             p.toolbar.active_scroll = wheel_tool
         except Exception:

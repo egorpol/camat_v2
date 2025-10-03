@@ -15,6 +15,12 @@ except ImportError:
 
 __all__ = ['binary_matrix_designer']
 
+PITCH_CLASS_NAMES = [
+    'C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'
+]
+LABEL_GUTTER_PX = 48  # space on the left side of the canvas when helper labels are shown
+COLUMN_GAP_PX = 4  # horizontal gap between columns used across grid and canvas
+
 def binary_matrix_designer(
     rows=8,
     cols=8,
@@ -63,6 +69,7 @@ def binary_matrix_designer(
         'draw_value': 1,
         'flip_y': bool(flip_vertical),
         'meta': (dict(prototype_meta) if prototype_meta is not None else None),
+        'show_helper': True,  # visual helper: pitch labels and canvas gutter
     }
 
     draw_hint = widgets.Label('Drag on the canvas to draw / erase')
@@ -73,14 +80,22 @@ def binary_matrix_designer(
         value='view',
         description='Export'
     )
+    # Visual helper toggle (pitch labels on Y axis)
+    helper_toggle = widgets.Checkbox(value=True, description='Pitch labels')
+    try:
+        helper_toggle.indent = False  # align with other controls
+    except Exception:
+        pass
+    helper_toggle.layout = widgets.Layout(width='120px', margin='0 0 0 8px')
+
     export_button = widgets.Button(description='Export Matrix')
     clear_button = widgets.Button(description='Clear', tooltip='Set all cells to 0')
 
     for control in (rows_input, cols_input):
-        control.layout = widgets.Layout(width='140px')
+        control.layout = widgets.Layout(width='120px')
         control.style.description_width = '45px'
-    mode_selector.layout = widgets.Layout(width='220px')
-    mode_selector.style.button_width = '110px'
+    mode_selector.layout = widgets.Layout(width='200px')
+    mode_selector.style.button_width = '100px'
     load_text.layout.width = '240px'
     load_text.style.description_width = '80px'
     load_button.layout = widgets.Layout(width='100px')
@@ -88,8 +103,14 @@ def binary_matrix_designer(
     export_button.layout = widgets.Layout(width='150px')
     clear_button.layout = widgets.Layout(width='120px')
 
+    # Place helper toggle next to mode selector to keep it close
+    mode_and_helper = widgets.HBox(
+        [mode_selector, helper_toggle],
+        layout=widgets.Layout(align_items='center', gap='4px')
+    )
+
     matrix_setup = widgets.GridBox(
-        children=[rows_input, cols_input, mode_selector],
+        children=[rows_input, cols_input, mode_and_helper],
         layout=widgets.Layout(
             grid_template_columns='repeat(3, max-content)',
             grid_gap='8px 16px',
@@ -225,7 +246,7 @@ def binary_matrix_designer(
             for col in range(c):
                 toggle = widgets.ToggleButton(
                     value=bool(state['matrix'][data_row, col]),
-                    layout=widgets.Layout(width='28px', height='28px'),
+                    layout=widgets.Layout(width=f'{cell_size}px', height=f'{cell_size}px'),
                     tooltip=f'({data_row}, {col})'
                 )
                 toggle.observe(partial(on_toggle, data_row=data_row, col=col), names='value')
@@ -235,12 +256,29 @@ def binary_matrix_designer(
         grid = widgets.GridBox(
             children=children,
             layout=widgets.Layout(
-                grid_template_columns=' '.join(['28px'] * c) if c else 'auto',
-                grid_gap='4px 4px',
+                grid_template_columns=' '.join([f'{cell_size}px'] * c) if c else 'auto',
+                grid_gap=f'0px {COLUMN_GAP_PX}px',  # small gaps between columns only
                 justify_content='center'
             )
         )
-        grid_container.children = (grid,)
+        if state['show_helper']:
+            # Build labels column (top to bottom, bottom label is 'C')
+            r_labels = []
+            for view_row in range(r):
+                index_from_bottom = r - 1 - view_row
+                label = PITCH_CLASS_NAMES[index_from_bottom % 12]
+                r_labels.append(
+                    widgets.HTML(
+                        value=f"<div style='display:flex;align-items:center;justify-content:flex-end;height:100%;font-family:sans-serif;font-size:12px;color:#444;'>{label}</div>",
+                        layout=widgets.Layout(width=f'{LABEL_GUTTER_PX}px', height=f'{cell_size}px')
+                    )
+                )
+            labels_box = widgets.VBox(r_labels, layout=widgets.Layout(align_items='stretch', padding='0px', margin='0px'))
+            grid_container.children = (
+                widgets.HBox([labels_box, grid], layout=widgets.Layout(align_items='flex-start', gap='0px')),
+            )
+        else:
+            grid_container.children = (grid,)
 
     def sync_toggles_with_state():
         if not state['toggles']:
@@ -261,25 +299,49 @@ def binary_matrix_designer(
 
     def resize_canvas():
         r, c = state['matrix'].shape
-        canvas_widget.width = max(1, c * cell_size)
+        gutter = LABEL_GUTTER_PX if state['show_helper'] else 0
+        canvas_widget.width = max(1, gutter + c * cell_size + max(0, c - 1) * COLUMN_GAP_PX)
         canvas_widget.height = max(1, r * cell_size)
 
     def refresh_canvas():
         r, c = state['matrix'].shape
         canvas_widget.clear()
+        gutter = LABEL_GUTTER_PX if state['show_helper'] else 0
+        # Draw active cells
         canvas_widget.fill_style = '#1f77b4'
         for view_row in range(r):
             data_row = view_to_data_row(view_row)
             for col in range(c):
                 if state['matrix'][data_row, col]:
-                    canvas_widget.fill_rect(col * cell_size, view_row * cell_size, cell_size, cell_size)
+                    canvas_widget.fill_rect(gutter + col * (cell_size + COLUMN_GAP_PX), view_row * cell_size, cell_size, cell_size)
+        # Grid lines
         canvas_widget.stroke_style = '#cccccc'
         for col in range(c + 1):
-            x = col * cell_size
+            x = gutter + col * (cell_size + COLUMN_GAP_PX)
             canvas_widget.stroke_line(x, 0, x, r * cell_size)
         for row in range(r + 1):
             y = row * cell_size
-            canvas_widget.stroke_line(0, y, c * cell_size, y)
+            canvas_widget.stroke_line(gutter, y, gutter + c * cell_size, y)
+
+        # Helper labels (pitch names)
+        if state['show_helper']:
+            try:
+                canvas_widget.fill_style = '#444444'
+                canvas_widget.font = '12px sans-serif'
+                canvas_widget.text_align = 'right'
+                canvas_widget.text_baseline = 'middle'
+            except Exception:
+                pass
+            for view_row in range(r):
+                index_from_bottom = r - 1 - view_row
+                label = PITCH_CLASS_NAMES[index_from_bottom % 12]
+                y = view_row * cell_size + (cell_size / 2)
+                x = gutter - 6
+                try:
+                    canvas_widget.fill_text(label, x, y)
+                except Exception:
+                    # ipycanvas available but text properties not supported in some environments
+                    pass
 
     def rebuild_interface():
         build_grid()
@@ -334,7 +396,10 @@ def binary_matrix_designer(
         r, c = state['matrix'].shape
         if r == 0 or c == 0:
             return None
-        view_col = int(x // cell_size)
+        gutter = LABEL_GUTTER_PX if state['show_helper'] else 0
+        if x < gutter:
+            return None
+        view_col = int((x - gutter) // (cell_size + COLUMN_GAP_PX))
         view_row = int(y // cell_size)
         if 0 <= view_row < r and 0 <= view_col < c:
             data_row = view_to_data_row(view_row)
@@ -348,7 +413,10 @@ def binary_matrix_designer(
         r, c = state['matrix'].shape
         if r == 0 or c == 0:
             return
-        view_col = int(x // cell_size)
+        gutter = LABEL_GUTTER_PX if state['show_helper'] else 0
+        if x < gutter:
+            return
+        view_col = int((x - gutter) // (cell_size + COLUMN_GAP_PX))
         view_row = int(y // cell_size)
         if 0 <= view_row < r and 0 <= view_col < c:
             data_row = view_to_data_row(view_row)
@@ -386,6 +454,12 @@ def binary_matrix_designer(
         else:
             grid_display.layout.display = ''
             canvas_container.layout.display = 'none'
+
+    def on_helper_toggle(change):
+        if change['name'] != 'value':
+            return
+        state['show_helper'] = bool(change['new'])
+        rebuild_interface()
 
     def find_candidate_meta(target_name):
         if not target_name:
@@ -442,6 +516,7 @@ def binary_matrix_designer(
     rows_input.observe(adjust_dimensions, names='value')
     cols_input.observe(adjust_dimensions, names='value')
     mode_selector.observe(on_mode_change, names='value')
+    helper_toggle.observe(on_helper_toggle, names='value')
     load_button.on_click(on_load_click)
     canvas_widget.on_mouse_down(on_canvas_down)
     canvas_widget.on_mouse_move(on_canvas_move)
