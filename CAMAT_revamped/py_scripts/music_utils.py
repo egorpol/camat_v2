@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import tempfile
 from typing import List, Tuple, Optional, Dict, Any, Iterable
+import textwrap
 
 import requests
 import pandas as pd
@@ -1282,7 +1283,7 @@ def _stream_to_df(m21_stream) -> pd.DataFrame:
     except Exception:
         pass
 
-    flat_stream = s.flat
+    flat_stream = s.flatten()
     rows = []
     for el in flat_stream.notes:
         onset = float(el.offset)
@@ -1298,6 +1299,24 @@ def _stream_to_df(m21_stream) -> pd.DataFrame:
         df = df.sort_values(["Global Onset", "MIDI"]).reset_index(drop=True)
     return df
 
+
+def _preprocess_humdrum_text(text: str) -> str:
+    """
+    Normalize Humdrum/\*\*kern text coming from triple-quoted, indented notebook cells:
+    - Remove common indentation
+    - Normalize newlines to \n
+    - Trim leading/trailing spaces on each line
+    - Drop empty lines
+    - Ensure a trailing newline (some parsers expect it)
+    """
+    # Remove common indentation and normalize newlines
+    normalized = textwrap.dedent(text).replace("\r\n", "\n").replace("\r", "\n")
+    # Left/right trim each line and drop empties
+    lines = [ln.strip() for ln in normalized.split("\n") if ln.strip()]
+    result = "\n".join(lines)
+    if not result.endswith("\n"):
+        result += "\n"
+    return result
 
 def parse_notation(text: str, syntax: str, *, return_meta: bool = False) -> pd.DataFrame:
     """
@@ -1330,7 +1349,8 @@ def parse_notation(text: str, syntax: str, *, return_meta: bool = False) -> pd.D
         df = _stream_to_df(m21)
     elif s in ("humdrum", "kern"):
         fmt = "humdrum"
-        m21 = converter.parseData(text, format="humdrum")
+        processed = _preprocess_humdrum_text(text)
+        m21 = converter.parseData(processed, format="humdrum")
         df = _stream_to_df(m21)
     elif s == "abc":
         fmt = "abc"
