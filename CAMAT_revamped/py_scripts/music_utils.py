@@ -187,6 +187,10 @@ def draw_piano_roll(
     dpi: float = 100.0,
     zoom_drag_dim: Optional[str] = None,
     zoom_wheel_dim: Optional[str] = None,
+    save_html: Optional[bool] = None,
+    save_html_path: Optional[str] = None,
+    save_png_path: Optional[str] = None,
+    open_html_after_save: bool = False,
 ) -> Any:
     """
     Draw a piano roll visualization using the selected backend.
@@ -215,6 +219,17 @@ def draw_piano_roll(
         Dimension for box zoom drag tool (Bokeh only). None defaults to "both".
     zoom_wheel_dim : {"width", "height", "both"}, optional
         Dimension for wheel zoom tool (Bokeh only). None defaults to "both".
+    save_html : bool, optional
+        If None (default), behaves like legacy mode: saves HTML when save_html_path is provided.
+        If True, saves HTML to save_html_path if provided, otherwise to "piano_roll.html".
+        If False, disables HTML saving regardless of save_html_path.
+    save_html_path : str, optional
+        When backend == 'bokeh', if provided, saves the plot as a standalone HTML file.
+    save_png_path : str, optional
+        When backend == 'bokeh', if provided, attempts to export a PNG. Requires selenium
+        and a compatible webdriver installed (e.g., chromedriver or geckodriver).
+    open_html_after_save : bool, optional
+        If True and save_html_path is provided, attempts to open the saved HTML in a browser.
 
     Returns
     -------
@@ -289,17 +304,15 @@ def draw_piano_roll(
         except ImportError as exc:
             raise ImportError("Bokeh is not installed. Install bokeh to use the 'bokeh' backend.") from exc
 
-        source = ColumnDataSource(
-            data={
-                "y": df["MIDI"],
-                "left": df["Global Onset"],
-                "right": df["Global Onset"] + df["Duration"],
-                "pitch": df["Pitch"],
-            }
-        )
-
         y_min = int(min(midi_values)) - 1
         y_max = int(max(midi_values)) + 1
+
+        source_data = {
+            "y": df["MIDI"],
+            "left": df["Global Onset"],
+            "right": df["Global Onset"] + df["Duration"],
+            "pitch": df["Pitch"],
+        }
 
         # Normalize zoom dimension options
         def _norm_dim(val: Optional[str]) -> str:
@@ -315,42 +328,86 @@ def draw_piano_roll(
         drag_dim = _norm_dim(zoom_drag_dim)
         wheel_dim = _norm_dim(zoom_wheel_dim)
 
-        p = figure(
-            height=height_pixels,
-            width=width_pixels,
-            title="Piano Roll Visualization",
-            x_axis_label="Global Onset (Quarter Lengths)",
-            y_axis_label="Pitch",
-            y_range=(y_min, y_max),
-            tools="pan,reset,save",
-        )
-        p.hbar(y="y", left="left", right="right", height=0.6, source=source, fill_color="#87CEEB")
+        def _build_plot() -> Any:
+            src = ColumnDataSource(data=source_data)
+            plot = figure(
+                height=height_pixels,
+                width=width_pixels,
+                title="Piano Roll Visualization",
+                x_axis_label="Global Onset (Quarter Lengths)",
+                y_axis_label="Pitch",
+                y_range=(y_min, y_max),
+                tools="pan,reset,save",
+            )
+            try:
+                plot.output_backend = "canvas"
+            except Exception:
+                pass
+            plot.hbar(y="y", left="left", right="right", height=0.6, source=src, fill_color="#87CEEB")
 
-        # Configure tools: keep pan active by default, wheel zoom active for scroll
-        try:
-            # Ensure wheel/box are present with requested dimensions
-            box_tool = BoxZoomTool(dimensions=drag_dim)
-            wheel_tool = WheelZoomTool(dimensions=wheel_dim)
-            p.add_tools(box_tool, wheel_tool)
+            try:
+                box_tool = BoxZoomTool(dimensions=drag_dim)
+                wheel_tool = WheelZoomTool(dimensions=wheel_dim)
+                plot.add_tools(box_tool, wheel_tool)
+                pan_tool = plot.select_one(PanTool)
+                if pan_tool is None:
+                    pan_tool = PanTool()
+                    plot.add_tools(pan_tool)
+                plot.toolbar.active_drag = pan_tool
+                plot.toolbar.active_scroll = wheel_tool
+            except Exception:
+                pass
 
-            # Prefer existing pan tool if present; otherwise add one
-            pan_tool = p.select_one(PanTool)
-            if pan_tool is None:
-                pan_tool = PanTool()
-                p.add_tools(pan_tool)
+            if show_measure_lines and measure_offsets is not None:
+                for m_offset in measure_offsets:
+                    plot.add_layout(Span(location=m_offset, dimension="height", line_color="red", line_dash="dashed", line_width=1))
 
-            p.toolbar.active_drag = pan_tool
-            p.toolbar.active_scroll = wheel_tool
-        except Exception:
-            pass
+            if pitch_labels:
+                plot.yaxis.ticker = midi_values
+                plot.yaxis.major_label_overrides = {m: midi_to_pitch[m] for m in midi_values}
 
-        if show_measure_lines and measure_offsets is not None:
-            for m_offset in measure_offsets:
-                p.add_layout(Span(location=m_offset, dimension="height", line_color="red", line_dash="dashed", line_width=1))
+            return plot
 
-        if pitch_labels:
-            p.yaxis.ticker = midi_values
-            p.yaxis.major_label_overrides = {m: midi_to_pitch[m] for m in midi_values}
+        # Build the plot used for display/return
+        p = _build_plot()
+
+        # Optional explicit saves using separate plot instances to avoid doc ownership conflicts
+        # Determine whether to save HTML (supports explicit toggle with back-compat)
+        do_save_html = (bool(save_html) if save_html is not None else (save_html_path is not None))
+        if do_save_html:
+            try:
+                from bokeh.embed import file_html  # type: ignore
+                from bokeh.resources import INLINE  # type: ignore
+                html = file_html(_build_plot(), INLINE, title="Piano Roll")
+                import io, os
+                from datetime import datetime
+                html_target = str(save_html_path) if save_html_path else "piano_roll.html"
+                abs_path = os.path.abspath(html_target)
+                with io.open(abs_path, "w", encoding="utf-8") as f:
+                    f.write(html)
+                print(f"Data saved successfully to {abs_path} at {datetime.now().isoformat(timespec='seconds')}.")
+                if open_html_after_save:
+                    try:
+                        import webbrowser
+                        webbrowser.open_new_tab(abs_path)
+                    except Exception:
+                        pass
+            except Exception as _exc:
+                print(f"Warning: Failed to save HTML to '{save_html_path or 'piano_roll.html'}': {_exc}")
+
+        if save_png_path:
+            try:
+                from bokeh.io import export_png  # type: ignore
+                import os
+                from datetime import datetime
+                abs_png = os.path.abspath(str(save_png_path))
+                export_png(_build_plot(), filename=abs_png)
+                print(f"Data saved successfully to {abs_png} at {datetime.now().isoformat(timespec='seconds')}.")
+            except Exception as _exc:
+                print(
+                    "Warning: Failed to export PNG. Install 'selenium' and a webdriver (e.g., chromedriver). "
+                    f"Error: {_exc}"
+                )
 
         if show:
             bokeh_show(p)
@@ -826,6 +883,11 @@ def plot_binary_matrix(
     dpi: float = 100.0,
     zoom_drag_dim: Optional[str] = None,
     zoom_wheel_dim: Optional[str] = None,
+    pitch_labels: bool = True,
+    save_html: Optional[bool] = None,
+    save_html_path: Optional[str] = None,
+    save_png_path: Optional[str] = None,
+    open_html_after_save: bool = False,
 ) -> Any:
     """
     Visualize a binary matrix using Matplotlib or Bokeh, similar to draw_piano_roll.
@@ -856,6 +918,18 @@ def plot_binary_matrix(
         Dimension for box zoom drag tool (Bokeh only). None defaults to "both".
     zoom_wheel_dim : {"width", "height", "both"}, optional
         Dimension for wheel zoom tool (Bokeh only). None defaults to "both".
+    pitch_labels : bool, optional
+        For Bokeh: whether to use pitch names or indices on the y-axis when supported.
+    save_html : bool, optional
+        If None (default), behaves like legacy mode: saves HTML when save_html_path is provided.
+        If True, saves HTML to save_html_path if provided, otherwise to "binary_matrix.html".
+        If False, disables HTML saving regardless of save_html_path.
+    save_html_path : str, optional
+        When backend == 'bokeh', if provided (and save_html is True or None), saves the plot as standalone HTML.
+    save_png_path : str, optional
+        When backend == 'bokeh', if provided, attempts to export a PNG. Requires selenium and webdriver.
+    open_html_after_save : bool, optional
+        If True and HTML is saved, attempts to open it in a browser.
 
     Returns
     -------
@@ -941,49 +1015,6 @@ def plot_binary_matrix(
 
         matrix_for_bokeh = np.ascontiguousarray(matrix_for_display)
 
-        p = figure(
-            height=height_pixels,
-            width=width_pixels,
-            title="Binary Matrix Representation",
-            x_axis_label="Time (in duration units)",
-            y_axis_label=("Pitch Class" if y_mode == "chroma" else "MIDI Number"),
-            tools="pan,wheel_zoom,box_zoom,reset,save",
-        )
-
-        color_mapper = LinearColorMapper(palette=["#ffffff", "#000000"], low=0, high=1)
-
-        # Ensure y-range covers one unit per row so that integer ticks align with row indices
-        rows, cols = matrix_for_bokeh.shape
-        p.y_range.start = y_min
-        p.y_range.end = y_min + rows
-        p.x_range.start = 0
-        p.x_range.end = time_end
-
-        p.image(
-            image=[matrix_for_bokeh],
-            x=0,
-            y=y_min,
-            dw=time_end,
-            dh=rows,
-            color_mapper=color_mapper,
-        )
-
-        if show_measure_lines and measure_offsets is not None:
-            for m_offset in measure_offsets:
-                p.add_layout(Span(location=m_offset, dimension="height", line_color="red", line_dash="dashed", line_width=1))
-
-        # Configure y-axis ticks/labels
-        if y_mode == "chroma":
-            if labels_display:
-                p.yaxis.ticker = BasicTicker(desired_num_ticks=len(labels_display))
-                p.yaxis.major_label_overrides = {i: lbl for i, lbl in enumerate(labels_display)}
-        else:
-            # Let Bokeh auto-decide ticks; when possible it will align to integers
-            pass
-
-        color_bar = ColorBar(color_mapper=color_mapper, label_standoff=8, location=(0, 0))
-        p.add_layout(color_bar, "right")
-
         # Normalize zoom dimension options
         def _norm_dim(val: Optional[str]) -> str:
             if val is None:
@@ -998,23 +1029,112 @@ def plot_binary_matrix(
         drag_dim = _norm_dim(zoom_drag_dim)
         wheel_dim = _norm_dim(zoom_wheel_dim)
 
-        # Configure tools: keep pan active by default, wheel zoom active for scroll
-        try:
-            # Ensure wheel/box are present with requested dimensions
-            box_tool = BoxZoomTool(dimensions=drag_dim)
-            wheel_tool = WheelZoomTool(dimensions=wheel_dim)
-            p.add_tools(box_tool, wheel_tool)
+        def _build_plot() -> Any:
+            color_mapper = LinearColorMapper(palette=["#ffffff", "#000000"], low=0, high=1)
+            rows, cols = matrix_for_bokeh.shape
+            plot = figure(
+                height=height_pixels,
+                width=width_pixels,
+                title="Binary Matrix Representation",
+                x_axis_label="Time (in duration units)",
+                y_axis_label=("Pitch Class" if y_mode == "chroma" else "MIDI Number"),
+                tools="pan,reset,save",
+            )
+            try:
+                plot.output_backend = "canvas"
+            except Exception:
+                pass
 
-            # Prefer existing pan tool if present; otherwise add one
-            pan_tool = p.select_one(PanTool)
-            if pan_tool is None:
-                pan_tool = PanTool()
-                p.add_tools(pan_tool)
+            # Ranges
+            plot.y_range.start = y_min
+            plot.y_range.end = y_min + rows
+            plot.x_range.start = 0
+            plot.x_range.end = time_end
 
-            p.toolbar.active_drag = pan_tool
-            p.toolbar.active_scroll = wheel_tool
-        except Exception:
-            pass
+            # Image
+            plot.image(
+                image=[matrix_for_bokeh],
+                x=0,
+                y=y_min,
+                dw=time_end,
+                dh=rows,
+                color_mapper=color_mapper,
+            )
+
+            # Measure lines
+            if show_measure_lines and measure_offsets is not None:
+                for m_offset in measure_offsets:
+                    plot.add_layout(Span(location=m_offset, dimension="height", line_color="red", line_dash="dashed", line_width=1))
+
+            # Y-axis labels
+            if y_mode == "chroma":
+                if labels_display:
+                    plot.yaxis.ticker = BasicTicker(desired_num_ticks=len(labels_display))
+                    plot.yaxis.major_label_overrides = {i: lbl for i, lbl in enumerate(labels_display)}
+            else:
+                if pitch_labels and labels_display:
+                    plot.yaxis.ticker = BasicTicker()
+                    plot.yaxis.major_label_overrides = {i + y_min: lbl for i, lbl in enumerate(labels_display)}
+
+            # Color bar
+            color_bar = ColorBar(color_mapper=color_mapper, label_standoff=8, location=(0, 0))
+            plot.add_layout(color_bar, "right")
+
+            # Tools configuration (mirror draw_piano_roll)
+            try:
+                box_tool = BoxZoomTool(dimensions=drag_dim)
+                wheel_tool = WheelZoomTool(dimensions=wheel_dim)
+                plot.add_tools(box_tool, wheel_tool)
+                pan_tool = plot.select_one(PanTool)
+                if pan_tool is None:
+                    pan_tool = PanTool()
+                    plot.add_tools(pan_tool)
+                plot.toolbar.active_drag = pan_tool
+                plot.toolbar.active_scroll = wheel_tool
+            except Exception:
+                pass
+
+            return plot
+
+        # Build the plot used for display/return (complete plot)
+        p = _build_plot()
+
+        # Determine whether to save HTML (explicit toggle with back-compat)
+        do_save_html = (bool(save_html) if save_html is not None else (save_html_path is not None))
+        if do_save_html:
+            try:
+                from bokeh.embed import file_html  # type: ignore
+                from bokeh.resources import INLINE  # type: ignore
+                html = file_html(_build_plot(), INLINE, title="Binary Matrix")
+                import io, os
+                from datetime import datetime
+                html_target = str(save_html_path) if save_html_path else "binary_matrix.html"
+                abs_path = os.path.abspath(html_target)
+                with io.open(abs_path, "w", encoding="utf-8") as f:
+                    f.write(html)
+                print(f"Data saved successfully to {abs_path} at {datetime.now().isoformat(timespec='seconds')}.")
+                if open_html_after_save:
+                    try:
+                        import webbrowser
+                        webbrowser.open_new_tab(abs_path)
+                    except Exception:
+                        pass
+            except Exception as _exc:
+                print(f"Warning: Failed to save HTML to '{save_html_path or 'binary_matrix.html'}': {_exc}")
+
+        if save_png_path:
+            try:
+                from bokeh.io import export_png  # type: ignore
+                import os
+                from datetime import datetime
+                abs_png = os.path.abspath(str(save_png_path))
+                export_png(_build_plot(), filename=abs_png)
+                print(f"Data saved successfully to {abs_png} at {datetime.now().isoformat(timespec='seconds')}.")
+            except Exception as _exc:
+                print(
+                    "Warning: Failed to export PNG. Install 'selenium' and a webdriver (e.g., chromedriver). "
+                    f"Error: {_exc}"
+                )
 
         if show:
             bokeh_show(p)
@@ -1302,7 +1422,7 @@ def _stream_to_df(m21_stream) -> pd.DataFrame:
 
 def _preprocess_humdrum_text(text: str) -> str:
     """
-    Normalize Humdrum/\*\*kern text coming from triple-quoted, indented notebook cells:
+    Normalize Humdrum/**kern text coming from triple-quoted, indented notebook cells:
     - Remove common indentation
     - Normalize newlines to \n
     - Trim leading/trailing spaces on each line
