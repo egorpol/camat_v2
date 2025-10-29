@@ -296,7 +296,12 @@ def draw_piano_roll(
                 if ip is not None:
                     try:
                         from bokeh.io import output_notebook
-                        output_notebook(hide_banner=True)
+                        # Force inline resources to avoid CDN issues in restricted/offline environments
+                        try:
+                            from bokeh.resources import INLINE
+                        except Exception:
+                            INLINE = "inline"
+                        output_notebook(hide_banner=True, resources=INLINE)
                         BOKEH_NOTEBOOK_INITIALIZED = True
                     except Exception:
                         # If initialization fails, continue; show() may open a new tab
@@ -1006,7 +1011,12 @@ def plot_binary_matrix(
                 if ip is not None:
                     try:
                         from bokeh.io import output_notebook
-                        output_notebook(hide_banner=True)
+                        # Force inline resources to avoid CDN issues in restricted/offline environments
+                        try:
+                            from bokeh.resources import INLINE
+                        except Exception:
+                            INLINE = "inline"
+                        output_notebook(hide_banner=True, resources=INLINE)
                         BOKEH_NOTEBOOK_INITIALIZED = True
                     except Exception:
                         pass
