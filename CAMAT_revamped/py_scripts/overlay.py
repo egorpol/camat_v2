@@ -240,6 +240,9 @@ def overlay_top_matches_on_piano_roll(
     zoom_drag_dim: str = "both",
     zoom_wheel_dim: str = "width",
     conv_raw_df: Optional[pd.DataFrame] = None,
+    show_kernel: bool = False,
+    kernel_color: str = "red",
+    kernel_alpha: float = 0.8,
     show: bool = True,
 ):
     """
@@ -260,6 +263,70 @@ def overlay_top_matches_on_piano_roll(
         conv_raw_df=conv_raw_df,
     )
     overlay_source, norm_values, _ = build_overlay_source(match_records, palette=palette)
+
+    # Prepare kernel visualization data if requested
+    kernel_rect_data = []
+    if show_kernel and kernel_array.size > 0:
+        kernel_rows, kernel_cols = kernel_array.shape
+        resolution = float(meta["resolution"])
+        row_order = str(meta.get("row_order", "low_to_high")).lower()
+        y_min = int(meta.get("y_min", 0))
+        y_max = int(meta.get("y_max", y_min))
+
+        for rec in match_records:
+            row_start = int(rec["row_idx"])
+            col_start = int(rec["col_idx"])
+            time_start = float(rec["time_start"])
+
+            # Create rectangles for each kernel cell that has a value > 0
+            for kr in range(kernel_rows):
+                for kc in range(kernel_cols):
+                    if kernel_array[kr, kc] > 0:
+                        row_idx = row_start + kr
+                        midi_value = _midi_from_row(
+                            row_idx,
+                            row_order=row_order,
+                            y_min=y_min,
+                            y_max=y_max,
+                        )
+                        kernel_time = time_start + (kc + 0.5) * resolution
+
+                        kernel_rect_data.append({
+                            'x': kernel_time,
+                            'y': float(midi_value),
+                            'width': resolution,
+                            'height': 1.0,
+                            'rank': rec["rank"],
+                            'row_idx': row_start + kr,
+                            'col_idx': col_start + kc,
+                            'score_norm': float(rec["score_norm"]),
+                            'score_raw': float(rec["score_raw"]),
+                            'time_start': kernel_time - (resolution / 2.0),
+                            'time_end': kernel_time + (resolution / 2.0),
+                            'midi_low': float(midi_value),
+                            'midi_high': float(midi_value),
+                            'kernel_value': float(kernel_array[kr, kc]),
+                        })
+
+    # Create kernel source if we have kernel data
+    kernel_source = None
+    if kernel_rect_data:
+        kernel_source = ColumnDataSource({
+            'x': [r['x'] for r in kernel_rect_data],
+            'y': [r['y'] for r in kernel_rect_data],
+            'width': [r['width'] for r in kernel_rect_data],
+            'height': [r['height'] for r in kernel_rect_data],
+            'rank': [r['rank'] for r in kernel_rect_data],
+            'row_idx': [r['row_idx'] for r in kernel_rect_data],
+            'col_idx': [r['col_idx'] for r in kernel_rect_data],
+            'score_norm': [r['score_norm'] for r in kernel_rect_data],
+            'score_raw': [r['score_raw'] for r in kernel_rect_data],
+            'time_start': [r['time_start'] for r in kernel_rect_data],
+            'time_end': [r['time_end'] for r in kernel_rect_data],
+            'midi_low': [r['midi_low'] for r in kernel_rect_data],
+            'midi_high': [r['midi_high'] for r in kernel_rect_data],
+            'kernel_value': [r['kernel_value'] for r in kernel_rect_data],
+        })
 
     # Base piano roll figure
     p = draw_piano_roll(
@@ -287,8 +354,28 @@ def overlay_top_matches_on_piano_roll(
         line_width=2,
     )
 
+    # Add kernel visualization if requested
+    kernel_renderer = None
+    if kernel_source is not None:
+        kernel_renderer = p.rect(
+            x="x",
+            y="y",
+            width="width",
+            height="height",
+            source=kernel_source,
+            fill_color=kernel_color,
+            fill_alpha=float(kernel_alpha),
+            line_color=kernel_color,
+            line_width=1,
+        )
+
+    # Set up hover tool for both match rectangles and kernel rectangles
+    hover_renderers = [rect_renderer]
+    if kernel_renderer is not None:
+        hover_renderers.append(kernel_renderer)
+
     hover = HoverTool(
-        renderers=[rect_renderer],
+        renderers=hover_renderers,
         tooltips=[
             ("Rank", "@rank"),
             ("Normalized overlap", "@score_norm{0.000}"),
