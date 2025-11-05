@@ -10,3 +10,4 @@ verovio
 bokeh
 jupyter
 tqdm
+partitura
