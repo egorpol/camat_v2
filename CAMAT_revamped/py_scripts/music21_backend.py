@@ -1,0 +1,168 @@
+from __future__ import annotations
+
+import os
+from typing import Any, Dict, Iterable, List, Optional, Tuple
+
+import pandas as pd
+
+from .music_utils import (  # type: ignore
+    draw_piano_roll,
+    extract_voice_data,
+    filter_and_adjust_durations,
+    get_file_path,
+    get_measure_offsets,
+)
+
+try:  # pragma: no cover - optional dependency (progress bar)
+    from tqdm.auto import tqdm as _tqdm
+except Exception:  # pragma: no cover
+    _tqdm = None
+
+__all__ = ["parse_files"]
+
+
+def _source_to_name(file_source: str, index: int) -> str:
+    """
+    Build a stable name for a parsed file: 2-digit index + slugified basename without extension.
+    Example: 00_wtc1f01
+    """
+    import re
+
+    base = os.path.basename(file_source)
+    if "/" in file_source or "\\" in file_source:
+        base = base.split("?")[0].split("#")[0]
+    stem, _ = os.path.splitext(base)
+    # simple slugify: lowercase, alnum+underscore
+    slug = re.sub(r"[^a-z0-9]+", "_", stem.strip().lower())
+    slug = re.sub(r"_+", "_", slug).strip("_")
+    return f"{index:02d}_" + slug
+
+
+def parse_files(
+    file_sources: Iterable[str],
+    *,
+    filter_zero_duration: bool = True,
+    adjust_fractional_duration: bool = True,
+    backend: str = "plt",
+    show_measure_lines: bool = True,
+    display_preview: bool = True,
+    preview_rows: int = 20,
+    cleanup_remote: bool = True,
+    return_plots: bool = False,
+    plot_width: Optional[int] = None,
+    plot_height: Optional[int] = None,
+    zoom_drag_dim: Optional[str] = None,
+    zoom_wheel_dim: Optional[str] = None,
+    show_progress: bool = True,
+    progress_desc: Optional[str] = None,
+    strip_ties: bool = True,
+) -> Tuple[List[Dict[str, Any]], Dict[str, pd.DataFrame], Optional[pd.DataFrame]]:
+    """
+    Parse multiple symbolic music files using music21, with optional tie merging.
+
+    Parameters mirror py_scripts.music_utils.parse_files with an extra:
+    - strip_ties: if True (default), merge tied notes via music21's Stream.stripTies
+      before extracting note rows, so tied notes become single longer notes.
+    """
+    results: List[Dict[str, Any]] = []
+    dfs_by_name: Dict[str, pd.DataFrame] = {}
+    last_df: Optional[pd.DataFrame] = None
+
+    try:
+        from IPython.display import display as ipy_display  # type: ignore
+    except Exception:
+        ipy_display = None  # not in a notebook
+
+    sources: List[str] = list(file_sources)
+    use_progress = bool(show_progress) and (_tqdm is not None) and (len(sources) > 1)
+    pbar = _tqdm(total=len(sources), desc=(progress_desc or "Parsing files"), unit="file") if use_progress else None
+    log = (_tqdm.write if use_progress else print)
+
+    try:
+        for idx, file_source in enumerate(sources):
+            try:
+                name = _source_to_name(file_source, idx)
+                short_name = os.path.basename(file_source).split("?")[0].split("#")[0]
+                log(f"Processing (music21): {short_name} -> {name}")
+                if pbar is not None:
+                    pbar.set_postfix_str(short_name)
+
+                file_path = get_file_path(file_source)
+
+                from music21 import converter as _converter  # lazy import
+                score = _converter.parse(file_path)
+
+                if strip_ties:
+                    try:
+                        score = score.stripTies(inPlace=False)
+                    except Exception:
+                        # If stripTies fails for any reason, continue with original score
+                        pass
+
+                voice_data = extract_voice_data(score)
+                df = pd.DataFrame(
+                    voice_data,
+                    columns=["Measure", "Local Onset", "Global Onset", "Duration", "Pitch", "Voice"],
+                )
+
+                from music21 import pitch as pitch_module  # localize import
+                df["MIDI"] = df["Pitch"].apply(lambda p: pitch_module.Pitch(p).midi)
+                df = df[["Measure", "Local Onset", "Global Onset", "Duration", "Pitch", "MIDI", "Voice"]]
+                df = df.sort_values("Global Onset").reset_index(drop=True)
+
+                df_processed = filter_and_adjust_durations(
+                    df,
+                    filter_zero_duration=filter_zero_duration,
+                    adjust_fractional_duration=adjust_fractional_duration,
+                ).sort_values("Global Onset").reset_index(drop=True)
+
+                measure_offsets = get_measure_offsets(score)
+
+                plot_obj = None
+                if return_plots or backend != "none":
+                    plot_obj = draw_piano_roll(
+                        df_processed,
+                        measure_offsets=measure_offsets,
+                        backend=backend,
+                        show_measure_lines=show_measure_lines,
+                        show=True,
+                        plot_width=plot_width,
+                        plot_height=plot_height,
+                        zoom_drag_dim=zoom_drag_dim,
+                        zoom_wheel_dim=zoom_wheel_dim,
+                    )
+
+                if display_preview and ipy_display is not None:
+                    ipy_display(df_processed.head(preview_rows))
+                    log(f"Rows: {len(df_processed)}, unique pitches: {df_processed['MIDI'].nunique()}")
+
+                result_entry: Dict[str, Any] = {
+                    "name": name,
+                    "source": file_source,
+                    "df": df_processed,
+                    "measure_offsets": measure_offsets,
+                }
+                if return_plots:
+                    result_entry["plot"] = plot_obj
+                results.append(result_entry)
+                dfs_by_name[name] = df_processed
+                last_df = df_processed
+
+                if cleanup_remote and file_source.startswith(("http://", "https://")):
+                    try:
+                        os.remove(file_path)
+                    except OSError:
+                        pass
+
+            except Exception as exc:
+                log(f"An error occurred while processing {file_source}: {exc}")
+            finally:
+                if pbar is not None:
+                    pbar.update(1)
+    finally:
+        if pbar is not None:
+            pbar.close()
+
+    return results, dfs_by_name, last_df
+
+
