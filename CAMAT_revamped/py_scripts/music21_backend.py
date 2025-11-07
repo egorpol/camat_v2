@@ -21,6 +21,28 @@ except Exception:  # pragma: no cover
 __all__ = ["parse_files"]
 
 
+_PITCH_CLASS_NAMES = (
+    "C",
+    "C#",
+    "D",
+    "D#",
+    "E",
+    "F",
+    "F#",
+    "G",
+    "G#",
+    "A",
+    "A#",
+    "B",
+)
+
+
+def _midi_to_pitch_name(midi: int) -> str:
+    octave = (int(midi) // 12) - 1
+    pc = _PITCH_CLASS_NAMES[int(midi) % 12]
+    return f"{pc}{octave}"
+
+
 def _source_to_name(file_source: str, index: int) -> str:
     """
     Build a stable name for a parsed file: 2-digit index + slugified basename without extension.
@@ -43,6 +65,7 @@ def parse_files(
     *,
     filter_zero_duration: bool = True,
     adjust_fractional_duration: bool = True,
+    parse_enharmonic: bool = False,
     backend: str = "plt",
     show_measure_lines: bool = True,
     display_preview: bool = True,
@@ -104,10 +127,19 @@ def parse_files(
                     voice_data,
                     columns=["Measure", "Local Onset", "Global Onset", "Duration", "Pitch", "Voice"],
                 )
-
+                
                 from music21 import pitch as pitch_module  # localize import
                 df["MIDI"] = df["Pitch"].apply(lambda p: pitch_module.Pitch(p).midi)
-                df = df[["Measure", "Local Onset", "Global Onset", "Duration", "Pitch", "MIDI", "Voice"]]
+                # Preserve original score spelling in Pitch Enharmonic when requested
+                if parse_enharmonic:
+                    df["Pitch Enharmonic"] = df["Pitch"]
+                # Normalize Pitch strictly from MIDI (simple sharps, no double accidentals)
+                df["Pitch"] = df["MIDI"].apply(_midi_to_pitch_name)
+                base_cols = ["Measure", "Local Onset", "Global Onset", "Duration", "Pitch"]
+                if parse_enharmonic:
+                    base_cols.append("Pitch Enharmonic")
+                base_cols += ["MIDI", "Voice"]
+                df = df[base_cols]
                 df = df.sort_values("Global Onset").reset_index(drop=True)
 
                 df_processed = filter_and_adjust_durations(

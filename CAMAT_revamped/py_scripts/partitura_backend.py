@@ -209,7 +209,7 @@ def _load_partitura_score(file_path: str):
     return pt.load_score(file_path)
 
 
-def _part_to_rows(part) -> List[Dict[str, Any]]:
+def _part_to_rows(part, *, parse_enharmonic: bool = False) -> List[Dict[str, Any]]:
     """
     Convert a single partitura Part into a list of row dictionaries compatible with CAMAT dataframes.
     """
@@ -234,6 +234,46 @@ def _part_to_rows(part) -> List[Dict[str, Any]]:
     has_divs = "divs_pq" in fields
     has_rel = "rel_onset_div" in fields
     has_voice = "voice" in fields
+
+    # Optional mapping from note ids to spelled pitch names, grounded in score data
+    id_to_spelling: Dict[Any, str] = {}
+    if parse_enharmonic:
+        try:
+            for n in getattr(part, "notes", []):
+                nid = getattr(n, "id", None) or getattr(n, "xml_id", None)
+                step = getattr(n, "step", None)
+                octave = getattr(n, "octave", None)
+                alter = getattr(n, "alter", None)
+                # Fallback to accidental name if alter not available
+                if alter is None:
+                    acc_name = str(getattr(n, "accidental", ""))
+                    if acc_name:
+                        if acc_name.lower() in {"sharp", "sharp1"}:
+                            alter = 1
+                        elif acc_name.lower() in {"flat", "flat1"}:
+                            alter = -1
+                        elif acc_name.lower() in {"double-sharp", "sharp2"}:
+                            alter = 2
+                        elif acc_name.lower() in {"double-flat", "flat2"}:
+                            alter = -2
+                        else:
+                            alter = 0
+                acc = ""
+                try:
+                    a = int(round(float(alter))) if alter is not None else 0
+                except Exception:
+                    a = 0
+                if a > 0:
+                    acc = "#" * a
+                elif a < 0:
+                    acc = "b" * (-a)
+                spelled = None
+                if step is not None and octave is not None:
+                    spelled = f"{str(step).upper()}{acc}{int(octave)}"
+                if nid is not None and spelled:
+                    id_to_spelling[nid] = spelled
+        except Exception:
+            id_to_spelling = {}
 
     for note_row in note_array:
         onset_q = float(note_row["onset_quarter"])
@@ -270,41 +310,58 @@ def _part_to_rows(part) -> List[Dict[str, Any]]:
         voice_value = note_row["voice"] if has_voice else None
         voice_label = _format_voice_label(part_label, voice_value)
 
-        rows.append(
-            {
-                "Measure": measure_num,
-                "Local Onset": float(local_onset),
-                "Global Onset": onset_q,
-                "Duration": duration_q,
-                "Pitch": _midi_to_pitch_name(midi_pitch),
-                "MIDI": midi_pitch,
-                "Voice": voice_label,
-            }
-        )
+        row: Dict[str, Any] = {
+            "Measure": measure_num,
+            "Local Onset": float(local_onset),
+            "Global Onset": onset_q,
+            "Duration": duration_q,
+            "Pitch": _midi_to_pitch_name(midi_pitch),
+            "MIDI": midi_pitch,
+            "Voice": voice_label,
+        }
+        if parse_enharmonic and id_to_spelling:
+            # Try common id field names
+            nid = None
+            for fid in ("id", "note_id", "xml_id"):
+                try:
+                    nid = note_row[fid]  # type: ignore[index]
+                    break
+                except Exception:
+                    nid = None
+            if nid in id_to_spelling:
+                row["Pitch Enharmonic"] = id_to_spelling[nid]
+        rows.append(row)
 
     return rows
 
 
-def partitura_score_to_dataframe(score) -> pd.DataFrame:
+def partitura_score_to_dataframe(score, *, parse_enharmonic: bool = False) -> pd.DataFrame:
     """
     Convert a partitura Score into a CAMAT-compatible dataframe.
     """
     all_rows: List[Dict[str, Any]] = []
     for part in getattr(score, "parts", []):
-        all_rows.extend(_part_to_rows(part))
+        all_rows.extend(_part_to_rows(part, parse_enharmonic=parse_enharmonic))
 
-    df = pd.DataFrame(
-        all_rows,
-        columns=[
-            "Measure",
-            "Local Onset",
-            "Global Onset",
-            "Duration",
-            "Pitch",
-            "MIDI",
-            "Voice",
-        ],
-    )
+    # Build DataFrame; include optional column when present
+    df = pd.DataFrame(all_rows)
+    if parse_enharmonic and "Pitch Enharmonic" not in df.columns:
+        # Ensure column exists (left as None) to reflect requested output schema
+        df["Pitch Enharmonic"] = None
+    expected = [
+        "Measure",
+        "Local Onset",
+        "Global Onset",
+        "Duration",
+        "Pitch",
+        "MIDI",
+        "Voice",
+    ]
+    if parse_enharmonic and "Pitch Enharmonic" in df.columns:
+        expected.insert(5, "Pitch Enharmonic")
+    # Reorder if all present; otherwise let pandas keep available columns
+    if set(expected).issubset(df.columns):
+        df = df[expected]
     if len(df):
         df = df.sort_values(["Global Onset", "MIDI"]).reset_index(drop=True)
     return df
@@ -343,6 +400,7 @@ def parse_files_partitura(
     *,
     filter_zero_duration: bool = True,
     adjust_fractional_duration: bool = True,
+    parse_enharmonic: bool = False,
     backend: str = "plt",
     show_measure_lines: bool = True,
     display_preview: bool = True,
@@ -355,6 +413,7 @@ def parse_files_partitura(
     zoom_wheel_dim: Optional[str] = None,
     show_progress: bool = True,
     progress_desc: Optional[str] = None,
+    strip_ties: Optional[bool] = None,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, pd.DataFrame], Optional[pd.DataFrame]]:
     """
     Parse multiple symbolic music files using partitura, producing CAMAT-ready dataframes.
@@ -396,7 +455,7 @@ def parse_files_partitura(
                     if cleanup_fn:
                         cleanup_fn()
 
-                df_raw = partitura_score_to_dataframe(score)
+                df_raw = partitura_score_to_dataframe(score, parse_enharmonic=parse_enharmonic)
                 df_processed = filter_and_adjust_durations(
                     df_raw,
                     filter_zero_duration=filter_zero_duration,
