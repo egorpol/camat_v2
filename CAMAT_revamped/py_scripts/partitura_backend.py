@@ -65,6 +65,8 @@ from .music_utils import (  # type: ignore
     draw_piano_roll,
     filter_and_adjust_durations,
     get_file_path,
+    canonicalize_pitch_name,
+    accidental_rank_from_name,
 )
 
 try:  # pragma: no cover - optional dependency
@@ -235,26 +237,60 @@ def _part_to_rows(part, *, parse_enharmonic: bool = False) -> List[Dict[str, Any
     has_rel = "rel_onset_div" in fields
     has_voice = "voice" in fields
 
-    # Optional mapping from note ids to spelled pitch names, grounded in score data
-    id_to_spelling: Dict[Any, str] = {}
+    # Build a sequential list of spelled pitch names from the part notes (primary method)
+    spelled_sequence: List[str] = []
     if parse_enharmonic:
+        try:
+            for n in getattr(part, "notes", []):
+                step = getattr(n, "step", None)
+                octave = getattr(n, "octave", None)
+                alter = getattr(n, "alter", None)
+                if alter is None:
+                    acc_name = str(getattr(n, "accidental", "") or "").lower()
+                    if acc_name:
+                        if acc_name in {"sharp", "sharp1"}:
+                            alter = 1
+                        elif acc_name in {"flat", "flat1"}:
+                            alter = -1
+                        elif acc_name in {"double-sharp", "sharp2"}:
+                            alter = 2
+                        elif acc_name in {"double-flat", "flat2"}:
+                            alter = -2
+                        else:
+                            alter = 0
+                acc = ""
+                try:
+                    a = int(round(float(alter))) if alter is not None else 0
+                except Exception:
+                    a = 0
+                if a > 0:
+                    acc = "#" * a
+                elif a < 0:
+                    acc = "b" * (-a)
+                if step is not None and octave is not None:
+                    spelled_sequence.append(f"{str(step).upper()}{acc}{int(octave)}")
+        except Exception:
+            spelled_sequence = []
+
+    # Fallback mapping by IDs (used only if sequence length mismatches)
+    id_to_spelling: Dict[Any, str] = {}
+    if parse_enharmonic and not spelled_sequence:
         try:
             for n in getattr(part, "notes", []):
                 nid = getattr(n, "id", None) or getattr(n, "xml_id", None)
                 step = getattr(n, "step", None)
                 octave = getattr(n, "octave", None)
                 alter = getattr(n, "alter", None)
-                # Fallback to accidental name if alter not available
                 if alter is None:
-                    acc_name = str(getattr(n, "accidental", ""))
+                    acc_name = str(getattr(n, "accidental", "") or "").lower()
                     if acc_name:
-                        if acc_name.lower() in {"sharp", "sharp1"}:
+                        if acc_name in {"sharp", "sharp1"}:
                             alter = 1
-                        elif acc_name.lower() in {"flat", "flat1"}:
+                        elif acc_name in {"flat", "flat1"}:
                             alter = -1
-                        elif acc_name.lower() in {"double-sharp", "sharp2"}:
+                        elif acc_name in {"double-sharp", "sharp2"}:
                             alter = 2
-                        elif acc_name.lower() in {"double-flat", "flat2"}:
+                        elif acc_name in {"double-flat", "flat2"}:
                             alter = -2
                         else:
                             alter = 0
@@ -275,6 +311,7 @@ def _part_to_rows(part, *, parse_enharmonic: bool = False) -> List[Dict[str, Any
         except Exception:
             id_to_spelling = {}
 
+    spelled_idx = 0
     for note_row in note_array:
         onset_q = float(note_row["onset_quarter"])
         duration_q = float(note_row["duration_quarter"])
@@ -319,17 +356,23 @@ def _part_to_rows(part, *, parse_enharmonic: bool = False) -> List[Dict[str, Any
             "MIDI": midi_pitch,
             "Voice": voice_label,
         }
-        if parse_enharmonic and id_to_spelling:
-            # Try common id field names
-            nid = None
-            for fid in ("id", "note_id", "xml_id"):
-                try:
-                    nid = note_row[fid]  # type: ignore[index]
-                    break
-                except Exception:
-                    nid = None
-            if nid in id_to_spelling:
-                row["Pitch Enharmonic"] = id_to_spelling[nid]
+        if parse_enharmonic:
+            spelled: Optional[str] = None
+            if spelled_sequence and spelled_idx < len(spelled_sequence):
+                spelled = spelled_sequence[spelled_idx]
+                spelled_idx += 1
+            elif id_to_spelling:
+                nid = None
+                for fid in ("id", "note_id", "xml_id"):
+                    try:
+                        nid = note_row[fid]  # type: ignore[index]
+                        break
+                    except Exception:
+                        nid = None
+                if nid in id_to_spelling:
+                    spelled = id_to_spelling[nid]
+            if spelled:
+                row["Pitch Enharmonic"] = spelled
         rows.append(row)
 
     return rows
@@ -414,6 +457,7 @@ def parse_files_partitura(
     show_progress: bool = True,
     progress_desc: Optional[str] = None,
     strip_ties: Optional[bool] = None,
+    align_accident_schema: bool = False,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, pd.DataFrame], Optional[pd.DataFrame]]:
     """
     Parse multiple symbolic music files using partitura, producing CAMAT-ready dataframes.
@@ -456,6 +500,33 @@ def parse_files_partitura(
                         cleanup_fn()
 
                 df_raw = partitura_score_to_dataframe(score, parse_enharmonic=parse_enharmonic)
+                # Optionally align accidental schema prior to duration filtering (no extra rank column)
+                excess_clamped = 0
+                if align_accident_schema:
+                    source_col = "Pitch Enharmonic" if parse_enharmonic else "Pitch"
+                    if source_col in df_raw.columns:
+                        if parse_enharmonic:
+                            def _canon(v: Any) -> Tuple[Any, bool]:
+                                # Keep None/NaN untouched
+                                if v is None or (isinstance(v, float) and np.isnan(v)):
+                                    return v, False
+                                if not isinstance(v, str):
+                                    try:
+                                        v = str(v)
+                                    except Exception:
+                                        return v, False
+                                # Only canonicalize plausible pitch names
+                                if not v or v[0].upper() not in "ABCDEFG":
+                                    return v, False
+                                return canonicalize_pitch_name(v, max_accidentals=5)
+                            canon_series = df_raw[source_col].apply(_canon)
+                            df_raw[source_col] = canon_series.map(lambda t: t[0])
+                            try:
+                                excess_clamped = int(canon_series.map(lambda t: 1 if t[1] else 0).sum())
+                            except Exception:
+                                excess_clamped = 0
+                        if excess_clamped > 0:
+                            log(f"Warning: {excess_clamped} note(s) exceeded ±5 accidentals; clamped to 5.")
                 df_processed = filter_and_adjust_durations(
                     df_raw,
                     filter_zero_duration=filter_zero_duration,

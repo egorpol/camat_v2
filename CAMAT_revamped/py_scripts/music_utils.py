@@ -22,6 +22,8 @@ __all__ = [
     "filter_and_adjust_durations",
     "get_measure_offsets",
     "draw_piano_roll",
+    "canonicalize_pitch_name",
+    "accidental_rank_from_name",
     "create_piano_roll",
     "parse_files",
     "create_binary_matrix",
@@ -495,6 +497,126 @@ def get_measure_offsets(score) -> List[float]:
         return [m.offset for m in measures]
     except Exception:
         return []
+
+
+# -----------------------------
+# Accidentals normalization API
+# -----------------------------
+_ACCIDENTAL_RANK_MAP = {
+    "bbb": 0,
+    "bb": 1,
+    "b": 2,
+    "": 3,  # natural
+    "#": 4,
+    "##": 5,
+    "###": 6,
+}
+
+
+def _parse_note_name_components(name: str) -> tuple[str, str, str]:
+    """
+    Split a note name into (letter, accidental token(s), octave_part).
+    Accepts a variety of accidental glyphs, music21 flats as '-' characters, and 'x' for double-sharp.
+    """
+    if not isinstance(name, str):
+        return "", "", ""
+    s = name.strip()
+    if not s:
+        return "", "", ""
+    letter = s[0].upper() if s[0].upper() in {"A", "B", "C", "D", "E", "F", "G"} else ""
+    if not letter:
+        return "", "", ""
+    idx = 1
+    acc_raw = []
+    while idx < len(s):
+        ch = s[idx]
+        if ch in {"#", "b", "-", "x", "♯", "♭", "𝄪", "𝄫", "♮"}:
+            acc_raw.append(ch)
+            idx += 1
+        else:
+            break
+    octave_part = s[idx:] if idx < len(s) else ""
+    return letter, "".join(acc_raw), octave_part
+
+
+def _acc_raw_to_semitone_shift(acc_raw: str) -> int:
+    """
+    Convert a raw accidental string (which may contain '-', 'x', and glyphs) to a net semitone shift.
+    Handles natural (♮) as a reset to zero.
+    """
+    if not acc_raw:
+        return 0
+    shift = 0
+    natural_seen = False
+    for ch in acc_raw:
+        if ch in {"#", "♯"}:
+            shift += 1
+        elif ch in {"b", "-","♭"}:
+            shift -= 1
+        elif ch in {"x", "𝄪"}:
+            shift += 2
+        elif ch in {"𝄫"}:
+            shift -= 2
+        elif ch == "♮":
+            # Natural cancels other accidentals in the same token
+            shift = 0
+            natural_seen = True
+        else:
+            continue
+    # If natural appeared alone (or with others), we've already reset to 0
+    return 0 if natural_seen else shift
+
+
+def canonicalize_pitch_name(name: str, *, max_accidentals: int = 5) -> tuple[str, bool]:
+    """
+    Return a canonicalized pitch name where accidentals are expressed as repeated '#' or 'b',
+    clamped to at most max_accidentals (default 5). Returns (canonical_name, exceeded_limit_flag).
+
+    Examples:
+      'Bb4' -> ('Bb4', False)
+      'B-4' -> ('Bb4', False)
+      'Fx5' -> ('F##5', False)
+      'E#######6' -> ('E#####6', True)  # exceeds max 5, clamped and flagged
+    """
+    letter, acc_raw, octave_part = _parse_note_name_components(str(name))
+    if not letter:
+        # Return original string and no exceed flag; downstream callers can keep as-is
+        return str(name), False
+    shift = _acc_raw_to_semitone_shift(acc_raw)
+    exceeded = abs(shift) > int(max_accidentals)
+    if shift > 0:
+        acc = "#" * min(int(max_accidentals), shift)
+    elif shift < 0:
+        acc = "b" * min(int(max_accidentals), -shift)
+    else:
+        acc = ""
+    return f"{letter}{acc}{octave_part}", bool(exceeded)
+
+
+def _acc_token_from_name(name: str) -> str:
+    """
+    Extract the accidental token (limited to triple range for ranking) from a pitch name.
+    Returns one of {'bbb','bb','b','','#','##','###'} based on the net shift.
+    """
+    letter, acc_raw, _ = _parse_note_name_components(str(name))
+    if not letter:
+        return ""
+    net = _acc_raw_to_semitone_shift(acc_raw)
+    if net > 0:
+        return "#" * min(3, net)
+    if net < 0:
+        return "b" * min(3, -net)
+    return ""
+
+
+def accidental_rank_from_name(name: str) -> int:
+    """
+    Compute the accidental rank using the fixed ordering:
+      bbb < bb < b < natural < # < ## < ###
+    Returns an integer in [0..6].
+    """
+    tok = _acc_token_from_name(name)
+    return int(_ACCIDENTAL_RANK_MAP.get(tok, 3))
 
 
 def _slugify_name(text: str) -> str:

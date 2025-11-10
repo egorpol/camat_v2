@@ -11,6 +11,7 @@ from .music_utils import (  # type: ignore
     filter_and_adjust_durations,
     get_file_path,
     get_measure_offsets,
+    canonicalize_pitch_name,
 )
 
 try:  # pragma: no cover - optional dependency (progress bar)
@@ -79,6 +80,7 @@ def parse_files(
     show_progress: bool = True,
     progress_desc: Optional[str] = None,
     strip_ties: bool = True,
+    align_accident_schema: bool = False,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, pd.DataFrame], Optional[pd.DataFrame]]:
     """
     Parse multiple symbolic music files using music21, with optional tie merging.
@@ -86,6 +88,9 @@ def parse_files(
     Parameters mirror py_scripts.music_utils.parse_files with an extra:
     - strip_ties: if True (default), merge tied notes via music21's Stream.stripTies
       before extracting note rows, so tied notes become single longer notes.
+    - align_accident_schema: if True, normalize enharmonic spellings to a canonical
+      accidentals schema (clamped to ±5 as a failsafe) and warn if any notes exceed
+      that limit. No extra rank column is added.
     """
     results: List[Dict[str, Any]] = []
     dfs_by_name: Dict[str, pd.DataFrame] = {}
@@ -135,6 +140,31 @@ def parse_files(
                     df["Pitch Enharmonic"] = df["Pitch"]
                 # Normalize Pitch strictly from MIDI (simple sharps, no double accidentals)
                 df["Pitch"] = df["MIDI"].apply(_midi_to_pitch_name)
+                # Optionally align accidental schema and compute rank
+                excess_clamped = 0
+                if align_accident_schema:
+                    # Prefer enharmonic column when present; otherwise use real pitch
+                    source_col = "Pitch Enharmonic" if parse_enharmonic else "Pitch"
+                    if source_col in df.columns:
+                        if parse_enharmonic:
+                            # Canonicalize enharmonic spellings and clamp to ±5 accidentals
+                            def _canon(v: Any) -> Tuple[str, bool]:
+                                try:
+                                    s = str(v)
+                                except Exception:
+                                    return str(v), False
+                                # Only canonicalize plausible pitches that start with A-G
+                                if not s or s[0].upper() not in "ABCDEFG":
+                                    return s, False
+                                return canonicalize_pitch_name(s, max_accidentals=5)
+                            canon_series = df[source_col].apply(_canon)
+                            df[source_col] = canon_series.map(lambda t: t[0])
+                            try:
+                                excess_clamped = int(canon_series.map(lambda t: 1 if t[1] else 0).sum())
+                            except Exception:
+                                excess_clamped = 0
+                        if excess_clamped > 0:
+                            log(f"Warning: {excess_clamped} note(s) exceeded ±5 accidentals; clamped to 5.")
                 base_cols = ["Measure", "Local Onset", "Global Onset", "Duration", "Pitch"]
                 if parse_enharmonic:
                     base_cols.append("Pitch Enharmonic")
