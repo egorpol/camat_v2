@@ -1,0 +1,83 @@
+# BEETHOVEN - TROMPA Music Encodings (MEI Format)
+
+# SONATEN (Henle Urtext)
+
+# Op. 53 "Waldstein" (C-Dur)
+https://raw.githubusercontent.com/trompamusic-encodings/Beethoven_Op53_HenleUrtext/refs/heads/master/Beethoven_Op53_1-HenleUrtext.mei
+https://raw.githubusercontent.com/trompamusic-encodings/Beethoven_Op53_HenleUrtext/refs/heads/master/Beethoven_Op53_2-HenleUrtext.mei
+https://raw.githubusercontent.com/trompamusic-encodings/Beethoven_Op53_HenleUrtext/refs/heads/master/Beethoven_Op53_3-HenleUrtext.mei
+
+# Op. 31 No. 2 "Tempest" (d-Moll)
+https://raw.githubusercontent.com/trompamusic-encodings/Beethoven_Op31_No2_HenleUrtext/refs/heads/master/Beethoven_Op31_No2_2-HenleUrtext.mei
+
+# Op. 31 No. 3 (Es-Dur)
+https://raw.githubusercontent.com/trompamusic-encodings/Beethoven_Op31_No3_HenleUrtext/refs/heads/master/Beethoven_Op31_No3_1-HenleUrtext.mei
+https://raw.githubusercontent.com/trompamusic-encodings/Beethoven_Op31_No3_HenleUrtext/refs/heads/master/Beethoven_Op31_No3_2-HenleUrtext.mei
+https://raw.githubusercontent.com/trompamusic-encodings/Beethoven_Op31_No3_HenleUrtext/refs/heads/master/Beethoven_Op31_No3_3-HenleUrtext.mei
+https://raw.githubusercontent.com/trompamusic-encodings/Beethoven_Op31_No3_HenleUrtext/refs/heads/master/Beethoven_Op31_No3_4-HenleUrtext.mei
+
+# Op. 28 "Pastoral" (D-Dur)
+https://raw.githubusercontent.com/trompamusic-encodings/Beethoven_Op28_HenleUrtext/refs/heads/master/Beethoven_Op28_3-HenleUrtext.mei
+
+# VARIATIONEN (Breitkopf & Härtel)
+
+# Op. 120 "Diabelli Variationen" (C-Dur, 33 Variationen)
+https://raw.githubusercontent.com/trompamusic-encodings/Beethoven_Op120_BreitkopfHaertel/refs/heads/master/Beethoven_Op120-Breitkopf.mei
+
+# Op. 35 "Eroica Variationen" (Es-Dur)
+https://raw.githubusercontent.com/trompamusic-encodings/Beethoven_Op35_BreitkopfHaertel/refs/heads/master/Beethoven_Op35-BreitkopfHaertel.mei
+
+# Op. 34 "Sechs Variationen" (F-Dur)
+https://raw.githubusercontent.com/trompamusic-encodings/Beethoven_Op34_BreitkopfHaertel/refs/heads/master/Beethoven_Op34-BreitkopfHaertel.mei #
+
+# Op. 76 "Sechs Variationen" (D-Dur)
+https://raw.githubusercontent.com/trompamusic-encodings/Beethoven_Op76_BreitkopfHaertel/refs/heads/master/Beethoven_Op76-BreitkopfHaertel.mei #
+
+# WoO 80 "32 Variationen" (c-Moll - harmonisch komplex)
+https://raw.githubusercontent.com/trompamusic-encodings/Beethoven_WoO80_BreitkopfHaertel/refs/heads/master/Beethoven_WoO80-BreitkopfHaertel.mei #
+
+# WoO 64 "Sechs Variationen über ein Schweizer Lied" (F-Dur)
+https://raw.githubusercontent.com/trompamusic-encodings/Beethoven_WoO64_BreitkopfHaertel/refs/heads/master/Beethoven_WoO64-BreitkopfHaertel.mei #
+
+# BAGATELLEN (Breitkopf & Härtel)
+
+# Op. 126 "Sechs Bagatellen"
+https://raw.githubusercontent.com/trompamusic-encodings/Beethoven_Op126_BreitkopfHaertel/refs/heads/master/Beethoven_Op126_Nr1-Breitkopf.mei
+https://raw.githubusercontent.com/trompamusic-encodings/Beethoven_Op126_BreitkopfHaertel/refs/heads/master/Beethoven_Op126_Nr2-Breitkopf.mei
+https://raw.githubusercontent.com/trompamusic-encodings/Beethoven_Op126_BreitkopfHaertel/refs/heads/master/Beethoven_Op126_Nr3-Breitkopf.mei
+https://raw.githubusercontent.com/trompamusic-encodings/Beethoven_Op126_BreitkopfHaertel/refs/heads/master/Beethoven_Op126_Nr4-Breitkopf.mei
+https://raw.githubusercontent.com/trompamusic-encodings/Beethoven_Op126_BreitkopfHaertel/refs/heads/master/Beethoven_Op126_Nr5-Breitkopf.mei
+https://raw.githubusercontent.com/trompamusic-encodings/Beethoven_Op126_BreitkopfHaertel/refs/heads/master/Beethoven_Op126_Nr6-Breitkopf.mei
+
+# Op. 119 "Elf Bagatellen"
+https://raw.githubusercontent.com/trompamusic-encodings/Beethoven_Op119_BreitkopfHaertel/refs/heads/master/Beethoven_Op119_Nr01-Breitkopf.mei
+https://raw.githubusercontent.com/trompamusic-encodings/Beethoven_Op119_BreitkopfHaertel/refs/heads/master/Beethoven_Op119_Nr02-Breitkopf.mei
+https://raw.githubusercontent.com/trompamusic-encodings/Beethoven_Op119_BreitkopfHaertel/refs/heads/master/Beethoven_Op119_Nr03-Breitkopf.mei
+https://raw.githubusercontent.com/trompamusic-encodings/Beethoven_Op119_BreitkopfHaertel/refs/heads/master/Beethoven_Op119_Nr04-Breitkopf.mei
+https://raw.githubusercontent.com/trompamusic-encodings/Beethoven_Op119_BreitkopfHaertel/refs/heads/master/Beethoven_Op119_Nr05-Breitkopf.mei
+https://raw.githubusercontent.com/trompamusic-encodings/Beethoven_Op119_BreitkopfHaertel/refs/heads/master/Beethoven_Op119_Nr06-Breitkopf.mei
+https://raw.githubusercontent.com/trompamusic-encodings/Beethoven_Op119_BreitkopfHaertel/refs/heads/master/Beethoven_Op119_Nr07-Breitkopf.mei
+https://raw.githubusercontent.com/trompamusic-encodings/Beethoven_Op119_BreitkopfHaertel/refs/heads/master/Beethoven_Op119_Nr08-Breitkopf.mei
+https://raw.githubusercontent.com/trompamusic-encodings/Beethoven_Op119_BreitkopfHaertel/refs/heads/master/Beethoven_Op119_Nr09-Breitkopf.mei
+https://raw.githubusercontent.com/trompamusic-encodings/Beethoven_Op119_BreitkopfHaertel/refs/heads/master/Beethoven_Op119_Nr10-Breitkopf.mei
+https://raw.githubusercontent.com/trompamusic-encodings/Beethoven_Op119_BreitkopfHaertel/refs/heads/master/Beethoven_Op119_Nr11-Breitkopf.mei
+
+# ANDERE WERKE (Breitkopf & Härtel)
+
+# Op. 77 "Phantasie" (g-Moll)
+https://raw.githubusercontent.com/trompamusic-encodings/Beethoven_Op77_BreitkopfHaertel/refs/heads/master/Beethoven_Op77-BreitkopfHaertel.mei
+
+# Op. 129 "Rondo a Capriccio" (G-Dur, "Wut über den verlorenen Groschen")
+https://raw.githubusercontent.com/trompamusic-encodings/Beethoven_Op129_BreitkopfHaertel/refs/heads/master/Beethoven_Op129-Breitkopf.mei
+
+# WoO 57 "Andante favori" (F-Dur)
+https://raw.githubusercontent.com/trompamusic-encodings/Beethoven_WoO57_BreitkopfHaertel/refs/heads/master/Beethoven_WoO57-Breitkopf.mei
+
+# WoO 59 "Für Elise" (a-Moll)
+https://raw.githubusercontent.com/trompamusic-encodings/Beethoven_WoO59_BreitkopfHaertel/refs/heads/master/Beethoven_WoO59-Breitkopf.mei
+
+# WoO Anh. 5 "Zwei Sonatinen"
+https://raw.githubusercontent.com/trompamusic-encodings/Beethoven_WoOAnh5_BreitkopfHaertel/refs/heads/master/Beethoven_WoOAnh5_Nr1_1-Breitkopf.mei
+https://raw.githubusercontent.com/trompamusic-encodings/Beethoven_WoOAnh5_BreitkopfHaertel/refs/heads/master/Beethoven_WoOAnh5_Nr1_2-Breitkopf.mei
+https://raw.githubusercontent.com/trompamusic-encodings/Beethoven_WoOAnh5_BreitkopfHaertel/refs/heads/master/Beethoven_WoOAnh5_Nr2_1-Breitkopf.mei
+https://raw.githubusercontent.com/trompamusic-encodings/Beethoven_WoOAnh5_BreitkopfHaertel/refs/heads/master/Beethoven_WoOAnh5_Nr2_2-Breitkopf.mei
