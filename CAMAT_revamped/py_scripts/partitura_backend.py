@@ -5,7 +5,7 @@ import sys
 import tempfile
 import types
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Union, Sequence
 
 import numpy as np
 import pandas as pd
@@ -446,6 +446,9 @@ def parse_files_partitura(
     parse_enharmonic: bool = False,
     backend: str = "plt",
     show_measure_lines: bool = True,
+    measure_line_color: str = "red",
+    show_hover: bool = True,
+    hover_fields: Optional[List[str]] = None,
     display_preview: bool = True,
     preview_rows: int = 20,
     cleanup_remote: bool = True,
@@ -458,6 +461,8 @@ def parse_files_partitura(
     progress_desc: Optional[str] = None,
     strip_ties: Optional[bool] = None,
     align_accident_schema: bool = False,
+    colorize_voices: bool = False,
+    palette: Optional[Union[str, Sequence[str]]] = None,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, pd.DataFrame], Optional[pd.DataFrame]]:
     """
     Parse multiple symbolic music files using partitura, producing CAMAT-ready dataframes.
@@ -542,11 +547,16 @@ def parse_files_partitura(
                         measure_offsets=measure_offsets,
                         backend=backend,
                         show_measure_lines=show_measure_lines,
+                        measure_line_color=measure_line_color,
+                        show_hover=show_hover,
+                        hover_fields=hover_fields,
                         show=True,
                         plot_width=plot_width,
                         plot_height=plot_height,
                         zoom_drag_dim=zoom_drag_dim,
                         zoom_wheel_dim=zoom_wheel_dim,
+                        colorize_voices=colorize_voices,
+                        palette=palette,
                     )
 
                 if display_preview and ipy_display is not None:

@@ -4,7 +4,7 @@ import os
 from importlib import import_module
 from typing import Callable, Dict, Tuple, List
 
-__all__ = ["get_parse_files", "list_parsers", "normalize_backend_name"]
+__all__ = ["get_parse_files", "list_parsers", "normalize_backend_name", "parse_files"]
 
 
 # Map canonical backend names to (module, attribute)
@@ -77,5 +77,24 @@ def get_parse_files(backend: str | None = None) -> Callable:
         ) from exc
 
     return func
+
+
+def parse_files(file_sources, *,
+                parsing_backend: str | None = None,
+                **kwargs):
+    """
+    Dispatch to the selected backend's parse_files function.
+
+    Usage:
+        from py_scripts.parser_registry import parse_files
+        results, dfs_by_name, last_df = parse_files(
+            FILE_SOURCES,
+            parsing_backend='partitura',  # or 'music21' (optional; env default applies)
+            backend='bokeh',              # plotting backend is forwarded to the concrete parser
+            **other_kwargs
+        )
+    """
+    func = get_parse_files(parsing_backend)
+    return func(file_sources, **kwargs)
 
 

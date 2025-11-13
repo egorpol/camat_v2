@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple, Sequence, Union
 
 import pandas as pd
 
@@ -69,6 +69,9 @@ def parse_files(
     parse_enharmonic: bool = False,
     backend: str = "plt",
     show_measure_lines: bool = True,
+    measure_line_color: str = "red",
+    show_hover: bool = True,
+    hover_fields: Optional[List[str]] = None,
     display_preview: bool = True,
     preview_rows: int = 20,
     cleanup_remote: bool = True,
@@ -81,6 +84,8 @@ def parse_files(
     progress_desc: Optional[str] = None,
     strip_ties: bool = True,
     align_accident_schema: bool = False,
+    colorize_voices: bool = False,
+    palette: Optional[Union[str, Sequence[str]]] = None,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, pd.DataFrame], Optional[pd.DataFrame]]:
     """
     Parse multiple symbolic music files using music21, with optional tie merging.
@@ -187,11 +192,16 @@ def parse_files(
                         measure_offsets=measure_offsets,
                         backend=backend,
                         show_measure_lines=show_measure_lines,
+                    measure_line_color=measure_line_color,
+                    show_hover=show_hover,
+                    hover_fields=hover_fields,
                         show=True,
                         plot_width=plot_width,
                         plot_height=plot_height,
                         zoom_drag_dim=zoom_drag_dim,
-                        zoom_wheel_dim=zoom_wheel_dim,
+                    zoom_wheel_dim=zoom_wheel_dim,
+                    colorize_voices=colorize_voices,
+                    palette=palette,
                     )
 
                 if display_preview and ipy_display is not None:
