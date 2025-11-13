@@ -211,7 +211,7 @@ def _load_partitura_score(file_path: str):
     return pt.load_score(file_path)
 
 
-def _part_to_rows(part, *, parse_enharmonic: bool = False) -> List[Dict[str, Any]]:
+def _part_to_rows(part, *, parse_enharmonic: bool = False, include_xml_ids: bool = False) -> List[Dict[str, Any]]:
     """
     Convert a single partitura Part into a list of row dictionaries compatible with CAMAT dataframes.
     """
@@ -347,6 +347,27 @@ def _part_to_rows(part, *, parse_enharmonic: bool = False) -> List[Dict[str, Any
         voice_value = note_row["voice"] if has_voice else None
         voice_label = _format_voice_label(part_label, voice_value)
 
+        # Optional xml:id extraction (MEI)
+        xml_id_value: Optional[str] = None
+        if include_xml_ids:
+            # Try a variety of common field names present in note_array dtypes
+            for fid in ("xml_id", "xmlid", "id", "note_id", "noteid", "xml:id"):
+                try:
+                    candidate = note_row[fid]  # type: ignore[index]
+                except Exception:
+                    candidate = None
+                if candidate is None:
+                    continue
+                try:
+                    s = str(candidate).strip()
+                except Exception:
+                    s = ""
+                if s:
+                    if s.startswith("#"):
+                        s = s[1:]
+                    xml_id_value = s
+                    break
+
         row: Dict[str, Any] = {
             "Measure": measure_num,
             "Local Onset": float(local_onset),
@@ -356,6 +377,8 @@ def _part_to_rows(part, *, parse_enharmonic: bool = False) -> List[Dict[str, Any
             "MIDI": midi_pitch,
             "Voice": voice_label,
         }
+        if include_xml_ids:
+            row["xml_id"] = xml_id_value
         if parse_enharmonic:
             spelled: Optional[str] = None
             if spelled_sequence and spelled_idx < len(spelled_sequence):
@@ -378,13 +401,13 @@ def _part_to_rows(part, *, parse_enharmonic: bool = False) -> List[Dict[str, Any
     return rows
 
 
-def partitura_score_to_dataframe(score, *, parse_enharmonic: bool = False) -> pd.DataFrame:
+def partitura_score_to_dataframe(score, *, parse_enharmonic: bool = False, include_xml_ids: bool = False) -> pd.DataFrame:
     """
     Convert a partitura Score into a CAMAT-compatible dataframe.
     """
     all_rows: List[Dict[str, Any]] = []
     for part in getattr(score, "parts", []):
-        all_rows.extend(_part_to_rows(part, parse_enharmonic=parse_enharmonic))
+        all_rows.extend(_part_to_rows(part, parse_enharmonic=parse_enharmonic, include_xml_ids=include_xml_ids))
 
     # Build DataFrame; include optional column when present
     df = pd.DataFrame(all_rows)
@@ -400,6 +423,12 @@ def partitura_score_to_dataframe(score, *, parse_enharmonic: bool = False) -> pd
         "MIDI",
         "Voice",
     ]
+    if include_xml_ids and "xml_id" in df.columns:
+        # Place xml_id immediately after 'Voice'
+        try:
+            expected.insert(expected.index("Voice") + 1, "xml_id")
+        except Exception:
+            expected.append("xml_id")
     if parse_enharmonic and "Pitch Enharmonic" in df.columns:
         expected.insert(5, "Pitch Enharmonic")
     # Reorder if all present; otherwise let pandas keep available columns
@@ -463,6 +492,7 @@ def parse_files_partitura(
     align_accident_schema: bool = False,
     colorize_voices: bool = False,
     palette: Optional[Union[str, Sequence[str]]] = None,
+    include_xml_ids: bool = True,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, pd.DataFrame], Optional[pd.DataFrame]]:
     """
     Parse multiple symbolic music files using partitura, producing CAMAT-ready dataframes.
@@ -504,7 +534,13 @@ def parse_files_partitura(
                     if cleanup_fn:
                         cleanup_fn()
 
-                df_raw = partitura_score_to_dataframe(score, parse_enharmonic=parse_enharmonic)
+                # Only include xml_id when MEI source detected and option enabled
+                is_mei = str(sanitized_path).lower().endswith(".mei")
+                df_raw = partitura_score_to_dataframe(
+                    score,
+                    parse_enharmonic=parse_enharmonic,
+                    include_xml_ids=(bool(include_xml_ids) and is_mei),
+                )
                 # Optionally align accidental schema prior to duration filtering (no extra rank column)
                 excess_clamped = 0
                 if align_accident_schema:

@@ -458,6 +458,7 @@ def draw_piano_roll(
 
         row_colors = _voice_color_mapping("bokeh")
         voices_col = df["Voice"].astype(str).tolist() if ("Voice" in df.columns) else None
+        xml_id_col = df["xml_id"].astype(str).tolist() if ("xml_id" in df.columns) else None
         source_data = {
             "y": df["MIDI"],
             "left": df["Global Onset"],
@@ -472,6 +473,8 @@ def draw_piano_roll(
             source_data["color"] = row_colors
         if voices_col is not None:
             source_data["voice"] = voices_col
+        if xml_id_col is not None:
+            source_data["xml_id"] = xml_id_col
 
         # Normalize zoom dimension options
         def _norm_dim(val: Optional[str]) -> str:
@@ -522,11 +525,12 @@ def draw_piano_roll(
                     "pitch": ("Pitch", "@pitch"),
                     "midi": ("MIDI", "@midi"),
                     "voice": ("Voice", "@voice"),
+                    "xml_id": ("xml-id", "@xml_id"),
                     "global_onset": ("Global Onset", "@global_onset"),
                     "local_onset": ("Local Onset", "@local_onset"),
                     "duration": ("Duration", "@duration"),
                 }
-                default_order = ["pitch", "voice", "global_onset", "local_onset", "duration", "midi"]
+                default_order = ["pitch", "voice", "xml_id", "global_onset", "local_onset", "duration", "midi"]
                 fields = [f for f in (list(hover_fields) if hover_fields is not None else default_order) if f in supported]
                 tooltips = [supported[f] for f in fields]
                 try:
