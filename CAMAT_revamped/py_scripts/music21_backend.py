@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple, Sequence, Union
 
 import pandas as pd
 
@@ -11,6 +11,7 @@ from .music_utils import (  # type: ignore
     filter_and_adjust_durations,
     get_file_path,
     get_measure_offsets,
+    canonicalize_pitch_name,
 )
 
 try:  # pragma: no cover - optional dependency (progress bar)
@@ -68,6 +69,9 @@ def parse_files(
     parse_enharmonic: bool = False,
     backend: str = "plt",
     show_measure_lines: bool = True,
+    measure_line_color: str = "red",
+    show_hover: bool = True,
+    hover_fields: Optional[List[str]] = None,
     display_preview: bool = True,
     preview_rows: int = 20,
     cleanup_remote: bool = True,
@@ -79,6 +83,10 @@ def parse_files(
     show_progress: bool = True,
     progress_desc: Optional[str] = None,
     strip_ties: bool = True,
+    align_accident_schema: bool = False,
+    colorize_voices: bool = False,
+    palette: Optional[Union[str, Sequence[str]]] = None,
+    include_xml_ids: bool = True,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, pd.DataFrame], Optional[pd.DataFrame]]:
     """
     Parse multiple symbolic music files using music21, with optional tie merging.
@@ -86,6 +94,9 @@ def parse_files(
     Parameters mirror py_scripts.music_utils.parse_files with an extra:
     - strip_ties: if True (default), merge tied notes via music21's Stream.stripTies
       before extracting note rows, so tied notes become single longer notes.
+    - align_accident_schema: if True, normalize enharmonic spellings to a canonical
+      accidentals schema (clamped to ±5 as a failsafe) and warn if any notes exceed
+      that limit. No extra rank column is added.
     """
     results: List[Dict[str, Any]] = []
     dfs_by_name: Dict[str, pd.DataFrame] = {}
@@ -135,6 +146,31 @@ def parse_files(
                     df["Pitch Enharmonic"] = df["Pitch"]
                 # Normalize Pitch strictly from MIDI (simple sharps, no double accidentals)
                 df["Pitch"] = df["MIDI"].apply(_midi_to_pitch_name)
+                # Optionally align accidental schema and compute rank
+                excess_clamped = 0
+                if align_accident_schema:
+                    # Prefer enharmonic column when present; otherwise use real pitch
+                    source_col = "Pitch Enharmonic" if parse_enharmonic else "Pitch"
+                    if source_col in df.columns:
+                        if parse_enharmonic:
+                            # Canonicalize enharmonic spellings and clamp to ±5 accidentals
+                            def _canon(v: Any) -> Tuple[str, bool]:
+                                try:
+                                    s = str(v)
+                                except Exception:
+                                    return str(v), False
+                                # Only canonicalize plausible pitches that start with A-G
+                                if not s or s[0].upper() not in "ABCDEFG":
+                                    return s, False
+                                return canonicalize_pitch_name(s, max_accidentals=5)
+                            canon_series = df[source_col].apply(_canon)
+                            df[source_col] = canon_series.map(lambda t: t[0])
+                            try:
+                                excess_clamped = int(canon_series.map(lambda t: 1 if t[1] else 0).sum())
+                            except Exception:
+                                excess_clamped = 0
+                        if excess_clamped > 0:
+                            log(f"Warning: {excess_clamped} note(s) exceeded ±5 accidentals; clamped to 5.")
                 base_cols = ["Measure", "Local Onset", "Global Onset", "Duration", "Pitch"]
                 if parse_enharmonic:
                     base_cols.append("Pitch Enharmonic")
@@ -148,6 +184,56 @@ def parse_files(
                     adjust_fractional_duration=adjust_fractional_duration,
                 ).sort_values("Global Onset").reset_index(drop=True)
 
+                # Attach xml_id for MEI sources when requested (best effort via partitura if available)
+                try:
+                    is_mei = str(file_path).lower().endswith(".mei")
+                    if is_mei and include_xml_ids:
+                        try:
+                            # Import partitura backend helpers lazily
+                            from . import partitura_backend as _ptb  # type: ignore
+                            sanitized_path, cleanup_fn = _ptb._sanitize_source_for_partitura(file_path)
+                            try:
+                                sc_pt = _ptb._load_partitura_score(sanitized_path)
+                            finally:
+                                if cleanup_fn:
+                                    cleanup_fn()
+                            df_xml = _ptb.partitura_score_to_dataframe(sc_pt, parse_enharmonic=False, include_xml_ids=True)
+                            # Apply same post-processing for alignment
+                            df_xml_proc = filter_and_adjust_durations(
+                                df_xml,
+                                filter_zero_duration=filter_zero_duration,
+                                adjust_fractional_duration=adjust_fractional_duration,
+                            ).sort_values(["Global Onset", "MIDI"]).reset_index(drop=True)
+                            # Drop duplicates on merge keys to avoid row explosion
+                            keys = ["Global Onset", "Duration", "MIDI"]
+                            df_xml_proc = df_xml_proc.drop_duplicates(subset=keys, keep="first")
+                            if "xml_id" in df_xml_proc.columns:
+                                df_processed = df_processed.merge(
+                                    df_xml_proc[keys + ["xml_id"]],
+                                    on=keys,
+                                    how="left",
+                                )
+                        except Exception:
+                            # If partitura isn't available or mapping fails, continue without xml_id
+                            pass
+                except Exception:
+                    pass
+
+                # Ensure 'xml_id' column is positioned immediately after 'Voice' when present
+                if "xml_id" in df_processed.columns and "Voice" in df_processed.columns:
+                    cols = list(df_processed.columns)
+                    # Remove existing position
+                    cols.remove("xml_id")
+                    # Insert after 'Voice'
+                    try:
+                        voice_idx = cols.index("Voice")
+                        cols.insert(voice_idx + 1, "xml_id")
+                        df_processed = df_processed[cols]
+                    except Exception:
+                        # Fallback: append at end if any issue
+                        cols.append("xml_id")
+                        df_processed = df_processed[cols]
+
                 measure_offsets = get_measure_offsets(score)
 
                 plot_obj = None
@@ -157,11 +243,16 @@ def parse_files(
                         measure_offsets=measure_offsets,
                         backend=backend,
                         show_measure_lines=show_measure_lines,
+                    measure_line_color=measure_line_color,
+                    show_hover=show_hover,
+                    hover_fields=hover_fields,
                         show=True,
                         plot_width=plot_width,
                         plot_height=plot_height,
                         zoom_drag_dim=zoom_drag_dim,
-                        zoom_wheel_dim=zoom_wheel_dim,
+                    zoom_wheel_dim=zoom_wheel_dim,
+                    colorize_voices=colorize_voices,
+                    palette=palette,
                     )
 
                 if display_preview and ipy_display is not None:

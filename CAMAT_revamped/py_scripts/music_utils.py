@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 import tempfile
-from typing import List, Tuple, Optional, Dict, Any, Iterable
+from typing import List, Tuple, Optional, Dict, Any, Iterable, Sequence, Union
 import textwrap
 
 import requests
@@ -22,6 +22,8 @@ __all__ = [
     "filter_and_adjust_durations",
     "get_measure_offsets",
     "draw_piano_roll",
+    "canonicalize_pitch_name",
+    "accidental_rank_from_name",
     "create_piano_roll",
     "parse_files",
     "create_binary_matrix",
@@ -180,6 +182,9 @@ def draw_piano_roll(
     *,
     backend: str = "plt",
     show_measure_lines: bool = True,
+    measure_line_color: str = "red",
+    show_hover: bool = True,
+    hover_fields: Optional[Sequence[str]] = None,
     pitch_labels: bool = True,
     show: bool = True,
     plot_width: Optional[int] = None,
@@ -191,6 +196,8 @@ def draw_piano_roll(
     save_html_path: Optional[str] = None,
     save_png_path: Optional[str] = None,
     open_html_after_save: bool = False,
+    colorize_voices: bool = False,
+    palette: Optional[Union[str, Sequence[str]]] = None,
 ) -> Any:
     """
     Draw a piano roll visualization using the selected backend.
@@ -205,6 +212,15 @@ def draw_piano_roll(
         Plotting backend to use.
     show_measure_lines : bool
         Whether to draw vertical red measure separation lines when measure offsets are provided.
+    measure_line_color : str
+        Color for the vertical measure lines when show_measure_lines is True.
+        Accepts any Matplotlib/Bokeh color string (e.g., 'crimson', '#ff0000').
+    show_hover : bool
+        When backend == 'bokeh', add a HoverTool with configurable fields. Default True.
+    hover_fields : Sequence[str], optional
+        List of fields to show in the hover tooltip (bokeh only). Supported keys:
+        ['pitch', 'midi', 'voice', 'global_onset', 'local_onset', 'duration'].
+        Defaults to a sensible ordering when None.
     pitch_labels : bool
         Whether to use pitch names on the y-axis when supported.
     show : bool
@@ -230,6 +246,16 @@ def draw_piano_roll(
         and a compatible webdriver installed (e.g., chromedriver or geckodriver).
     open_html_after_save : bool, optional
         If True and save_html_path is provided, attempts to open the saved HTML in a browser.
+    colorize_voices : bool, optional
+        When True and a 'Voice' column is present in df, color notes by voice/part.
+        Defaults to False (uniform color).
+    palette : str | Sequence[str], optional
+        Color palette to use when colorizing voices. Accepts:
+          - A sequence of color strings (hex or named), or
+          - A palette name:
+              * For Matplotlib (plt): any valid colormap name (e.g., 'tab20', 'tab10', 'Set3')
+              * For Bokeh: any key in bokeh.palettes.all_palettes (e.g., 'Category10', 'Category20')
+        If not provided, a sensible categorical default is used.
 
     Returns
     -------
@@ -246,18 +272,136 @@ def draw_piano_roll(
     width_pixels = plot_width or 900
     height_pixels = plot_height or 600
 
+    # ----------------------------
+    # Voice-based color resolution
+    # ----------------------------
+    def _default_categorical_colors() -> List[str]:
+        # Matplotlib tab10 colors as sane default usable in both backends
+        return [
+            "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd",
+            "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf",
+        ]
+
+    def _resolve_palette_matplotlib(pal: Optional[Union[str, Sequence[str]]], n: int) -> List[str]:
+        from matplotlib import colors as mcolors  # local import to avoid global dependency elsewhere
+        # Map common cross-backend names to Matplotlib equivalents
+        def _pal_alias(name: str) -> str:
+            key = name.strip().lower()
+            if key in {"category10"}:
+                return "tab10"
+            if key in {"category20"}:
+                return "tab20"
+            return name
+        if pal is None:
+            base = _default_categorical_colors()
+            if n <= len(base):
+                return base[:n]
+            # Repeat if necessary
+            reps = (n + len(base) - 1) // len(base)
+            return (base * reps)[:n]
+        if isinstance(pal, (list, tuple)):
+            base = [str(c) for c in pal]
+            if n <= len(base):
+                return base[:n]
+            reps = (n + len(base) - 1) // len(base)
+            return (base * reps)[:n]
+        # Treat as a Matplotlib colormap name
+        try:
+            cmap = plt.get_cmap(_pal_alias(str(pal)))
+            if n <= 1:
+                return [mcolors.to_hex(cmap(0.0))]
+            return [mcolors.to_hex(cmap(i / max(1, n - 1))) for i in range(n)]
+        except Exception:
+            base = _default_categorical_colors()
+            if n <= len(base):
+                return base[:n]
+            reps = (n + len(base) - 1) // len(base)
+            return (base * reps)[:n]
+
+    def _resolve_palette_bokeh(pal: Optional[Union[str, Sequence[str]]], n: int) -> List[str]:
+        # Avoid importing bokeh unless necessary
+        def _pal_alias(name: str) -> str:
+            key = name.strip().lower()
+            if key in {"tab10"}:
+                return "Category10"
+            if key in {"tab20"}:
+                return "Category20"
+            return name
+        if pal is None:
+            base = _default_categorical_colors()
+            if n <= len(base):
+                return base[:n]
+            reps = (n + len(base) - 1) // len(base)
+            return (base * reps)[:n]
+        if isinstance(pal, (list, tuple)):
+            base = [str(c) for c in pal]
+            if n <= len(base):
+                return base[:n]
+            reps = (n + len(base) - 1) // len(base)
+            return (base * reps)[:n]
+        # Palette name: try bokeh.palettes
+        try:
+            from bokeh.palettes import all_palettes  # type: ignore
+            pal_name = _pal_alias(str(pal))
+            if pal_name in all_palettes:
+                sizes = sorted(all_palettes[pal_name].keys())
+                # Pick the largest available size not exceeding n, else the largest overall
+                size_choice = max([s for s in sizes if s <= max(n, 3)], default=max(sizes))
+                base = list(all_palettes[pal_name][size_choice])
+                if n <= len(base):
+                    return base[:n]
+                reps = (n + len(base) - 1) // len(base)
+                return (base * reps)[:n]
+            # Some palettes (e.g., 'Viridis256') may be exposed differently
+            try:
+                from bokeh import palettes as _pal_mod  # type: ignore
+                base = getattr(_pal_mod, pal_name, None)
+                if isinstance(base, (list, tuple)):
+                    base = list(base)
+                    if n <= len(base):
+                        return base[:n]
+                    reps = (n + len(base) - 1) // len(base)
+                    return (base * reps)[:n]
+            except Exception:
+                pass
+        except Exception:
+            # Fallback to default if bokeh not available or palette not found
+            pass
+        base = _default_categorical_colors()
+        if n <= len(base):
+            return base[:n]
+        reps = (n + len(base) - 1) // len(base)
+        return (base * reps)[:n]
+
+    def _voice_color_mapping(for_backend: str) -> Optional[List[str]]:
+        if not colorize_voices or "Voice" not in df.columns:
+            return None
+        voices_series = df["Voice"].astype(str)
+        unique_voices = list(pd.unique(voices_series))
+        num_groups = len(unique_voices)
+        if num_groups <= 0:
+            return None
+        if for_backend == "plt":
+            group_colors = _resolve_palette_matplotlib(palette, num_groups)
+        else:
+            group_colors = _resolve_palette_bokeh(palette, num_groups)
+        color_map: Dict[str, str] = {v: group_colors[i % len(group_colors)] for i, v in enumerate(unique_voices)}
+        return [color_map[v] for v in voices_series.tolist()]
+
     if backend == "plt":
         # Convert pixels to inches for matplotlib
         width_inches = width_pixels / dpi
         height_inches = height_pixels / dpi
         fig, ax = plt.subplots(figsize=(width_inches, height_inches))
-        for _, row in df.iterrows():
+        row_colors = _voice_color_mapping("plt")
+        for idx, (_, row) in enumerate(df.iterrows()):
+            color_val = (row_colors[idx] if row_colors is not None else "skyblue")
             ax.barh(
                 row["MIDI"],
                 width=row["Duration"],
                 left=row["Global Onset"],
                 height=0.6,
-                color="skyblue",
+                color=color_val,
                 edgecolor="black",
             )
 
@@ -270,7 +414,7 @@ def draw_piano_roll(
 
         if show_measure_lines and measure_offsets is not None:
             for m_offset in measure_offsets:
-                ax.axvline(x=m_offset, color="red", linestyle="--", linewidth=0.8)
+                ax.axvline(x=m_offset, color=str(measure_line_color), linestyle="--", linewidth=0.8)
 
         ax.grid(True, axis="x", linestyle="--", alpha=0.7)
         fig.tight_layout()
@@ -284,7 +428,7 @@ def draw_piano_roll(
     if backend == "bokeh":
         try:
             from bokeh.plotting import figure, show as bokeh_show
-            from bokeh.models import Span, ColumnDataSource, BoxZoomTool, WheelZoomTool, PanTool
+            from bokeh.models import Span, ColumnDataSource, BoxZoomTool, WheelZoomTool, PanTool, HoverTool
             # Initialize inline output in notebooks once
             global BOKEH_NOTEBOOK_INITIALIZED
             if not BOKEH_NOTEBOOK_INITIALIZED:
@@ -312,12 +456,25 @@ def draw_piano_roll(
         y_min = int(min(midi_values)) - 1
         y_max = int(max(midi_values)) + 1
 
+        row_colors = _voice_color_mapping("bokeh")
+        voices_col = df["Voice"].astype(str).tolist() if ("Voice" in df.columns) else None
+        xml_id_col = df["xml_id"].astype(str).tolist() if ("xml_id" in df.columns) else None
         source_data = {
             "y": df["MIDI"],
             "left": df["Global Onset"],
             "right": df["Global Onset"] + df["Duration"],
             "pitch": df["Pitch"],
+            "midi": df["MIDI"],
+            "global_onset": df["Global Onset"],
+            "local_onset": df["Local Onset"] if "Local Onset" in df.columns else df["Global Onset"],
+            "duration": df["Duration"],
         }
+        if row_colors is not None:
+            source_data["color"] = row_colors
+        if voices_col is not None:
+            source_data["voice"] = voices_col
+        if xml_id_col is not None:
+            source_data["xml_id"] = xml_id_col
 
         # Normalize zoom dimension options
         def _norm_dim(val: Optional[str]) -> str:
@@ -349,6 +506,38 @@ def draw_piano_roll(
             except Exception:
                 pass
             plot.hbar(y="y", left="left", right="right", height=0.6, source=src, fill_color="#87CEEB")
+            if row_colors is not None:
+                # Re-render with color field and optional legend by voice
+                try:
+                    # Remove the previous glyph renderer if any
+                    plot.renderers = [r for r in plot.renderers if getattr(r, "glyph", None) is None]
+                except Exception:
+                    pass
+                kwargs: Dict[str, Any] = {"fill_color": "color"}
+                if voices_col is not None:
+                    kwargs["legend_field"] = "voice"
+                plot.hbar(y="y", left="left", right="right", height=0.6, source=src, **kwargs)
+
+            # Optional hover
+            if bool(show_hover):
+                # Build tooltips from requested fields
+                supported = {
+                    "pitch": ("Pitch", "@pitch"),
+                    "midi": ("MIDI", "@midi"),
+                    "voice": ("Voice", "@voice"),
+                    "xml_id": ("xml-id", "@xml_id"),
+                    "global_onset": ("Global Onset", "@global_onset"),
+                    "local_onset": ("Local Onset", "@local_onset"),
+                    "duration": ("Duration", "@duration"),
+                }
+                default_order = ["pitch", "voice", "xml_id", "global_onset", "local_onset", "duration", "midi"]
+                fields = [f for f in (list(hover_fields) if hover_fields is not None else default_order) if f in supported]
+                tooltips = [supported[f] for f in fields]
+                try:
+                    hover_tool = HoverTool(tooltips=tooltips)
+                    plot.add_tools(hover_tool)
+                except Exception:
+                    pass
 
             try:
                 box_tool = BoxZoomTool(dimensions=drag_dim)
@@ -365,7 +554,7 @@ def draw_piano_roll(
 
             if show_measure_lines and measure_offsets is not None:
                 for m_offset in measure_offsets:
-                    plot.add_layout(Span(location=m_offset, dimension="height", line_color="red", line_dash="dashed", line_width=1))
+                    plot.add_layout(Span(location=m_offset, dimension="height", line_color=str(measure_line_color), line_dash="dashed", line_width=1))
 
             if pitch_labels:
                 plot.yaxis.ticker = midi_values
@@ -497,6 +686,126 @@ def get_measure_offsets(score) -> List[float]:
         return []
 
 
+# -----------------------------
+# Accidentals normalization API
+# -----------------------------
+_ACCIDENTAL_RANK_MAP = {
+    "bbb": 0,
+    "bb": 1,
+    "b": 2,
+    "": 3,  # natural
+    "#": 4,
+    "##": 5,
+    "###": 6,
+}
+
+
+def _parse_note_name_components(name: str) -> tuple[str, str, str]:
+    """
+    Split a note name into (letter, accidental token(s), octave_part).
+    Accepts a variety of accidental glyphs, music21 flats as '-' characters, and 'x' for double-sharp.
+    """
+    if not isinstance(name, str):
+        return "", "", ""
+    s = name.strip()
+    if not s:
+        return "", "", ""
+    letter = s[0].upper() if s[0].upper() in {"A", "B", "C", "D", "E", "F", "G"} else ""
+    if not letter:
+        return "", "", ""
+    idx = 1
+    acc_raw = []
+    while idx < len(s):
+        ch = s[idx]
+        if ch in {"#", "b", "-", "x", "♯", "♭", "𝄪", "𝄫", "♮"}:
+            acc_raw.append(ch)
+            idx += 1
+        else:
+            break
+    octave_part = s[idx:] if idx < len(s) else ""
+    return letter, "".join(acc_raw), octave_part
+
+
+def _acc_raw_to_semitone_shift(acc_raw: str) -> int:
+    """
+    Convert a raw accidental string (which may contain '-', 'x', and glyphs) to a net semitone shift.
+    Handles natural (♮) as a reset to zero.
+    """
+    if not acc_raw:
+        return 0
+    shift = 0
+    natural_seen = False
+    for ch in acc_raw:
+        if ch in {"#", "♯"}:
+            shift += 1
+        elif ch in {"b", "-","♭"}:
+            shift -= 1
+        elif ch in {"x", "𝄪"}:
+            shift += 2
+        elif ch in {"𝄫"}:
+            shift -= 2
+        elif ch == "♮":
+            # Natural cancels other accidentals in the same token
+            shift = 0
+            natural_seen = True
+        else:
+            continue
+    # If natural appeared alone (or with others), we've already reset to 0
+    return 0 if natural_seen else shift
+
+
+def canonicalize_pitch_name(name: str, *, max_accidentals: int = 5) -> tuple[str, bool]:
+    """
+    Return a canonicalized pitch name where accidentals are expressed as repeated '#' or 'b',
+    clamped to at most max_accidentals (default 5). Returns (canonical_name, exceeded_limit_flag).
+
+    Examples:
+      'Bb4' -> ('Bb4', False)
+      'B-4' -> ('Bb4', False)
+      'Fx5' -> ('F##5', False)
+      'E#######6' -> ('E#####6', True)  # exceeds max 5, clamped and flagged
+    """
+    letter, acc_raw, octave_part = _parse_note_name_components(str(name))
+    if not letter:
+        # Return original string and no exceed flag; downstream callers can keep as-is
+        return str(name), False
+    shift = _acc_raw_to_semitone_shift(acc_raw)
+    exceeded = abs(shift) > int(max_accidentals)
+    if shift > 0:
+        acc = "#" * min(int(max_accidentals), shift)
+    elif shift < 0:
+        acc = "b" * min(int(max_accidentals), -shift)
+    else:
+        acc = ""
+    return f"{letter}{acc}{octave_part}", bool(exceeded)
+
+
+def _acc_token_from_name(name: str) -> str:
+    """
+    Extract the accidental token (limited to triple range for ranking) from a pitch name.
+    Returns one of {'bbb','bb','b','','#','##','###'} based on the net shift.
+    """
+    letter, acc_raw, _ = _parse_note_name_components(str(name))
+    if not letter:
+        return ""
+    net = _acc_raw_to_semitone_shift(acc_raw)
+    if net > 0:
+        return "#" * min(3, net)
+    if net < 0:
+        return "b" * min(3, -net)
+    return ""
+
+
+def accidental_rank_from_name(name: str) -> int:
+    """
+    Compute the accidental rank using the fixed ordering:
+      bbb < bb < b < natural < # < ## < ###
+    Returns an integer in [0..6].
+    """
+    tok = _acc_token_from_name(name)
+    return int(_ACCIDENTAL_RANK_MAP.get(tok, 3))
+
+
 def _slugify_name(text: str) -> str:
     """
     Convert text to a filesystem and variable friendly slug: lowercase, alnum and underscores.
@@ -529,6 +838,9 @@ def parse_files(
     adjust_fractional_duration: bool = True,
     backend: str = "plt",
     show_measure_lines: bool = True,
+    measure_line_color: str = "red",
+    show_hover: bool = True,
+    hover_fields: Optional[Union[Sequence[str], None]] = None,
     display_preview: bool = True,
     preview_rows: int = 20,
     cleanup_remote: bool = True,
@@ -539,6 +851,8 @@ def parse_files(
     zoom_wheel_dim: Optional[str] = None,
     show_progress: bool = True,
     progress_desc: Optional[str] = None,
+    colorize_voices: bool = False,
+    palette: Optional[Union[str, Sequence[str]]] = None,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, pd.DataFrame], Optional[pd.DataFrame]]:
     """
     Parse multiple symbolic music files, build DataFrames and optionally render piano rolls.
@@ -641,11 +955,16 @@ def parse_files(
                         measure_offsets=measure_offsets,
                         backend=backend,
                         show_measure_lines=show_measure_lines,
+                        measure_line_color=measure_line_color,
+                        show_hover=show_hover,
+                        hover_fields=hover_fields,
                         show=True,
                         plot_width=plot_width,
                         plot_height=plot_height,
                         zoom_drag_dim=zoom_drag_dim,
                         zoom_wheel_dim=zoom_wheel_dim,
+                        colorize_voices=colorize_voices,
+                        palette=palette,
                     )
 
                 if display_preview and ipy_display is not None:
