@@ -304,6 +304,35 @@ def vrv_insert_annot(
             a.text = text
         return a
 
+    def _score_root(tree: "ET.Element") -> "ET.Element":
+        """
+        Return the <music> subtree when present, otherwise the original tree.
+        Some MEI files embed an incipit outside of <music>; we want annotation
+        insertions to target the rendered score rather than front matter.
+        """
+        music_node = tree.find(".//mei:music", ns)
+        if music_node is not None:
+            return music_node
+        body_node = tree.find(".//mei:body", ns)
+        if body_node is not None:
+            return body_node
+        return tree
+
+    def _find_in_score(tree: "ET.Element", xpath: str):
+        score = _score_root(tree)
+        node = score.find(xpath, ns)
+        if node is not None:
+            return node
+        # Fallback to whole tree so existing absolute XPaths keep working
+        return tree.find(xpath, ns)
+
+    def _findall_in_score(tree: "ET.Element", xpath: str) -> List["ET.Element"]:
+        score = _score_root(tree)
+        matches = score.findall(xpath, ns)
+        if matches:
+            return matches
+        return tree.findall(xpath, ns)
+
     # Determine candidate parents (try multiple locations robustly)
     candidate_xpaths: List[str] = []
     if parent_xpath:
@@ -311,7 +340,10 @@ def vrv_insert_annot(
     else:
         # If a specific measure index is requested, we will handle it separately below.
         # Otherwise, prefer section for general and time-anchored annot; measure as fallback.
-        candidate_xpaths = [".//mei:section", ".//mei:measure"]
+        candidate_xpaths = [
+            ".//mei:section",
+            ".//mei:measure",
+        ]
 
     last_error: Optional[Exception] = None
     original_mei = ET.tostring(root, encoding="unicode")
@@ -320,7 +352,7 @@ def vrv_insert_annot(
     if measure_index is not None and measure_index >= 1:
         try:
             attempt_root = ET.fromstring(original_mei)
-            measures = attempt_root.findall(".//mei:measure", ns)
+            measures = _findall_in_score(attempt_root, ".//mei:measure")
             if measures and len(measures) >= measure_index:
                 parent_node = measures[measure_index - 1]
                 parent_node.append(_make_annot())
@@ -335,7 +367,7 @@ def vrv_insert_annot(
         try:
             # Work on a fresh tree each attempt to avoid accumulating nodes
             attempt_root = ET.fromstring(original_mei)
-            parent_node = attempt_root.find(xpath, ns)
+            parent_node = _find_in_score(attempt_root, xpath)
             if parent_node is None:
                 continue
             parent_node.append(_make_annot())

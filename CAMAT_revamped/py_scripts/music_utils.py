@@ -219,7 +219,7 @@ def draw_piano_roll(
         When backend == 'bokeh', add a HoverTool with configurable fields. Default True.
     hover_fields : Sequence[str], optional
         List of fields to show in the hover tooltip (bokeh only). Supported keys:
-        ['pitch', 'midi', 'voice', 'global_onset', 'local_onset', 'duration'].
+        ['pitch', 'midi', 'voice', 'measure', 'global_onset', 'local_onset', 'duration', 'xml_id'].
         Defaults to a sensible ordering when None.
     pitch_labels : bool
         Whether to use pitch names on the y-axis when supported.
@@ -469,6 +469,8 @@ def draw_piano_roll(
             "local_onset": df["Local Onset"] if "Local Onset" in df.columns else df["Global Onset"],
             "duration": df["Duration"],
         }
+        if "Measure" in df.columns:
+            source_data["measure"] = df["Measure"]
         if row_colors is not None:
             source_data["color"] = row_colors
         if voices_col is not None:
@@ -525,12 +527,13 @@ def draw_piano_roll(
                     "pitch": ("Pitch", "@pitch"),
                     "midi": ("MIDI", "@midi"),
                     "voice": ("Voice", "@voice"),
+                    "measure": ("Measure", "@measure"),
                     "xml_id": ("xml-id", "@xml_id"),
                     "global_onset": ("Global Onset", "@global_onset"),
                     "local_onset": ("Local Onset", "@local_onset"),
                     "duration": ("Duration", "@duration"),
                 }
-                default_order = ["pitch", "voice", "xml_id", "global_onset", "local_onset", "duration", "midi"]
+                default_order = ["pitch", "voice", "measure", "xml_id", "global_onset", "local_onset", "duration", "midi"]
                 fields = [f for f in (list(hover_fields) if hover_fields is not None else default_order) if f in supported]
                 tooltips = [supported[f] for f in fields]
                 try:
