@@ -20,7 +20,6 @@
 
 ### music21 backend
 - Standard use case for music21: `converter.parse` reads MusicXML directly, we extract measure/onset/duration/pitch/voice, compute MIDI, and optionally canonicalize enharmonic spellings.
-- A repository-wide search (`grep -R 'xml:id' --include '*.xml' --include '*.musicxml' CAMAT_revamped test_corpus`) found no MusicXML snippets with per-note `xml:id`, so even with `include_xml_ids=True` the column remains `pd.NA`.
 - Tie stripping, hover fields, and visualization behave exactly as with MEI.
 
 ### partitura backend
