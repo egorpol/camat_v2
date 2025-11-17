@@ -304,6 +304,25 @@ def vrv_insert_annot(
             a.text = text
         return a
 
+    # If an <annot> with this xml:id already exists, update it in place instead of
+    # appending a duplicate. This makes repeated vrv_insert_annot calls idempotent
+    # for a given xml_id and prevents multiple identical plist annotations.
+    if xml_id:
+        existing_annot = None
+        for a in root.findall(".//mei:annot", ns):
+            if a.get(f"{{{ns_xml}}}id") == xml_id:
+                existing_annot = a
+                break
+        if existing_annot is not None:
+            updated = _make_annot()
+            existing_annot.attrib.clear()
+            existing_annot.attrib.update(updated.attrib)
+            existing_annot.text = updated.text
+            new_mei = ET.tostring(root, encoding="unicode")
+            if reload_score:
+                vrv_set_mei(new_mei)
+            return new_mei
+
     def _score_root(tree: "ET.Element") -> "ET.Element":
         """
         Return the <music> subtree when present, otherwise the original tree.
