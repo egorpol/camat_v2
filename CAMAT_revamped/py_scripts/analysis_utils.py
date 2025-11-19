@@ -312,6 +312,147 @@ def display_pitch_distribution(
     return counts_df
 
 
+def build_duration_counts(
+    df: pd.DataFrame,
+    drop_zero: bool = True,
+    round_decimals: Optional[int] = 4
+) -> Tuple[pd.DataFrame, str]:
+    # Detect duration column
+    duration_col = None
+    for candidate in ['Duration', 'duration', 'durations', 'Durations']:
+        if candidate in df.columns:
+            duration_col = candidate
+            break
+    
+    if duration_col is None:
+        raise ValueError("No duration column found. Checked: 'Duration', 'duration', 'durations', 'Durations'.")
+
+    ser = df[duration_col].copy()
+    # Coerce to numeric where possible
+    ser = pd.to_numeric(ser, errors='coerce')
+    ser = ser.dropna()
+    
+    if drop_zero:
+        ser = ser[ser != 0]
+    
+    if round_decimals is not None:
+        ser = ser.round(round_decimals)
+
+    # Aggregate and sort by numeric value (ascending)
+    counts = ser.value_counts().sort_index()
+    
+    counts_df = counts.rename('count').reset_index()
+    # Ensure columns are named correctly (reset_index names the index column as 'index' if name is None)
+    counts_df.columns = [duration_col, 'count']
+    
+    return counts_df, duration_col
+
+
+def plot_duration_distribution(
+    counts_df: pd.DataFrame,
+    display_col: str,
+    backend: str = 'bokeh',
+    plot_width: int = 900,
+    plot_height: int = 350,
+    show_hover: bool = True,
+):
+    backend_opt = (backend or 'plt').strip().lower()
+    x_labels = counts_df[display_col].astype(str).tolist()
+    y_values = counts_df['count'].tolist()
+
+    if backend_opt == 'plt':
+        import matplotlib.pyplot as plt
+        fig, ax = plt.subplots(figsize=(plot_width / 100.0, plot_height / 100.0))
+        ax.bar(x_labels, y_values, color='seagreen')
+        ax.set_xlabel(display_col)
+        ax.set_ylabel('Count')
+        ax.set_title('Duration Distribution')
+        plt.xticks(rotation=90)
+        plt.tight_layout()
+        plt.show()
+        return None
+
+    if backend_opt == 'bokeh':
+        from bokeh.plotting import figure, show
+        from bokeh.io import output_notebook
+        from bokeh.models import ColumnDataSource, HoverTool
+        output_notebook()
+        
+        source = ColumnDataSource(dict(x=x_labels, count=y_values))
+        p = figure(x_range=x_labels, height=plot_height, width=plot_width, title='Duration Distribution', toolbar_location='right')
+        p.vbar(x='x', top='count', width=0.9, source=source, fill_color='#2E8B57')
+        if show_hover:
+             p.add_tools(HoverTool(tooltips=[("Duration", "@x"), ("Count", "@count")]))
+        
+        p.xaxis.axis_label = display_col
+        p.yaxis.axis_label = 'Count'
+        p.xgrid.grid_line_color = None
+        p.y_range.start = 0
+        show(p)
+        return p
+
+    raise ValueError(f"Unsupported plotting backend: {backend}. Use 'plt' or 'bokeh'.")
+
+
+def display_duration_distribution(
+    source_df: pd.DataFrame,
+    *,
+    drop_zero: bool = True,
+    round_decimals: Optional[int] = 4,
+    backend: str = 'plt',
+    plot_width: int = 900,
+    plot_height: int = 350,
+    show_hover: bool = True,
+    show_table: bool = True,
+) -> pd.DataFrame:
+    """
+    Build and display a duration distribution table and plot from a DataFrame.
+
+    Parameters
+    ----------
+    source_df : pandas.DataFrame
+        Input DataFrame containing 'Duration' or similar column.
+    drop_zero : bool
+        Whether to exclude 0.0 durations.
+    round_decimals : int or None
+        Number of decimals to round durations to.
+    backend : {'plt', 'bokeh'}
+        Plotting backend.
+    plot_width : int
+        Plot width in pixels.
+    plot_height : int
+        Plot height in pixels.
+    show_hover : bool
+        Enable hover tooltips (Bokeh only).
+    show_table : bool
+        Whether to display the counts table.
+
+    Returns
+    -------
+    pandas.DataFrame
+        The sorted counts DataFrame.
+    """
+    counts_df, display_col = build_duration_counts(source_df, drop_zero, round_decimals)
+    
+    if show_table:
+        try:
+            from IPython.display import display as ipy_display
+            ipy_display(counts_df[[display_col, 'count']].set_index(display_col))
+        except Exception:
+            print(counts_df[[display_col, 'count']].set_index(display_col))
+            
+    plot_duration_distribution(
+        counts_df,
+        display_col,
+        backend=(backend.lower() if isinstance(backend, str) else 'plt'),
+        plot_width=plot_width,
+        plot_height=plot_height,
+        show_hover=bool(show_hover),
+    )
+    
+    return counts_df
+
+
 __all__ = [
     'parse_pitch_name',
     'name_to_midi',
@@ -320,6 +461,7 @@ __all__ = [
     'sort_pitch_counts',
     'plot_pitch_distribution',
     'display_pitch_distribution',
+    'build_duration_counts',
+    'plot_duration_distribution',
+    'display_duration_distribution',
 ]
-
-

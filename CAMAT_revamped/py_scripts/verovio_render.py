@@ -34,6 +34,7 @@ __all__ = [
     "vrv_set_additional_css",
     "vrv_highlight_ids",
     "vrv_debug_info",
+    "vrv_process_annotations",
 ]
 
 
@@ -788,3 +789,86 @@ def vrv_insert_annots_by_tstamps(
         )
         xml_ids_used.append(xml_id)
     return xml_ids_used
+
+
+def vrv_process_annotations(
+    annotations: List[Dict[str, Any]],
+    *,
+    highlight_color: str = "#ffcccc",
+    shape_only: bool = True,
+    include_rects: bool = False,
+    display: bool = True,
+    return_svgs: bool = False,
+) -> Optional[List[str]]:
+    """
+    Unified entry point for processing a mix of tstamp and plist annotations.
+
+    annotations: List of annotation dictionaries. Each dict can contain:
+        - Standard MEI annot attributes: text, type, staff, layer, tstamp, tstamp2, etc.
+        - 'plist': List of XML IDs to link to (for plist annotations).
+        - 'xml_id': Optional specific XML ID for the annotation element.
+    
+    This function will:
+    1. Insert all annotations into the MEI.
+    2. Collect all 'plist' targets from the annotations.
+    3. Highlight the plist targets in the rendered SVG.
+    4. Display the result (if display=True).
+    """
+    # 1. Insert all annotations
+    # We track plist targets to highlight them later
+    all_plist_targets: List[str] = []
+
+    for annot in annotations:
+        # Extract plist if present to track for highlighting
+        plist = annot.get("plist")
+        if plist:
+            if isinstance(plist, list):
+                all_plist_targets.extend(plist)
+            elif isinstance(plist, str):
+                # If it's a string, it might be space-separated or just one id
+                all_plist_targets.extend(plist.split())
+        
+        # Insert the annotation
+        vrv_insert_annot(**annot)
+
+    # Deduplicate targets
+    unique_targets = list(set(all_plist_targets))
+
+    # 2. & 3. Resolve IDs, Highlight, and Render
+    # We can reuse logic similar to vrv_insert_annot_plist but adapted
+    
+    # Map to actual SVG ids (page 1) - we assume page 1 for resolution for now, 
+    # or we could resolve per page if needed, but _vrv_resolve_svg_ids defaults to page 1.
+    # For multi-page scores, this might need more robust handling if IDs are on later pages.
+    # However, vrv_highlight_ids sets global CSS which applies to all pages.
+    
+    resolved = _vrv_resolve_svg_ids(unique_targets, page=1, include_bbox_ids=False, include_derived_ids=False)
+    highlight_ids: List[str] = []
+    for base, hits in resolved.items():
+        if hits:
+            for h in hits:
+                highlight_ids.append(h if h.startswith("#") else f"#{h}")
+        else:
+            highlight_ids.append(base)
+
+    # Apply toolkit CSS
+    vrv_highlight_ids(highlight_ids, color=highlight_color, shape_only=shape_only, include_rects=include_rects)
+
+    # Render all pages and inject CSS
+    pages_count = get_toolkit().getPageCount()
+    final_svgs: List[str] = []
+    for p in range(1, pages_count + 1):
+        svg = vrv_render_page(p)
+        # Inject CSS for notebook display (since vrv_highlight_ids only affects toolkit state for future renders, 
+        # but we just rendered. Actually vrv_highlight_ids sets svgAdditionalCSS which IS used in vrv_render_page.
+        # BUT vrv_inject_highlight_css is for INLINE css injection if we want to be sure or if we are manipulating existing SVGs.
+        # The existing vrv_insert_annot_plist does BOTH: sets toolkit options AND injects inline. 
+        # Let's follow that pattern for consistency.
+        svg = vrv_inject_highlight_css(svg, highlight_ids, color=highlight_color, shape_only=shape_only, include_rects=include_rects)
+        final_svgs.append(svg)
+
+    if display:
+        for svg in final_svgs:
+            vrv_display_svg(svg)
+
+    return final_svgs if return_svgs else None

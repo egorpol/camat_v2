@@ -22,6 +22,7 @@ from .verovio_render import (
     vrv_inject_highlight_css,
     vrv_insert_annot_plist,
     vrv_insert_annots_by_tstamps,
+    vrv_process_annotations,
     vrv_namespaces,
 )
 from .overlay import (
@@ -67,6 +68,7 @@ __all__ = [
     'vrv_inject_highlight_css',
     'vrv_insert_annot_plist',
     'vrv_insert_annots_by_tstamps',
+    'vrv_process_annotations',
     'vrv_namespaces',
     'select_metric_df',
     'kernel_from_variants',
