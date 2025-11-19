@@ -19,6 +19,10 @@ from .verovio_render import (
     vrv_set_additional_css,
     vrv_highlight_ids,
     vrv_debug_info,
+    vrv_inject_highlight_css,
+    vrv_insert_annot_plist,
+    vrv_insert_annots_by_tstamps,
+    vrv_namespaces,
 )
 from .overlay import (
     select_metric_df,
@@ -60,6 +64,10 @@ __all__ = [
     'vrv_set_additional_css',
     'vrv_highlight_ids',
     'vrv_debug_info',
+    'vrv_inject_highlight_css',
+    'vrv_insert_annot_plist',
+    'vrv_insert_annots_by_tstamps',
+    'vrv_namespaces',
     'select_metric_df',
     'kernel_from_variants',
     'compute_top_matches_df',
