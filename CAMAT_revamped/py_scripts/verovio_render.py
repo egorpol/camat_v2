@@ -34,11 +34,24 @@ __all__ = [
     "vrv_set_additional_css",
     "vrv_highlight_ids",
     "vrv_debug_info",
+    "vrv_process_annotations",
 ]
 
 
 _VRV_TOOLKIT = verovio.toolkit()
 _EXTRA_SVG_CSS = ""
+
+# Common namespaces
+MEI_NS = "http://www.music-encoding.org/ns/mei"
+XML_NS = "http://www.w3.org/XML/1998/namespace"
+
+
+def vrv_namespaces() -> Dict[str, str]:
+    """
+    Return a namespace prefix map suitable for ElementTree XPath queries.
+    Keys: 'mei', 'xml'.
+    """
+    return {"mei": MEI_NS, "xml": XML_NS}
 
 
 def get_toolkit():
@@ -304,6 +317,54 @@ def vrv_insert_annot(
             a.text = text
         return a
 
+    # If an <annot> with this xml:id already exists, update it in place instead of
+    # appending a duplicate. This makes repeated vrv_insert_annot calls idempotent
+    # for a given xml_id and prevents multiple identical plist annotations.
+    if xml_id:
+        existing_annot = None
+        for a in root.findall(".//mei:annot", ns):
+            if a.get(f"{{{ns_xml}}}id") == xml_id:
+                existing_annot = a
+                break
+        if existing_annot is not None:
+            updated = _make_annot()
+            existing_annot.attrib.clear()
+            existing_annot.attrib.update(updated.attrib)
+            existing_annot.text = updated.text
+            new_mei = ET.tostring(root, encoding="unicode")
+            if reload_score:
+                vrv_set_mei(new_mei)
+            return new_mei
+
+    def _score_root(tree: "ET.Element") -> "ET.Element":
+        """
+        Return the <music> subtree when present, otherwise the original tree.
+        Some MEI files embed an incipit outside of <music>; we want annotation
+        insertions to target the rendered score rather than front matter.
+        """
+        music_node = tree.find(".//mei:music", ns)
+        if music_node is not None:
+            return music_node
+        body_node = tree.find(".//mei:body", ns)
+        if body_node is not None:
+            return body_node
+        return tree
+
+    def _find_in_score(tree: "ET.Element", xpath: str):
+        score = _score_root(tree)
+        node = score.find(xpath, ns)
+        if node is not None:
+            return node
+        # Fallback to whole tree so existing absolute XPaths keep working
+        return tree.find(xpath, ns)
+
+    def _findall_in_score(tree: "ET.Element", xpath: str) -> List["ET.Element"]:
+        score = _score_root(tree)
+        matches = score.findall(xpath, ns)
+        if matches:
+            return matches
+        return tree.findall(xpath, ns)
+
     # Determine candidate parents (try multiple locations robustly)
     candidate_xpaths: List[str] = []
     if parent_xpath:
@@ -311,7 +372,10 @@ def vrv_insert_annot(
     else:
         # If a specific measure index is requested, we will handle it separately below.
         # Otherwise, prefer section for general and time-anchored annot; measure as fallback.
-        candidate_xpaths = [".//mei:section", ".//mei:measure"]
+        candidate_xpaths = [
+            ".//mei:section",
+            ".//mei:measure",
+        ]
 
     last_error: Optional[Exception] = None
     original_mei = ET.tostring(root, encoding="unicode")
@@ -320,7 +384,7 @@ def vrv_insert_annot(
     if measure_index is not None and measure_index >= 1:
         try:
             attempt_root = ET.fromstring(original_mei)
-            measures = attempt_root.findall(".//mei:measure", ns)
+            measures = _findall_in_score(attempt_root, ".//mei:measure")
             if measures and len(measures) >= measure_index:
                 parent_node = measures[measure_index - 1]
                 parent_node.append(_make_annot())
@@ -335,7 +399,7 @@ def vrv_insert_annot(
         try:
             # Work on a fresh tree each attempt to avoid accumulating nodes
             attempt_root = ET.fromstring(original_mei)
-            parent_node = attempt_root.find(xpath, ns)
+            parent_node = _find_in_score(attempt_root, xpath)
             if parent_node is None:
                 continue
             parent_node.append(_make_annot())
@@ -389,7 +453,13 @@ def vrv_set_additional_css(css: str, *, append: bool = True) -> None:
     _VRV_TOOLKIT.setOptions({"svgAdditionalCSS": _EXTRA_SVG_CSS})
 
 
-def vrv_highlight_ids(ids: List[str], color: str = "#ff0") -> None:
+def vrv_highlight_ids(
+    ids: List[str],
+    color: str = "#ff0",
+    *,
+    shape_only: bool = False,
+    include_rects: bool = False,
+) -> None:
     """
     Highlight one or more SVG/MEI ids using CSS as a fallback when MEI export
     is not available. Call render again after this to see the effect.
@@ -398,11 +468,34 @@ def vrv_highlight_ids(ids: List[str], color: str = "#ff0") -> None:
         return
     # Each id should include the leading '#'
     selectors: List[str] = []
-    for pid in ids:
-        pid = pid if pid.startswith("#") else f"#{pid}"
-        # Target group and its children
-        selectors.append(f"g{pid}")
-        selectors.append(f"g{pid} *")
+    if shape_only:
+        # Target only note glyph shapes, not text/lyrics; include direct-id shapes and descendants.
+        shape_tags = ["path", "polygon", "ellipse", "circle", "line", "use"]
+        if include_rects:
+            shape_tags.append("rect")
+        for pid in ids:
+            pid = pid if pid.startswith("#") else f"#{pid}"
+            core = pid.lstrip("#")
+            # Direct id on shape elements
+            for tag in shape_tags:
+                selectors.append(f"{tag}#{core}")
+            # Descendants inside the element/group with this id
+            for tag in shape_tags:
+                selectors.append(f"{pid} {tag}")
+    else:
+        # Broad highlight but still avoid bbox rectangles by default.
+        shape_tags = ["path", "polygon", "ellipse", "circle", "line", "use"]
+        if include_rects:
+            shape_tags.append("rect")
+        for pid in ids:
+            pid = pid if pid.startswith("#") else f"#{pid}"
+            core = pid.lstrip("#")
+            # Direct id on shape elements
+            for tag in shape_tags:
+                selectors.append(f"{tag}#{core}")
+            # Descendants inside the element/group with this id, including text if present
+            for tag in shape_tags + ["text", "tspan"]:
+                selectors.append(f"{pid} {tag}")
     selector = ", ".join(selectors)
     css = f"{selector} {{ fill: {color} !important; stroke: {color} !important; }}"
     vrv_set_additional_css(css, append=True)
@@ -454,3 +547,328 @@ def vrv_debug_info() -> Dict[str, Any]:
         info["log"] = ""
     return info
 
+
+# ---------- Higher-level helpers for plist annotations + highlighting ----------
+
+def _vrv_find_svg_ids(svg_text: str, mei_id: str, *, include_bbox_ids: bool = False, include_derived_ids: bool = False) -> List[str]:
+    """
+    Resolve one MEI xml:id pointer (e.g., '#d1e64') to SVG id(s) found in the provided SVG text.
+
+    include_bbox_ids: if True, keep bbox-* matches. Otherwise, skip them.
+    include_derived_ids: if True, accept ids that contain the core as a substring (e.g., d1e64-1);
+                         otherwise require exact equality with the core id.
+    """
+    core = mei_id.lstrip("#")
+    pat = re.compile(r'id="([^"]*%s[^"]*)"' % re.escape(core))
+    raw_hits = pat.findall(svg_text)
+    hits: List[str] = []
+    for h in raw_hits:
+        if not include_bbox_ids and h.startswith("bbox-"):
+            continue
+        if not include_derived_ids and h != core:
+            continue
+        hits.append(h)
+    return hits
+
+
+def _vrv_resolve_svg_ids(mei_ids: List[str], *, page: int = 1, include_bbox_ids: bool = False, include_derived_ids: bool = False) -> Dict[str, List[str]]:
+    """
+    Render a page and find corresponding SVG ids for each MEI id pointer (e.g., '#d1e64').
+    Returns a dict: {mei_pointer: [svg_ids...]}
+    """
+    svg = vrv_render_page(page) if page else vrv_render_page(1)
+    resolved: Dict[str, List[str]] = {}
+    for target in mei_ids:
+        resolved[target] = _vrv_find_svg_ids(svg, target, include_bbox_ids=include_bbox_ids, include_derived_ids=include_derived_ids)
+    return resolved
+
+
+def vrv_inject_highlight_css(svg_text: str, ids: List[str], *, color: str = "#ff0", shape_only: bool = True, include_rects: bool = False) -> str:
+    """
+    Inject an inline <style> block to color-highlight the given ids inside a single SVG string.
+    - When shape_only is True, target only shape elements (path/polygon/ellipse/circle/line/use).
+      Rectangles are optionally included if include_rects is True.
+    - When shape_only is False, target shapes plus text/tspan, still avoiding rects unless include_rects is True.
+    """
+    shape_tags = ["path", "polygon", "ellipse", "circle", "line", "use"]
+    if include_rects:
+        shape_tags.append("rect")
+
+    shape_selectors: List[str] = []
+    reset_text_selectors: List[str] = []
+
+    for pid in ids:
+        bare = pid.lstrip("#")
+        if shape_only:
+            # Direct id on shapes
+            for tag in shape_tags:
+                shape_selectors.append(f"{tag}#{bare}")
+            # Descendant shapes
+            shape_selectors.append(f"#{bare} path")
+            shape_selectors.append(f"#{bare} polygon")
+            shape_selectors.append(f"#{bare} ellipse")
+            shape_selectors.append(f"#{bare} circle")
+            shape_selectors.append(f"#{bare} line")
+            shape_selectors.append(f"#{bare} use")
+            # Be explicit: reset text so it does not inherit color from broad rules
+            reset_text_selectors.append(f"#{bare} text")
+            reset_text_selectors.append(f"#{bare} tspan")
+        else:
+            # Broad highlight: shapes and text (avoid rects unless include_rects=True)
+            for tag in shape_tags:
+                shape_selectors.append(f"{tag}#{bare}")
+            shape_selectors.append(f"#{bare} path")
+            shape_selectors.append(f"#{bare} polygon")
+            shape_selectors.append(f"#{bare} ellipse")
+            shape_selectors.append(f"#{bare} circle")
+            shape_selectors.append(f"#{bare} line")
+            shape_selectors.append(f"#{bare} use")
+            shape_selectors.append(f"#{bare} text")
+            shape_selectors.append(f"#{bare} tspan")
+
+    if not shape_selectors:
+        return svg_text
+
+    style_rules = f"{', '.join(shape_selectors)} {{ fill: {color} !important; stroke: {color} !important; }}"
+    style_block = f"<style>{style_rules}</style>"
+
+    if shape_only and reset_text_selectors:
+        reset_rules = f"{', '.join(reset_text_selectors)} {{ fill: initial !important; stroke: initial !important; }}"
+        style_block += f"<style>{reset_rules}</style>"
+
+    insert_pos = svg_text.find("</defs>")
+    if insert_pos != -1:
+        insert_pos = insert_pos + len("</defs>")
+        return svg_text[:insert_pos] + style_block + svg_text[insert_pos:]
+    m = re.search(r"<svg[^>]*>", svg_text)
+    if m:
+        idx = m.end()
+        return svg_text[:idx] + style_block + svg_text[idx:]
+    return style_block + svg_text
+
+
+def vrv_insert_annot_plist(
+    *,
+    custom_plist: Optional[List[str]] = None,
+    plist_annot_config: Optional[List[Dict[str, Any]]] = None,
+    plist_annot_text: str = "Plist demo",
+    insert_plist_annot: bool = True,
+    include_bbox_ids: bool = False,
+    include_derived_ids: bool = False,
+    shape_only: bool = True,
+    highlight_color: str = "#ffcccc",
+    include_rects: bool = False,
+    pages: Optional[List[int]] = None,
+    display: bool = True,
+    return_svgs: bool = True,
+) -> Optional[List[str]]:
+    """
+    High-level convenience:
+    - Determine target ids (from plist_annot_config or custom_plist or auto).
+    - Insert one or multiple clean <annot> plist entries into MEI (idempotent per xml_id).
+    - Apply highlight CSS (shape-only or broad) via toolkit (svgAdditionalCSS).
+    - Re-render and inject inline CSS for notebook display.
+
+    Returns list of final SVG strings when return_svgs=True; otherwise None.
+    """
+    # 1) Collect candidate MEI note ids for auto mode
+    mei_xml = vrv_get_mei()
+    try:
+        from xml.etree import ElementTree as _ET  # type: ignore
+    except Exception as exc:
+        raise RuntimeError("xml.etree.ElementTree is required to analyze MEI XML") from exc
+
+    ns_mei = "http://www.music-encoding.org/ns/mei"
+    ns_xml = "http://www.w3.org/XML/1998/namespace"
+    ns = {"mei": ns_mei, "xml": ns_xml}
+
+    root = _ET.fromstring(mei_xml)
+    notes_with_id = root.findall(".//mei:note[@xml:id]", ns)
+    note_ids = [n.attrib.get(f"{{{ns_xml}}}id") for n in notes_with_id]
+    auto_plist = [f"#{nid}" for nid in (note_ids or [])[:2] if nid]
+
+    # 2) Determine final set of ids to highlight
+    if plist_annot_config:
+        all_ids: List[str] = []
+        for spec in plist_annot_config:
+            plist = spec.get("plist") or []
+            all_ids.extend(plist)
+        # Deduplicate preserving order
+        seen: set[str] = set()
+        plist_targets: List[str] = []
+        for pid in all_ids:
+            if pid not in seen:
+                plist_targets.append(pid)
+                seen.add(pid)
+    else:
+        plist_targets = custom_plist or auto_plist
+
+    # 3) Optionally insert annot(s) (idempotent by xml_id)
+    if insert_plist_annot:
+        if plist_annot_config:
+            for spec in plist_annot_config:
+                plist = spec.get("plist") or plist_targets
+                xml_id = spec.get("xml_id")
+                text = spec.get("text")
+                vrv_insert_annot(text=text, type="score", plist=plist, xml_id=xml_id)
+        else:
+            vrv_insert_annot(text=plist_annot_text, type="score", plist=plist_targets, xml_id="plist-demo-1")
+
+    # 4) Map to actual SVG ids (page 1) and build highlight list
+    resolved = _vrv_resolve_svg_ids(plist_targets, page=1, include_bbox_ids=include_bbox_ids, include_derived_ids=include_derived_ids)
+    highlight_ids: List[str] = []
+    for base, hits in resolved.items():
+        if hits:
+            # Use the exact svg ids we found
+            for h in hits:
+                highlight_ids.append(h if h.startswith("#") else f"#{h}")
+        else:
+            # Fall back to base pointer
+            highlight_ids.append(base)
+
+    # 5) Apply toolkit CSS (take effect on subsequent renders)
+    vrv_highlight_ids(highlight_ids, color=highlight_color, shape_only=shape_only, include_rects=include_rects)
+
+    # 6) Re-render and inject inline CSS for notebook display
+    pages_list = pages or list(range(1, get_toolkit().getPageCount() + 1))
+    final_svgs: List[str] = []
+    for p in pages_list:
+        svg = vrv_render_page(p)
+        final_svgs.append(vrv_inject_highlight_css(svg, highlight_ids, color=highlight_color, shape_only=shape_only, include_rects=include_rects))
+
+    if display:
+        for svg in final_svgs:
+            vrv_display_svg(svg)
+
+    return final_svgs if return_svgs else None
+
+
+def vrv_insert_annots_by_tstamps(
+    annots: List[Dict[str, Any]],
+    *,
+    default_type: Optional[str] = "score",
+    default_staff: Optional[str] = None,
+    default_layer: Optional[str] = None,
+    default_place: Optional[str] = None,
+) -> List[Optional[str]]:
+    """
+    Insert multiple <annot> elements driven by a list of tstamp/tstamp2 specs.
+
+    annots: list of dicts; each can include keys:
+        - text, type, staff, layer, tstamp, tstamp2, startid, endid, place, xml_id,
+          parent_xpath, measure_index
+    Returns a list of xml_id values used (None when not provided).
+    """
+    xml_ids_used: List[Optional[str]] = []
+    for spec in annots:
+        text = spec.get("text")
+        a_type = spec.get("type", default_type)
+        staff = spec.get("staff", default_staff)
+        layer = spec.get("layer", default_layer)
+        tstamp = spec.get("tstamp")
+        tstamp2 = spec.get("tstamp2")
+        startid = spec.get("startid")
+        endid = spec.get("endid")
+        place = spec.get("place", default_place)
+        xml_id = spec.get("xml_id")
+        parent_xpath = spec.get("parent_xpath")
+        measure_index = spec.get("measure_index")
+        vrv_insert_annot(
+            text=text,
+            type=a_type,
+            staff=staff,
+            layer=layer,
+            tstamp=tstamp,
+            tstamp2=tstamp2,
+            startid=startid,
+            endid=endid,
+            place=place,
+            xml_id=xml_id,
+            parent_xpath=parent_xpath,
+            measure_index=measure_index,
+        )
+        xml_ids_used.append(xml_id)
+    return xml_ids_used
+
+
+def vrv_process_annotations(
+    annotations: List[Dict[str, Any]],
+    *,
+    highlight_color: str = "#ffcccc",
+    shape_only: bool = True,
+    include_rects: bool = False,
+    display: bool = True,
+    return_svgs: bool = False,
+) -> Optional[List[str]]:
+    """
+    Unified entry point for processing a mix of tstamp and plist annotations.
+
+    annotations: List of annotation dictionaries. Each dict can contain:
+        - Standard MEI annot attributes: text, type, staff, layer, tstamp, tstamp2, etc.
+        - 'plist': List of XML IDs to link to (for plist annotations).
+        - 'xml_id': Optional specific XML ID for the annotation element.
+    
+    This function will:
+    1. Insert all annotations into the MEI.
+    2. Collect all 'plist' targets from the annotations.
+    3. Highlight the plist targets in the rendered SVG.
+    4. Display the result (if display=True).
+    """
+    # 1. Insert all annotations
+    # We track plist targets to highlight them later
+    all_plist_targets: List[str] = []
+
+    for annot in annotations:
+        # Extract plist if present to track for highlighting
+        plist = annot.get("plist")
+        if plist:
+            if isinstance(plist, list):
+                all_plist_targets.extend(plist)
+            elif isinstance(plist, str):
+                # If it's a string, it might be space-separated or just one id
+                all_plist_targets.extend(plist.split())
+        
+        # Insert the annotation
+        vrv_insert_annot(**annot)
+
+    # Deduplicate targets
+    unique_targets = list(set(all_plist_targets))
+
+    # 2. & 3. Resolve IDs, Highlight, and Render
+    # We can reuse logic similar to vrv_insert_annot_plist but adapted
+    
+    # Map to actual SVG ids (page 1) - we assume page 1 for resolution for now, 
+    # or we could resolve per page if needed, but _vrv_resolve_svg_ids defaults to page 1.
+    # For multi-page scores, this might need more robust handling if IDs are on later pages.
+    # However, vrv_highlight_ids sets global CSS which applies to all pages.
+    
+    resolved = _vrv_resolve_svg_ids(unique_targets, page=1, include_bbox_ids=False, include_derived_ids=False)
+    highlight_ids: List[str] = []
+    for base, hits in resolved.items():
+        if hits:
+            for h in hits:
+                highlight_ids.append(h if h.startswith("#") else f"#{h}")
+        else:
+            highlight_ids.append(base)
+
+    # Apply toolkit CSS
+    vrv_highlight_ids(highlight_ids, color=highlight_color, shape_only=shape_only, include_rects=include_rects)
+
+    # Render all pages and inject CSS
+    pages_count = get_toolkit().getPageCount()
+    final_svgs: List[str] = []
+    for p in range(1, pages_count + 1):
+        svg = vrv_render_page(p)
+        # Inject CSS for notebook display (since vrv_highlight_ids only affects toolkit state for future renders, 
+        # but we just rendered. Actually vrv_highlight_ids sets svgAdditionalCSS which IS used in vrv_render_page.
+        # BUT vrv_inject_highlight_css is for INLINE css injection if we want to be sure or if we are manipulating existing SVGs.
+        # The existing vrv_insert_annot_plist does BOTH: sets toolkit options AND injects inline. 
+        # Let's follow that pattern for consistency.
+        svg = vrv_inject_highlight_css(svg, highlight_ids, color=highlight_color, shape_only=shape_only, include_rects=include_rects)
+        final_svgs.append(svg)
+
+    if display:
+        for svg in final_svgs:
+            vrv_display_svg(svg)
+
+    return final_svgs if return_svgs else None

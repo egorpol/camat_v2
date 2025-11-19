@@ -184,40 +184,9 @@ def parse_files(
                     adjust_fractional_duration=adjust_fractional_duration,
                 ).sort_values("Global Onset").reset_index(drop=True)
 
-                # Attach xml_id for MEI sources when requested (best effort via partitura if available)
-                try:
-                    is_mei = str(file_path).lower().endswith(".mei")
-                    if is_mei and include_xml_ids:
-                        try:
-                            # Import partitura backend helpers lazily
-                            from . import partitura_backend as _ptb  # type: ignore
-                            sanitized_path, cleanup_fn = _ptb._sanitize_source_for_partitura(file_path)
-                            try:
-                                sc_pt = _ptb._load_partitura_score(sanitized_path)
-                            finally:
-                                if cleanup_fn:
-                                    cleanup_fn()
-                            df_xml = _ptb.partitura_score_to_dataframe(sc_pt, parse_enharmonic=False, include_xml_ids=True)
-                            # Apply same post-processing for alignment
-                            df_xml_proc = filter_and_adjust_durations(
-                                df_xml,
-                                filter_zero_duration=filter_zero_duration,
-                                adjust_fractional_duration=adjust_fractional_duration,
-                            ).sort_values(["Global Onset", "MIDI"]).reset_index(drop=True)
-                            # Drop duplicates on merge keys to avoid row explosion
-                            keys = ["Global Onset", "Duration", "MIDI"]
-                            df_xml_proc = df_xml_proc.drop_duplicates(subset=keys, keep="first")
-                            if "xml_id" in df_xml_proc.columns:
-                                df_processed = df_processed.merge(
-                                    df_xml_proc[keys + ["xml_id"]],
-                                    on=keys,
-                                    how="left",
-                                )
-                        except Exception:
-                            # If partitura isn't available or mapping fails, continue without xml_id
-                            pass
-                except Exception:
-                    pass
+                # Preserve schema expectations even if music21 cannot expose xml:id details
+                if include_xml_ids and "xml_id" not in df_processed.columns:
+                    df_processed["xml_id"] = pd.NA
 
                 # Ensure 'xml_id' column is positioned immediately after 'Voice' when present
                 if "xml_id" in df_processed.columns and "Voice" in df_processed.columns:

@@ -536,10 +536,12 @@ def parse_files_partitura(
 
                 # Only include xml_id when MEI source detected and option enabled
                 is_mei = str(sanitized_path).lower().endswith(".mei")
+                want_xml_ids = bool(include_xml_ids)
+                include_ids_this_score = want_xml_ids and is_mei
                 df_raw = partitura_score_to_dataframe(
                     score,
                     parse_enharmonic=parse_enharmonic,
-                    include_xml_ids=(bool(include_xml_ids) and is_mei),
+                    include_xml_ids=include_ids_this_score,
                 )
                 # Optionally align accidental schema prior to duration filtering (no extra rank column)
                 excess_clamped = 0
@@ -573,6 +575,9 @@ def parse_files_partitura(
                     filter_zero_duration=filter_zero_duration,
                     adjust_fractional_duration=adjust_fractional_duration,
                 ).sort_values("Global Onset").reset_index(drop=True)
+
+                if want_xml_ids and not include_ids_this_score and "xml_id" not in df_processed.columns:
+                    df_processed["xml_id"] = pd.NA
 
                 measure_offsets = _partitura_measure_offsets(score)
 
