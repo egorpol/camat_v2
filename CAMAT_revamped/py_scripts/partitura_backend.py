@@ -237,10 +237,14 @@ def _part_to_rows(part, *, parse_enharmonic: bool = False, include_xml_ids: bool
     has_rel = "rel_onset_div" in fields
     has_voice = "voice" in fields
 
-    # Build a sequential list of spelled pitch names from the part notes (primary method)
+    # Build lookup maps for enharmonic spelling
+    id_to_spelling: Dict[Any, str] = {}
     spelled_sequence: List[str] = []
+
     if parse_enharmonic:
         try:
+            # Collect all note info first
+            note_info = []
             for n in getattr(part, "notes", []):
                 step = getattr(n, "step", None)
                 octave = getattr(n, "octave", None)
@@ -258,42 +262,7 @@ def _part_to_rows(part, *, parse_enharmonic: bool = False, include_xml_ids: bool
                             alter = -2
                         else:
                             alter = 0
-                acc = ""
-                try:
-                    a = int(round(float(alter))) if alter is not None else 0
-                except Exception:
-                    a = 0
-                if a > 0:
-                    acc = "#" * a
-                elif a < 0:
-                    acc = "b" * (-a)
-                if step is not None and octave is not None:
-                    spelled_sequence.append(f"{str(step).upper()}{acc}{int(octave)}")
-        except Exception:
-            spelled_sequence = []
 
-    # Fallback mapping by IDs (used only if sequence length mismatches)
-    id_to_spelling: Dict[Any, str] = {}
-    if parse_enharmonic and not spelled_sequence:
-        try:
-            for n in getattr(part, "notes", []):
-                nid = getattr(n, "id", None) or getattr(n, "xml_id", None)
-                step = getattr(n, "step", None)
-                octave = getattr(n, "octave", None)
-                alter = getattr(n, "alter", None)
-                if alter is None:
-                    acc_name = str(getattr(n, "accidental", "") or "").lower()
-                    if acc_name:
-                        if acc_name in {"sharp", "sharp1"}:
-                            alter = 1
-                        elif acc_name in {"flat", "flat1"}:
-                            alter = -1
-                        elif acc_name in {"double-sharp", "sharp2"}:
-                            alter = 2
-                        elif acc_name in {"double-flat", "flat2"}:
-                            alter = -2
-                        else:
-                            alter = 0
                 acc = ""
                 try:
                     a = int(round(float(alter))) if alter is not None else 0
@@ -303,13 +272,29 @@ def _part_to_rows(part, *, parse_enharmonic: bool = False, include_xml_ids: bool
                     acc = "#" * a
                 elif a < 0:
                     acc = "b" * (-a)
+
                 spelled = None
                 if step is not None and octave is not None:
                     spelled = f"{str(step).upper()}{acc}{int(octave)}"
-                if nid is not None and spelled:
-                    id_to_spelling[nid] = spelled
+
+                if spelled:
+                    # ID lookup
+                    nid = getattr(n, "id", None) or getattr(n, "xml_id", None)
+                    if nid is not None:
+                        id_to_spelling[nid] = spelled
+
+                    # Sorting info
+                    start_t = getattr(getattr(n, "start", None), "t", 0)
+                    midi_p = getattr(n, "midi_pitch", 0)
+                    note_info.append((start_t, midi_p, spelled))
+
+            # Sort by onset then pitch to match note_array order
+            note_info.sort(key=lambda x: (x[0], x[1]))
+            spelled_sequence = [x[2] for x in note_info]
+
         except Exception:
             id_to_spelling = {}
+            spelled_sequence = []
 
     spelled_idx = 0
     for note_row in note_array:
@@ -381,19 +366,31 @@ def _part_to_rows(part, *, parse_enharmonic: bool = False, include_xml_ids: bool
             row["xml_id"] = xml_id_value
         if parse_enharmonic:
             spelled: Optional[str] = None
-            if spelled_sequence and spelled_idx < len(spelled_sequence):
-                spelled = spelled_sequence[spelled_idx]
-                spelled_idx += 1
-            elif id_to_spelling:
-                nid = None
-                for fid in ("id", "note_id", "xml_id"):
-                    try:
-                        nid = note_row[fid]  # type: ignore[index]
+
+            # Try ID lookup first
+            nid = None
+            for fid in ("id", "note_id", "xml_id", "xmlid"):
+                try:
+                    val = note_row[fid]  # type: ignore[index]
+                    if val is not None:
+                        nid = val
                         break
-                    except Exception:
-                        nid = None
-                if nid in id_to_spelling:
-                    spelled = id_to_spelling[nid]
+                except Exception:
+                    pass
+
+            if nid in id_to_spelling:
+                spelled = id_to_spelling[nid]
+
+            # Fallback to sequential if ID failed but sequence exists
+            # (Advance index regardless to stay in sync if mixing methods)
+            seq_spelled = None
+            if spelled_sequence and spelled_idx < len(spelled_sequence):
+                seq_spelled = spelled_sequence[spelled_idx]
+                spelled_idx += 1
+
+            if not spelled and seq_spelled:
+                spelled = seq_spelled
+
             if spelled:
                 row["Pitch Enharmonic"] = spelled
         rows.append(row)

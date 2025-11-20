@@ -477,6 +477,8 @@ def draw_piano_roll(
             source_data["voice"] = voices_col
         if xml_id_col is not None:
             source_data["xml_id"] = xml_id_col
+        if "Pitch Enharmonic" in df.columns:
+            source_data["pitch_enharmonic"] = df["Pitch Enharmonic"].fillna("").tolist()
 
         # Normalize zoom dimension options
         def _norm_dim(val: Optional[str]) -> str:
@@ -532,8 +534,9 @@ def draw_piano_roll(
                     "global_onset": ("Global Onset", "@global_onset"),
                     "local_onset": ("Local Onset", "@local_onset"),
                     "duration": ("Duration", "@duration"),
+                    "pitch_enharmonic": ("Pitch (Enharmonic)", "@pitch_enharmonic"),
                 }
-                default_order = ["pitch", "voice", "measure", "xml_id", "global_onset", "local_onset", "duration", "midi"]
+                default_order = ["pitch", "pitch_enharmonic", "voice", "measure", "xml_id", "global_onset", "local_onset", "duration", "midi"]
                 fields = [f for f in (list(hover_fields) if hover_fields is not None else default_order) if f in supported]
                 tooltips = [supported[f] for f in fields]
                 try:
