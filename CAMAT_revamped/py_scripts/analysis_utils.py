@@ -1,8 +1,11 @@
 from __future__ import annotations
 
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Sequence, Mapping, Any, Union
 
 import pandas as pd
+from IPython.display import display as ipy_display  # type: ignore
+
+from .music_utils import draw_piano_roll
 
 
 # Basic pitch maps
@@ -451,6 +454,239 @@ def display_duration_distribution(
     )
     
     return counts_df
+
+
+# --------------------------------------------------------------------
+# Note selection + piano-roll helper (for interactive notebook usage)
+# --------------------------------------------------------------------
+
+def _parse_pitch_bound_for_filter(val):
+    """
+    Convert a single bound (name, MIDI number, or numeric string) to MIDI int or None.
+    """
+    if val is None:
+        return None
+    if isinstance(val, (int, float)):
+        return int(val)
+    s = str(val).strip()
+    if not s:
+        return None
+    # Try numeric first
+    try:
+        return int(float(s))
+    except Exception:
+        pass
+    # Fallback to pitch name like "g3"
+    try:
+        return name_to_midi(s)
+    except Exception:
+        return None
+
+
+def _parse_pitch_range_for_filter(spec):
+    """
+    Accept tuple/list of 2 values or a string like "g3-g5" / "60-72"; return (lo, hi) in MIDI or None.
+    """
+    if not spec:
+        return None
+    # Tuple/list form
+    if isinstance(spec, (tuple, list)) and len(spec) == 2:
+        lo = _parse_pitch_bound_for_filter(spec[0])
+        hi = _parse_pitch_bound_for_filter(spec[1])
+        return (lo, hi) if (lo is not None and hi is not None) else None
+    # String form: "low-high"
+    if isinstance(spec, str):
+        parts = spec.split("-")
+        if len(parts) == 2:
+            lo = _parse_pitch_bound_for_filter(parts[0])
+            hi = _parse_pitch_bound_for_filter(parts[1])
+            return (lo, hi) if (lo is not None and hi is not None) else None
+    return None
+
+
+def display_filtered_piano_roll(
+    source_df: pd.DataFrame,
+    *,
+    measure_range: Optional[Tuple[int, int]] = None,
+    onset_range: Optional[Tuple[float, float]] = None,
+    voice_query: Optional[Union[str, Sequence[str]]] = None,
+    pitch_range: Optional[Union[str, Sequence[Any]]] = None,
+    results: Optional[Sequence[Mapping[str, Any]]] = None,
+    measure_offsets: Optional[Sequence[float]] = None,
+    plotting_backend: str = 'plt',
+    plot_width: Optional[int] = None,
+    plot_height: Optional[int] = None,
+    zoom_drag_dim: Optional[str] = None,
+    zoom_wheel_dim: Optional[str] = None,
+    show_measure_lines: bool = True,
+    # DataFrame display controls
+    display_selection: bool = True,
+    display_mode: str = 'head',  # 'head', 'all', 'none'
+    display_max_rows: int = 10,
+) -> pd.DataFrame:
+    """
+    Filter a notes DataFrame and display both the selection and a piano-roll plot.
+
+    Parameters
+    ----------
+    source_df : pandas.DataFrame
+        Notes DataFrame containing at least: 'Global Onset', 'Duration', and usually 'MIDI', 'Measure', 'Voice'.
+    measure_range : (int, int), optional
+        Inclusive measure range (start, end). When None, do not filter by measure.
+    onset_range : (float, float), optional
+        Exclusive-at-end global onset range [start, end). When None, do not filter by onset.
+    voice_query : str or sequence of str, optional
+        - If list/tuple: matched via exact `isin` on the 'Voice' column.
+        - If str: interpreted as a regex pattern for `str.contains`.
+    pitch_range : tuple/list or "low-high" string, optional
+        Pitch range filter in MIDI or names, e.g. (60, 72) or "g3-g5".
+    results : sequence of dict, optional
+        Optional `results` structure returned by the parsing helpers; used to pick
+        pre-computed measure offsets matching `source_df`.
+    measure_offsets : sequence of float, optional
+        Explicit measure offsets. When provided, this overrides lookup via `results`
+        or automatic grouping by 'Measure'.
+    plotting_backend : {'plt', 'bokeh'}
+        Backend for `draw_piano_roll`.
+    plot_width, plot_height : int, optional
+        Plot dimensions passed through to `draw_piano_roll`.
+    zoom_drag_dim, zoom_wheel_dim : {"width", "height", "both"}, optional
+        Zoom configuration forwarded to `draw_piano_roll` (Bokeh backend).
+    show_measure_lines : bool
+        Whether to show vertical measure guide lines when offsets are available.
+    display_selection : bool
+        If True, display the filtered selection DataFrame.
+    display_mode : {'head', 'all', 'none'}
+        - 'head': display up to `display_max_rows` rows (default).
+        - 'all': display the entire selection.
+        - 'none': skip DataFrame display (plot only).
+    display_max_rows : int
+        Maximum number of rows to display in 'head' mode.
+
+    Returns
+    -------
+    pandas.DataFrame
+        The filtered selection DataFrame (may be empty).
+    """
+    selection = source_df.copy()
+
+    # 1. Measure filter
+    if measure_range is not None:
+        m_lo, m_hi = measure_range
+        if 'Measure' in selection.columns:
+            selection = selection[
+                (selection['Measure'] >= m_lo) &
+                (selection['Measure'] <= m_hi)
+            ]
+        print(f"Filtered by Measure [{m_lo}, {m_hi}]: {len(selection)} rows")
+
+    # 2. Onset filter
+    if onset_range is not None:
+        o_lo, o_hi = onset_range
+        if 'Global Onset' in selection.columns:
+            selection = selection[
+                (selection['Global Onset'] >= o_lo) &
+                (selection['Global Onset'] < o_hi)
+            ]
+        print(f"Filtered by Global Onset [{o_lo}, {o_hi}): {len(selection)} rows")
+
+    # 3. Pitch filter
+    _pitch_range_midi = _parse_pitch_range_for_filter(pitch_range)
+    if _pitch_range_midi and 'MIDI' in selection.columns:
+        p_lo, p_hi = _pitch_range_midi
+        selection = selection[
+            (selection['MIDI'] >= p_lo) &
+            (selection['MIDI'] <= p_hi)
+        ]
+        print(f"Filtered by Pitch MIDI [{p_lo}, {p_hi}]: {len(selection)} rows")
+    elif pitch_range:
+        print(f"Warning: could not interpret pitch_range={pitch_range!r}; skipping pitch filter.")
+
+    # 4. Voice filter
+    if voice_query is not None and 'Voice' in selection.columns:
+        if isinstance(voice_query, (list, tuple, set)):
+            selection = selection[selection['Voice'].isin(list(voice_query))]
+            print(f"Filtered by Voice list ({len(list(voice_query))} voices): {len(selection)} rows")
+        else:
+            pattern = str(voice_query)
+            selection = selection[
+                selection['Voice'].astype(str).str.contains(pattern, regex=True, na=False)
+            ]
+            print(f"Filtered by Voice ~ /{pattern}/: {len(selection)} rows")
+
+    # 5. Display DataFrame selection
+    if display_selection:
+        if selection.empty:
+            print("Selection is empty!")
+        else:
+            mode = (display_mode or 'head').strip().lower()
+            if mode == 'all':
+                ipy_display(selection)
+            elif mode == 'none':
+                pass
+            else:
+                # Default: head
+                max_rows = int(display_max_rows) if display_max_rows is not None else 10
+                ipy_display(selection.head(max_rows))
+
+    # 6. Determine plot window
+    if onset_range is not None:
+        plot_start, plot_end = onset_range
+    else:
+        target_for_bounds = selection if not selection.empty else source_df
+        try:
+            plot_start = float(target_for_bounds['Global Onset'].min())
+            plot_end = float((target_for_bounds['Global Onset'] + target_for_bounds['Duration']).max())
+        except Exception:
+            plot_start, plot_end = 0.0, 10.0
+
+    # 7. Measure guide lines
+    measure_offsets_full: Sequence[float] = []
+    if measure_offsets is not None:
+        measure_offsets_full = list(measure_offsets)
+    elif results is not None:
+        try:
+            res_idx = next(
+                (i for i, item in enumerate(results) if item.get('df') is source_df),
+                None,
+            )
+            if res_idx is not None:
+                measure_offsets_full = list(results[res_idx]['measure_offsets'])
+        except Exception:
+            measure_offsets_full = []
+    if not measure_offsets_full and 'Measure' in source_df.columns and 'Global Onset' in source_df.columns:
+        try:
+            measure_offsets_full = (
+                source_df.groupby('Measure')['Global Onset']
+                .min()
+                .sort_values()
+                .tolist()
+            )
+        except Exception:
+            measure_offsets_full = []
+
+    eps = 1e-6
+    visible_measure_offsets = [
+        float(m) for m in measure_offsets_full
+        if (m >= plot_start - eps) and (m <= plot_end + eps)
+    ]
+    if visible_measure_offsets:
+        visible_measure_offsets = sorted({round(float(m), 6) for m in visible_measure_offsets})
+
+    # 8. Plot
+    backend = (plotting_backend or 'plt').strip().lower()
+    draw_piano_roll(
+        selection,
+        measure_offsets=visible_measure_offsets,
+        backend=backend,
+        plot_width=plot_width,
+        plot_height=plot_height,
+        zoom_drag_dim=zoom_drag_dim,
+        zoom_wheel_dim=zoom_wheel_dim,
+        show_measure_lines=bool(show_measure_lines),
+    )
+
+    return selection
 
 
 __all__ = [

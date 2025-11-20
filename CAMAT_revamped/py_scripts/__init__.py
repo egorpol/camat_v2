@@ -42,6 +42,7 @@ from .analysis_utils import (
     sort_pitch_counts,
     plot_pitch_distribution,
     display_pitch_distribution,
+    display_filtered_piano_roll,
 )
 
 __all__ = [
@@ -85,5 +86,6 @@ __all__ = [
     'sort_pitch_counts',
     'plot_pitch_distribution',
     'display_pitch_distribution',
+    'display_filtered_piano_roll',
 ]
 
