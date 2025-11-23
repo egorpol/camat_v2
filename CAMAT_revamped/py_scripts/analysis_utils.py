@@ -187,26 +187,34 @@ def sort_pitch_counts(counts_df: pd.DataFrame, display_col: str, order_option: s
         _, _, octv = parse_pitch_name(nm) if nm is not None else (None, '', None)
         return octv
 
-    if order_opt in ['midi', 'pitch real', 'pitch', 'real']:
-        counts_df['sort_midi'] = counts_df[display_col].map(lambda v: _to_midi_for_sort(display_col, v))
-        return counts_df.sort_values(['sort_midi', display_col], na_position='last', kind='mergesort')
-    if order_opt in ['pitch by octave', 'pitch octave', 'octave pitch', 'pitch by octave real', 'octave real']:
-        counts_df['sort_oct'] = counts_df[display_col].map(oct_of)
-        counts_df['sort_pc'] = counts_df[display_col].map(pc_of)
-        return counts_df.sort_values(['sort_oct', 'sort_pc', display_col], na_position='last', kind='mergesort')
-    if order_opt in ['pitch by octave enharmonic', 'octave enharmonic', 'octave name']:
-        counts_df['sort_oct_enh'] = counts_df[display_col].map(enh_octave_of)
-        counts_df['sort_letter'] = counts_df[display_col].map(letter_index_of)
-        counts_df['sort_acc'] = counts_df[display_col].map(acc_rank_of)
-        return counts_df.sort_values(['sort_oct_enh', 'sort_letter', 'sort_acc', display_col], na_position='last', kind='mergesort')
-    if order_opt in ['pitch by name', 'pitch enharmonic', 'enharmonic', 'enharmonic pitch', 'pitch enharmonic']:
-        counts_df['sort_letter'] = counts_df[display_col].map(letter_index_of)
-        counts_df['sort_acc'] = counts_df[display_col].map(acc_rank_of)
-        return counts_df.sort_values(['sort_letter', 'sort_acc', display_col], na_position='last', kind='mergesort')
+    # Work on a copy so we don't mutate caller data unexpectedly
+    df = counts_df.copy()
 
-    # Default to MIDI order
-    counts_df['sort_midi'] = counts_df[display_col].map(lambda v: _to_midi_for_sort(display_col, v))
-    return counts_df.sort_values(['sort_midi', display_col], na_position='last', kind='mergesort')
+    if order_opt in ['midi', 'pitch real', 'pitch', 'real']:
+        df['sort_midi'] = df[display_col].map(lambda v: _to_midi_for_sort(display_col, v))
+        df = df.sort_values(['sort_midi', display_col], na_position='last', kind='mergesort')
+    elif order_opt in ['pitch by octave', 'pitch octave', 'octave pitch', 'pitch by octave real', 'octave real']:
+        df['sort_oct'] = df[display_col].map(oct_of)
+        df['sort_pc'] = df[display_col].map(pc_of)
+        df = df.sort_values(['sort_oct', 'sort_pc', display_col], na_position='last', kind='mergesort')
+    elif order_opt in ['pitch by octave enharmonic', 'octave enharmonic', 'octave name']:
+        df['sort_oct_enh'] = df[display_col].map(enh_octave_of)
+        df['sort_letter'] = df[display_col].map(letter_index_of)
+        df['sort_acc'] = df[display_col].map(acc_rank_of)
+        df = df.sort_values(['sort_oct_enh', 'sort_letter', 'sort_acc', display_col], na_position='last', kind='mergesort')
+    elif order_opt in ['pitch by name', 'pitch enharmonic', 'enharmonic', 'enharmonic pitch', 'pitch enharmonic']:
+        df['sort_letter'] = df[display_col].map(letter_index_of)
+        df['sort_acc'] = df[display_col].map(acc_rank_of)
+        df = df.sort_values(['sort_letter', 'sort_acc', display_col], na_position='last', kind='mergesort')
+    else:
+        # Default to MIDI order
+        df['sort_midi'] = df[display_col].map(lambda v: _to_midi_for_sort(display_col, v))
+        df = df.sort_values(['sort_midi', display_col], na_position='last', kind='mergesort')
+
+    # Remove helper columns from the final DataFrame that is returned to callers.
+    # User request: hide 'sort_letter' and 'sort_acc' from the final df.
+    df = df.drop(columns=['sort_letter', 'sort_acc'], errors='ignore')
+    return df
 
 
 def plot_pitch_distribution(
@@ -216,6 +224,7 @@ def plot_pitch_distribution(
     plot_width: int = 900,
     plot_height: int = 350,
     show_hover: bool = True,
+    bar_color: str = '#4682B4',
 ):
     backend_opt = (backend or 'plt').strip().lower()
     x_labels = counts_df[display_col].astype(str).tolist()
@@ -224,7 +233,7 @@ def plot_pitch_distribution(
     if backend_opt == 'plt':
         import matplotlib.pyplot as plt
         fig, ax = plt.subplots(figsize=(plot_width / 100.0, plot_height / 100.0))
-        ax.bar(x_labels, y_values, color='steelblue')
+        ax.bar(x_labels, y_values, color=bar_color)
         ax.set_xlabel(display_col)
         ax.set_ylabel('Count')
         ax.set_title('Pitch Distribution')
@@ -240,8 +249,14 @@ def plot_pitch_distribution(
 
         output_notebook()
         source = ColumnDataSource(dict(x=x_labels, count=y_values))
-        p = figure(x_range=x_labels, height=plot_height, width=plot_width, title='Pitch Distribution', toolbar_location='right')
-        p.vbar(x='x', top='count', width=0.9, source=source, fill_color='#4682B4')
+        p = figure(
+            x_range=x_labels,
+            height=plot_height,
+            width=plot_width,
+            title='Pitch Distribution',
+            toolbar_location='right',
+        )
+        p.vbar(x='x', top='count', width=0.9, source=source, fill_color=bar_color)
         if show_hover:
             p.add_tools(HoverTool(tooltips=[("Pitch", "@x"), ("Count", "@count")]))
         p.xaxis.axis_label = display_col
@@ -264,6 +279,7 @@ def display_pitch_distribution(
     plot_height: int = 350,
     show_hover: bool = True,
     show_table: bool = True,
+    bar_color: str = '#4682B4',
 ) -> pd.DataFrame:
     """
     Build and display a pitch distribution table and plot from a DataFrame.
@@ -310,9 +326,189 @@ def display_pitch_distribution(
         plot_width=plot_width,
         plot_height=plot_height,
         show_hover=bool(show_hover),
+        bar_color=bar_color,
     )
 
     return counts_df
+
+
+def _get_pitch_class_from_name(val: Any) -> Optional[str]:
+    """
+    Helper: collapse a pitch name like 'C#4' to a pitch class string 'C#'.
+    """
+    if val is None:
+        return None
+    letter, acc, _ = parse_pitch_name(str(val))
+    return f"{letter}{acc}" if letter else None
+
+
+def build_pc_counts_from_names(
+    name_series: pd.Series,
+    pc_label: str,
+) -> Tuple[Optional[pd.DataFrame], Optional[str]]:
+    """
+    Build a pitch-class counts table (C, C#, D, ...) from a series of pitch names.
+
+    Parameters
+    ----------
+    name_series : pandas.Series
+        Series of pitch names (e.g., 'Pitch', 'Pitch Enharmonic', or derived from MIDI).
+    pc_label : str
+        Column label for the resulting pitch-class category column.
+
+    Returns
+    -------
+    (counts_df, label) : (pandas.DataFrame or None, str or None)
+        When successful, `counts_df` has columns [pc_label, 'count'] and is ordered
+        chromatically using 'pitch by name'. When the input series yields no valid
+        pitch classes, both elements are None.
+    """
+    pc_series = name_series.dropna().map(_get_pitch_class_from_name).dropna()
+    if pc_series.empty:
+        return None, None
+
+    counts_pc = pc_series.value_counts().rename('count').reset_index()
+    counts_pc.columns = [pc_label, 'count']
+    counts_pc = sort_pitch_counts(counts_pc, pc_label, 'pitch by name')
+    return counts_pc, pc_label
+
+
+def build_pitch_class_distributions(
+    source_df: pd.DataFrame,
+) -> Tuple[
+    Optional[pd.DataFrame],
+    Optional[pd.DataFrame],
+    Optional[str],
+    Optional[str],
+]:
+    """
+    Compute pitch-class distributions for both real and enharmonic spellings,
+    when possible, from a notes DataFrame.
+
+    The function looks for:
+    - 'Pitch' (real names) and/or 'MIDI' to build a real pitch-class histogram.
+    - 'Pitch Enharmonic' to build a written/enharmonic pitch-class histogram.
+
+    Returns
+    -------
+    counts_real, counts_enh, label_real, label_enh :
+        - counts_real : DataFrame or None
+        - counts_enh : DataFrame or None
+        - label_real : str or None (column name for real pitch classes)
+        - label_enh : str or None (column name for enharmonic pitch classes)
+    """
+    counts_real: Optional[pd.DataFrame] = None
+    label_real: Optional[str] = None
+    counts_enh: Optional[pd.DataFrame] = None
+    label_enh: Optional[str] = None
+
+    # Real pitch classes (collapse by sounding pitch)
+    if 'Pitch' in source_df.columns:
+        counts_real, label_real = build_pc_counts_from_names(
+            source_df['Pitch'],
+            'Pitch Class (Real)',
+        )
+    elif 'MIDI' in source_df.columns:
+        real_names = source_df['MIDI'].dropna().map(midi_to_name)
+        counts_real, label_real = build_pc_counts_from_names(
+            real_names,
+            'Pitch Class (Real from MIDI)',
+        )
+
+    # Enharmonic / written pitch classes (collapse by notation spelling)
+    if 'Pitch Enharmonic' in source_df.columns:
+        counts_enh, label_enh = build_pc_counts_from_names(
+            source_df['Pitch Enharmonic'],
+            'Pitch Class (Enharmonic)',
+        )
+
+    return counts_real, counts_enh, label_real, label_enh
+
+
+def display_pitch_class_distributions(
+    source_df: pd.DataFrame,
+    *,
+    backend: str = 'bokeh',
+    plot_width: int = 1200,
+    plot_height: int = 450,
+    show_hover: bool = True,
+    show_table: bool = True,
+    bar_color: str = '#4682B4',
+) -> Mapping[str, Any]:
+    """
+    Build and display pitch-class distributions (real + enharmonic) from a notes DataFrame.
+
+    Parameters
+    ----------
+    source_df : pandas.DataFrame
+        Notes DataFrame with at least one of: 'MIDI', 'Pitch', 'Pitch Enharmonic'.
+    backend : {'plt', 'bokeh'}
+        Plotting backend for the bar charts.
+    plot_width, plot_height : int
+        Plot dimensions in pixels.
+    show_hover : bool
+        Enable hover tooltips (Bokeh backend only).
+    show_table : bool
+        Whether to display the counts tables.
+
+    Returns
+    -------
+    dict
+        Dictionary with keys:
+        - 'real': DataFrame or None
+        - 'enharmonic': DataFrame or None
+        - 'label_real': str or None
+        - 'label_enh': str or None
+    """
+    counts_real, counts_enh, label_real, label_enh = build_pitch_class_distributions(source_df)
+
+    any_done = False
+
+    if counts_real is not None and label_real is not None:
+        any_done = True
+        print("=== Pitch Class Distribution (Real) ===")
+        if show_table:
+            try:
+                ipy_display(counts_real.set_index(label_real).T)
+            except Exception:
+                print(counts_real.set_index(label_real).T)
+        plot_pitch_distribution(
+            counts_real,
+            label_real,
+            backend=backend,
+            plot_width=plot_width,
+            plot_height=plot_height,
+            show_hover=show_hover,
+            bar_color=bar_color,
+        )
+
+    if counts_enh is not None and label_enh is not None:
+        any_done = True
+        print("=== Pitch Class Distribution (Enharmonic / Written) ===")
+        if show_table:
+            try:
+                ipy_display(counts_enh.set_index(label_enh).T)
+            except Exception:
+                print(counts_enh.set_index(label_enh).T)
+        plot_pitch_distribution(
+            counts_enh,
+            label_enh,
+            backend=backend,
+            plot_width=plot_width,
+            plot_height=plot_height,
+            show_hover=show_hover,
+            bar_color=bar_color,
+        )
+
+    if not any_done:
+        print("No suitable pitch columns found (MIDI, Pitch, or Pitch Enharmonic) to extract pitch classes.")
+
+    return {
+        'real': counts_real,
+        'enharmonic': counts_enh,
+        'label_real': label_real,
+        'label_enh': label_enh,
+    }
 
 
 def build_duration_counts(
@@ -358,6 +554,7 @@ def plot_duration_distribution(
     plot_width: int = 900,
     plot_height: int = 350,
     show_hover: bool = True,
+    bar_color: str = '#2E8B57',
 ):
     backend_opt = (backend or 'plt').strip().lower()
     x_labels = counts_df[display_col].astype(str).tolist()
@@ -366,7 +563,7 @@ def plot_duration_distribution(
     if backend_opt == 'plt':
         import matplotlib.pyplot as plt
         fig, ax = plt.subplots(figsize=(plot_width / 100.0, plot_height / 100.0))
-        ax.bar(x_labels, y_values, color='seagreen')
+        ax.bar(x_labels, y_values, color=bar_color)
         ax.set_xlabel(display_col)
         ax.set_ylabel('Count')
         ax.set_title('Duration Distribution')
@@ -382,8 +579,14 @@ def plot_duration_distribution(
         output_notebook()
         
         source = ColumnDataSource(dict(x=x_labels, count=y_values))
-        p = figure(x_range=x_labels, height=plot_height, width=plot_width, title='Duration Distribution', toolbar_location='right')
-        p.vbar(x='x', top='count', width=0.9, source=source, fill_color='#2E8B57')
+        p = figure(
+            x_range=x_labels,
+            height=plot_height,
+            width=plot_width,
+            title='Duration Distribution',
+            toolbar_location='right',
+        )
+        p.vbar(x='x', top='count', width=0.9, source=source, fill_color=bar_color)
         if show_hover:
              p.add_tools(HoverTool(tooltips=[("Duration", "@x"), ("Count", "@count")]))
         
@@ -407,6 +610,7 @@ def display_duration_distribution(
     plot_height: int = 350,
     show_hover: bool = True,
     show_table: bool = True,
+    bar_color: str = '#2E8B57',
 ) -> pd.DataFrame:
     """
     Build and display a duration distribution table and plot from a DataFrame.
@@ -451,9 +655,24 @@ def display_duration_distribution(
         plot_width=plot_width,
         plot_height=plot_height,
         show_hover=bool(show_hover),
+        bar_color=bar_color,
     )
     
     return counts_df
+
+
+def extract_selected_xml_ids(selection: Optional[pd.DataFrame]) -> list[str]:
+    """
+    Given an optional selection DataFrame, return a list of MEI xml IDs
+    formatted with a leading '#', e.g. ['#note-123', '#note-456'].
+
+    This is a small convenience wrapper to keep notebook cells simple.
+    """
+    if selection is None or selection.empty:
+        return []
+    if 'xml_id' not in selection.columns:
+        return []
+    return ['#' + str(x) for x in selection['xml_id'].dropna().tolist()]
 
 
 # --------------------------------------------------------------------
@@ -697,7 +916,11 @@ __all__ = [
     'sort_pitch_counts',
     'plot_pitch_distribution',
     'display_pitch_distribution',
+    'build_pc_counts_from_names',
+    'build_pitch_class_distributions',
+    'display_pitch_class_distributions',
     'build_duration_counts',
     'plot_duration_distribution',
     'display_duration_distribution',
+    'extract_selected_xml_ids',
 ]

@@ -42,7 +42,11 @@ from .analysis_utils import (
     sort_pitch_counts,
     plot_pitch_distribution,
     display_pitch_distribution,
+    build_pc_counts_from_names,
+    build_pitch_class_distributions,
+    display_pitch_class_distributions,
     display_filtered_piano_roll,
+    extract_selected_xml_ids,
 )
 
 __all__ = [
@@ -86,6 +90,10 @@ __all__ = [
     'sort_pitch_counts',
     'plot_pitch_distribution',
     'display_pitch_distribution',
+    'build_pc_counts_from_names',
+    'build_pitch_class_distributions',
+    'display_pitch_class_distributions',
     'display_filtered_piano_roll',
+    'extract_selected_xml_ids',
 ]
 
