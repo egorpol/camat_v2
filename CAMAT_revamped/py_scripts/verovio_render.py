@@ -22,6 +22,7 @@ __all__ = [
     "vrv_load_data",
     "vrv_load_from_file",
     "vrv_load_from_url",
+    "vrv_convert_to_mei",
     "vrv_render_page",
     "vrv_render_all_pages",
     "vrv_display_svg",
@@ -158,6 +159,35 @@ def vrv_load_from_url(url: str, *, input_from: Optional[str] = None, timeout: in
         data = resp.content.decode("utf-8", errors="ignore")
     inferred = input_from or vrv_guess_input_from(url, data)
     return vrv_load_data(data, input_from=inferred)
+
+
+def vrv_convert_to_mei(
+    source: str,
+    *,
+    is_url: bool = False,
+    input_from: Optional[str] = None,
+    encoding: str = "utf-8",
+    timeout: int = 30,
+) -> str:
+    """
+    Convert a score (MusicXML, Humdrum, or MEI) to MEI using the global Verovio toolkit.
+
+    This is a thin convenience wrapper around the existing vrv_load_* helpers plus
+    vrv_get_mei():
+
+    - When is_url=True, 'source' is treated as a remote URL and loaded via vrv_load_from_url.
+    - Otherwise, 'source' is treated as a local file path and loaded via vrv_load_from_file.
+    - input_from can be one of {'mei', 'musicxml', 'humdrum'}; when omitted, the type
+      is auto-detected from the file extension or content.
+
+    The converted MEI is returned as a string, and the score remains loaded in the toolkit
+    so that subsequent calls to vrv_render_page / vrv_render_all_pages operate on it.
+    """
+    if is_url:
+        vrv_load_from_url(source, input_from=input_from, timeout=timeout)
+    else:
+        vrv_load_from_file(source, input_from=input_from, encoding=encoding)
+    return vrv_get_mei()
 
 
 def vrv_render_page(page: int) -> str:
