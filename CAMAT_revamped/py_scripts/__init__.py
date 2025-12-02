@@ -48,6 +48,11 @@ from .analysis_utils import (
     display_filtered_piano_roll,
     extract_selected_xml_ids,
 )
+from .parser_utils import (
+    expand_file_sources,
+    format_parsed_summary,
+    print_parsed_summary,
+)
 
 __all__ = [
     'run_pattern_search',
@@ -95,5 +100,7 @@ __all__ = [
     'display_pitch_class_distributions',
     'display_filtered_piano_roll',
     'extract_selected_xml_ids',
+    'expand_file_sources',
+    'format_parsed_summary',
+    'print_parsed_summary',
 ]
-

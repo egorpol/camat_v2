@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import os
 from importlib import import_module
-from typing import Callable, Dict, Tuple, List
+from typing import Any, Callable, Dict, List, Mapping, Tuple
+
+from .parser_utils import print_parsed_summary
 
 __all__ = ["get_parse_files", "list_parsers", "normalize_backend_name", "parse_files"]
 
@@ -91,10 +93,34 @@ def parse_files(file_sources, *,
             FILE_SOURCES,
             parsing_backend='partitura',  # or 'music21' (optional; env default applies)
             backend='bokeh',              # plotting backend is forwarded to the concrete parser
+            print_parsed_summary=True,    # auto-print a quick summary (bool or mapping of kwargs)
             **other_kwargs
         )
+
+    Additional keyword arguments
+    ----------------------------
+    print_parsed_summary : bool | Mapping[str, Any], optional
+        When provided, automatically print a quick summary using
+        ``parser_utils.print_parsed_summary``. Supplying a mapping allows
+        overriding the helper's keyword arguments.
     """
+    summary_option = kwargs.pop("print_parsed_summary", False)
+    summary_enabled = False
+    summary_kwargs: Dict[str, Any] = {}
+    if isinstance(summary_option, Mapping):
+        summary_enabled = True
+        summary_kwargs = dict(summary_option)
+    else:
+        summary_enabled = bool(summary_option)
+
     func = get_parse_files(parsing_backend)
-    return func(file_sources, **kwargs)
+    outputs = func(file_sources, **kwargs)
+
+    if summary_enabled and isinstance(outputs, (list, tuple)) and outputs:
+        result_list = outputs[0]
+        if isinstance(result_list, list):
+            print_parsed_summary(result_list, **summary_kwargs)
+
+    return outputs
 
 
