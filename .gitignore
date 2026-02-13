@@ -1,7 +1,10 @@
-﻿# Python artifacts
+# Python artifacts
 __pycache__/
 *.py[cod]
 *$py.class
+build/
+dist/
+*.egg-info/
 
 # Jupyter notebooks
 .ipynb_checkpoints/
