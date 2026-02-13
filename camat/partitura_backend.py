@@ -68,6 +68,12 @@ from .music_utils import (  # type: ignore
     canonicalize_pitch_name,
     accidental_rank_from_name,
 )
+from .mensural_utils import (
+    DEFAULT_MENSURAL_DURATION_MAP,
+    DEFAULT_METER_COUNT,
+    DEFAULT_METER_UNIT,
+    normalize_mensural_mei_for_partitura_text,
+)
 
 try:  # pragma: no cover - optional dependency
     from tqdm.auto import tqdm as _tqdm
@@ -78,6 +84,7 @@ __all__ = ["partitura_score_to_dataframe", "parse_files_partitura"]
 
 _PITCH_CLASS_NAMES = ("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B")
 _TEXTUAL_EXTENSIONS = {".xml", ".musicxml", ".mei", ".krn", ".kern", ".hum"}
+_MENSURAL_DURATION_TOKENS = set(DEFAULT_MENSURAL_DURATION_MAP.keys())
 
 
 def _midi_to_pitch_name(midi: int) -> str:
@@ -87,6 +94,181 @@ def _midi_to_pitch_name(midi: int) -> str:
     octave = (midi // 12) - 1
     pc = _PITCH_CLASS_NAMES[midi % 12]
     return f"{pc}{octave}"
+
+
+def _exception_chain_text(exc: BaseException) -> str:
+    parts: List[str] = []
+    seen: set[int] = set()
+    cur: Optional[BaseException] = exc
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        try:
+            msg = str(cur)
+        except Exception:
+            msg = repr(cur)
+        parts.append(msg)
+        cur = cur.__cause__ if cur.__cause__ is not None else cur.__context__
+    return " | ".join(parts).lower()
+
+
+def _is_mensural_duration_error(exc: BaseException) -> bool:
+    if isinstance(exc, KeyError):
+        try:
+            key = str(exc).strip("'\"").lower()
+        except Exception:
+            key = ""
+        if key in _MENSURAL_DURATION_TOKENS:
+            return True
+    text = _exception_chain_text(exc)
+    return any(token in text for token in _MENSURAL_DURATION_TOKENS)
+
+
+def _is_missing_time_signature_error(exc: BaseException) -> bool:
+    return "time signature is not encoded" in _exception_chain_text(exc)
+
+
+def _is_partitura_unsupported_mei_structure_error(exc: BaseException) -> bool:
+    text = _exception_chain_text(exc)
+    return "is not yet supported" in text and "element" in text
+
+
+def _convert_mei_with_verovio_for_partitura(
+    source_path: str,
+    *,
+    mensural_to_cmn: bool = True,
+) -> Tuple[str, Optional[Callable[[], None]], int, int]:
+    """
+    Convert MEI to a partitura-friendlier MEI with a local Verovio toolkit instance.
+
+    Returns a temporary file path and cleanup callback.
+    """
+    try:
+        import verovio  # type: ignore
+    except Exception as exc:
+        raise RuntimeError("verovio is required for MEI structure conversion") from exc
+
+    with open(source_path, "r", encoding="utf-8", errors="ignore") as f:
+        mei_text = f.read()
+
+    tk = verovio.toolkit()
+    tk.setOptions(
+        {
+            "inputFrom": "mei",
+            "outputFormatRaw": True,
+            "removeIds": False,
+            "mensuralToCmn": bool(mensural_to_cmn),
+        }
+    )
+    tk.loadData(mei_text)
+    converted_mei = tk.getMEI()
+    if not isinstance(converted_mei, str) or not converted_mei.strip():
+        raise RuntimeError("Verovio conversion returned empty MEI data")
+
+    converted_mei, removed_annots, wrapped_staff_groups = _postprocess_mei_for_partitura(
+        converted_mei
+    )
+
+    tmp = tempfile.NamedTemporaryFile("w", delete=False, encoding="utf-8", suffix=".mei")
+    try:
+        tmp.write(converted_mei)
+    finally:
+        tmp.close()
+
+    def _cleanup() -> None:
+        try:
+            os.remove(tmp.name)
+        except OSError:
+            pass
+
+    return tmp.name, _cleanup, removed_annots, wrapped_staff_groups
+
+
+def _postprocess_mei_for_partitura(mei_text: str) -> Tuple[str, int, int]:
+    """
+    Post-process MEI text for better partitura compatibility.
+
+    - Remove unsupported <annot> elements.
+    - Wrap section-level <staff> runs into synthetic <measure> elements.
+
+    Returns:
+        (updated_mei_text, removed_annot_count, wrapped_staff_group_count)
+    """
+    try:
+        from lxml import etree  # type: ignore
+    except Exception:
+        import re
+
+        no_annot = re.sub(r"<annot\\b[^>]*>.*?</annot>", "", mei_text, flags=re.DOTALL)
+        no_annot = re.sub(r"<annot\\b[^>]*/>", "", no_annot)
+        removed = 1 if no_annot != mei_text else 0
+        return no_annot, removed, 0
+
+    parser = etree.XMLParser(recover=True, remove_blank_text=False, huge_tree=True)
+    root = etree.fromstring(mei_text.encode("utf-8", errors="ignore"), parser=parser)
+    ns = etree.QName(root.tag).namespace
+
+    def _lname(el: Any) -> str:
+        try:
+            return etree.QName(el.tag).localname
+        except Exception:
+            return str(el.tag)
+
+    def _tag(local: str) -> str:
+        return f"{{{ns}}}{local}" if ns else local
+
+    removed_annot = 0
+    for annot_el in root.xpath(".//*[local-name()='annot']"):
+        parent = annot_el.getparent()
+        if parent is None:
+            continue
+        parent.remove(annot_el)
+        removed_annot += 1
+
+    wrapped_staff_groups = 0
+    for section_el in root.xpath(".//*[local-name()='section']"):
+        original_children = list(section_el)
+        if not original_children:
+            continue
+
+        # continue numbering after existing numeric measure labels
+        existing_numbers: List[int] = []
+        for ch in original_children:
+            if _lname(ch) != "measure":
+                continue
+            n_val = ch.get("n")
+            if n_val is None:
+                continue
+            try:
+                existing_numbers.append(int(str(n_val)))
+            except Exception:
+                continue
+        next_measure_number = (max(existing_numbers) + 1) if existing_numbers else 1
+
+        new_children: List[Any] = []
+        i = 0
+        while i < len(original_children):
+            child = original_children[i]
+            if _lname(child) != "staff":
+                new_children.append(child)
+                i += 1
+                continue
+
+            measure_el = etree.Element(_tag("measure"))
+            measure_el.set("n", str(next_measure_number))
+            next_measure_number += 1
+
+            while i < len(original_children) and _lname(original_children[i]) == "staff":
+                measure_el.append(original_children[i])
+                i += 1
+
+            new_children.append(measure_el)
+            wrapped_staff_groups += 1
+
+        if new_children != original_children:
+            section_el[:] = new_children
+
+    out = etree.tostring(root, encoding="unicode")
+    return out, removed_annot, wrapped_staff_groups
 
 
 def _slugify_name(text: str) -> str:
@@ -134,21 +316,29 @@ def _format_voice_label(part_label: str, voice: Union[int, str, None]) -> str:
     return f"{base} - {voice_suffix}"
 
 
-def _sanitize_source_for_partitura(source_path: str) -> Tuple[str, Optional[Callable[[], None]]]:
+def _sanitize_source_for_partitura(
+    source_path: str,
+    *,
+    normalize_mensural_durations: bool = False,
+    inject_missing_meter_signature: bool = False,
+    default_meter_count: int = DEFAULT_METER_COUNT,
+    default_meter_unit: int = DEFAULT_METER_UNIT,
+) -> Tuple[str, Optional[Callable[[], None]], int, int]:
     """
     Clean up textual score files before feeding them into partitura to avoid parser warnings.
 
-    Returns the path to use and an optional cleanup callback.
+    Returns:
+        path_to_use, optional_cleanup_callback, mensural_replacement_count, meter_injection_count
     """
     path = Path(source_path)
     suffix = path.suffix.lower()
     if suffix not in _TEXTUAL_EXTENSIONS or not path.exists():
-        return source_path, None
+        return source_path, None, 0, 0
 
     try:
         original_text = path.read_text(encoding="utf-8", errors="ignore")
     except Exception:
-        return source_path, None
+        return source_path, None, 0, 0
 
     text = original_text.lstrip("\ufeff")
 
@@ -180,8 +370,23 @@ def _sanitize_source_for_partitura(source_path: str) -> Tuple[str, Optional[Call
     if filtered != sanitized:
         sanitized = filtered
 
+    mensural_replacement_count = 0
+    meter_injection_count = 0
+    if suffix == ".mei" and (normalize_mensural_durations or inject_missing_meter_signature):
+        sanitized, mensural_replacement_count, _, meter_injection_count = (
+            normalize_mensural_mei_for_partitura_text(
+                sanitized,
+                meter_count=default_meter_count,
+                meter_unit=default_meter_unit,
+            )
+        )
+        if not normalize_mensural_durations:
+            mensural_replacement_count = 0
+        if not inject_missing_meter_signature:
+            meter_injection_count = 0
+
     if sanitized == original_text:
-        return source_path, None
+        return source_path, None, mensural_replacement_count, meter_injection_count
 
     tmp = tempfile.NamedTemporaryFile("w", delete=False, encoding="utf-8", suffix=suffix)
     try:
@@ -195,7 +400,7 @@ def _sanitize_source_for_partitura(source_path: str) -> Tuple[str, Optional[Call
         except OSError:
             pass
 
-    return tmp.name, _cleanup
+    return tmp.name, _cleanup, mensural_replacement_count, meter_injection_count
 
 
 def _load_partitura_score(file_path: str):
@@ -490,11 +695,25 @@ def parse_files_partitura(
     colorize_voices: bool = False,
     palette: Optional[Union[str, Sequence[str]]] = None,
     include_xml_ids: bool = True,
+    normalize_mensural_durations: bool = True,
+    inject_missing_meter_signature: bool = True,
+    default_meter_count: int = DEFAULT_METER_COUNT,
+    default_meter_unit: int = DEFAULT_METER_UNIT,
+    try_verovio_mei_conversion: bool = True,
+    verovio_mensural_to_cmn: bool = True,
+    allow_music21_fallback: bool = True,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, pd.DataFrame], Optional[pd.DataFrame]]:
     """
     Parse multiple symbolic music files using partitura, producing CAMAT-ready dataframes.
 
     Parameters mirror camat.music_utils.parse_files for drop-in compatibility.
+    For MEI files:
+    - `normalize_mensural_durations=True` rewrites mensural duration labels
+      (e.g. `semibrevis`) to partitura-compatible values.
+    - `inject_missing_meter_signature=True` injects default meter attributes
+      when missing (`meter.count` / `meter.unit`).
+    - `try_verovio_mei_conversion=True` retries unsupported MEI structures by
+      converting through Verovio and then parsing with partitura.
     """
     results: List[Dict[str, Any]] = []
     dfs_by_name: Dict[str, pd.DataFrame] = {}
@@ -516,6 +735,7 @@ def parse_files_partitura(
 
     try:
         for idx, file_source in enumerate(sources):
+            file_path: Optional[str] = None
             try:
                 name = _source_to_name(file_source, idx)
                 short_name = os.path.basename(file_source).split("?")[0].split("#")[0]
@@ -524,12 +744,68 @@ def parse_files_partitura(
                     pbar.set_postfix_str(short_name)
 
                 file_path = get_file_path(file_source)
-                sanitized_path, cleanup_fn = _sanitize_source_for_partitura(file_path)
+                sanitized_path, cleanup_fn, mensural_replacements, meter_injections = _sanitize_source_for_partitura(
+                    file_path,
+                    normalize_mensural_durations=normalize_mensural_durations,
+                    inject_missing_meter_signature=inject_missing_meter_signature,
+                    default_meter_count=default_meter_count,
+                    default_meter_unit=default_meter_unit,
+                )
+                converted_cleanup_fn: Optional[Callable[[], None]] = None
                 try:
-                    score = _load_partitura_score(sanitized_path)
+                    if mensural_replacements > 0:
+                        log(
+                            "Normalized "
+                            f"{mensural_replacements} mensural duration token(s) "
+                            "for partitura compatibility."
+                        )
+                    if meter_injections > 0:
+                        log(
+                            "Injected default meter signature into "
+                            f"{meter_injections} tag(s): "
+                            f"{default_meter_count}/{default_meter_unit}."
+                        )
+                    try:
+                        score = _load_partitura_score(sanitized_path)
+                    except Exception as load_exc:
+                        is_mei_source = str(sanitized_path).lower().endswith(".mei")
+                        if (
+                            try_verovio_mei_conversion
+                            and is_mei_source
+                            and _is_partitura_unsupported_mei_structure_error(load_exc)
+                        ):
+                            log(
+                                "Warning: partitura hit unsupported MEI structure "
+                                f"('{load_exc}'). Retrying after Verovio MEI conversion."
+                            )
+                            (
+                                converted_path,
+                                converted_cleanup_fn,
+                                removed_annots,
+                                wrapped_staff_groups,
+                            ) = _convert_mei_with_verovio_for_partitura(
+                                sanitized_path,
+                                mensural_to_cmn=verovio_mensural_to_cmn,
+                            )
+                            if removed_annots > 0:
+                                log(
+                                    "Verovio MEI postprocess: removed "
+                                    f"{removed_annots} <annot> element(s)."
+                                )
+                            if wrapped_staff_groups > 0:
+                                log(
+                                    "Verovio MEI postprocess: wrapped "
+                                    f"{wrapped_staff_groups} section-level staff group(s) "
+                                    "into synthetic measure elements."
+                                )
+                            score = _load_partitura_score(converted_path)
+                        else:
+                            raise
                 finally:
                     if cleanup_fn:
                         cleanup_fn()
+                    if converted_cleanup_fn:
+                        converted_cleanup_fn()
 
                 # Only include xml_id when MEI source detected and option enabled
                 is_mei = str(sanitized_path).lower().endswith(".mei")
@@ -615,17 +891,112 @@ def parse_files_partitura(
                 dfs_by_name[name] = df_processed
                 last_df = df_processed
 
-                if cleanup_remote and file_source.startswith(("http://", "https://")):
+            except Exception as exc:
+                should_try_music21_fallback = (
+                    allow_music21_fallback
+                    and (
+                        _is_mensural_duration_error(exc)
+                        or _is_missing_time_signature_error(exc)
+                        or _is_partitura_unsupported_mei_structure_error(exc)
+                    )
+                )
+                if should_try_music21_fallback:
+                    try:
+                        _dur_label = str(exc).strip("'\"")
+                    except Exception:
+                        _dur_label = str(exc)
+                    if _is_missing_time_signature_error(exc):
+                        log(
+                            "Warning: partitura failed because meter info is missing "
+                            f"('{_dur_label}'). "
+                            "Falling back to the music21 backend for this file."
+                        )
+                    elif _is_partitura_unsupported_mei_structure_error(exc):
+                        log(
+                            "Warning: partitura failed on unsupported MEI structure "
+                            f"('{_dur_label}'). "
+                            "Falling back to the music21 backend for this file."
+                        )
+                    else:
+                        log(
+                            "Warning: partitura cannot parse mensural duration labels "
+                            f"(e.g. '{_dur_label}'). "
+                            "Falling back to the music21 backend for this file."
+                        )
+                    try:
+                        from .music21_backend import parse_files as _parse_files_music21
+
+                        fallback_results, _, _ = _parse_files_music21(
+                            [file_source],
+                            filter_zero_duration=filter_zero_duration,
+                            adjust_fractional_duration=adjust_fractional_duration,
+                            parse_enharmonic=parse_enharmonic,
+                            backend=backend,
+                            show_measure_lines=show_measure_lines,
+                            measure_line_color=measure_line_color,
+                            show_hover=show_hover,
+                            hover_fields=hover_fields,
+                            display_preview=False,
+                            preview_rows=preview_rows,
+                            cleanup_remote=cleanup_remote,
+                            return_plots=return_plots,
+                            plot_width=plot_width,
+                            plot_height=plot_height,
+                            zoom_drag_dim=zoom_drag_dim,
+                            zoom_wheel_dim=zoom_wheel_dim,
+                            show_progress=False,
+                            progress_desc=None,
+                            strip_ties=True if strip_ties is None else bool(strip_ties),
+                            align_accident_schema=align_accident_schema,
+                            colorize_voices=colorize_voices,
+                            palette=palette,
+                            include_xml_ids=include_xml_ids,
+                        )
+                        if fallback_results:
+                            fb_entry = fallback_results[0]
+                            fb_df = fb_entry.get("df")
+                            if isinstance(fb_df, pd.DataFrame):
+                                fb_entry["name"] = name
+                                fb_entry["source"] = file_source
+                                results.append(fb_entry)
+                                dfs_by_name[name] = fb_df
+                                last_df = fb_df
+                                if display_preview and ipy_display is not None:
+                                    ipy_display(fb_df.head(preview_rows))
+                                    log(
+                                        f"Rows: {len(fb_df)}, unique pitches: {fb_df['MIDI'].nunique()}"
+                                    )
+                                continue
+                        log(
+                            "Fallback to music21 returned no parsed data for "
+                            f"{file_source}."
+                        )
+                    except Exception as fallback_exc:
+                        log(
+                            f"Fallback to music21 failed for {file_source}: {fallback_exc}"
+                        )
+                elif (
+                    _is_mensural_duration_error(exc)
+                    or _is_missing_time_signature_error(exc)
+                    or _is_partitura_unsupported_mei_structure_error(exc)
+                ) and not allow_music21_fallback:
+                    log(
+                        "Note: music21 fallback is disabled "
+                        "(allow_music21_fallback=False)."
+                    )
+                log(f"An error occurred while processing {file_source}: {exc}")
+            finally:
+                if (
+                    cleanup_remote
+                    and file_path
+                    and file_source.startswith(("http://", "https://"))
+                ):
                     try:
                         os.remove(file_path)
                     except FileNotFoundError:
                         pass
                     except OSError:
                         pass
-
-            except Exception as exc:
-                log(f"An error occurred while processing {file_source}: {exc}")
-            finally:
                 if pbar is not None:
                     pbar.update(1)
     finally:

@@ -55,6 +55,15 @@ from .parser_utils import (
     format_parsed_summary,
     print_parsed_summary,
 )
+from .mensural_utils import (
+    DEFAULT_MENSURAL_DURATION_MAP,
+    inject_default_meter_signature_in_mei_text,
+    inject_default_meter_signature_in_mei_file,
+    normalize_mensural_durations_in_mei_text,
+    normalize_mensural_durations_in_mei_file,
+    normalize_mensural_mei_for_partitura_text,
+    normalize_mensural_mei_for_partitura_file,
+)
 
 __all__ = [
     '__version__',
@@ -106,4 +115,11 @@ __all__ = [
     'expand_file_sources',
     'format_parsed_summary',
     'print_parsed_summary',
+    'DEFAULT_MENSURAL_DURATION_MAP',
+    'inject_default_meter_signature_in_mei_text',
+    'inject_default_meter_signature_in_mei_file',
+    'normalize_mensural_durations_in_mei_text',
+    'normalize_mensural_durations_in_mei_file',
+    'normalize_mensural_mei_for_partitura_text',
+    'normalize_mensural_mei_for_partitura_file',
 ]
