@@ -46,7 +46,11 @@ python scripts/normalize_mensural_mei.py path/to/input.mei -o path/to/output.mei
 `parse_files_partitura` applies this preprocessing automatically by default:
 - `normalize_mensural_durations=True`
 - `inject_missing_meter_signature=True` (defaults to `4/4`, configurable)
+- `prefer_verovio_for_mensural=True` (detects mensural MEI markers and runs Verovio first)
 - `try_verovio_mei_conversion=True` (retries unsupported MEI structures through Verovio, still using partitura)
+- `verovio_mensural_to_cmn=True`
+- `verovio_duration_equivalence=None` (set if you want explicit mensural-to-CMN scaling)
+- `verovio_mensural_score_up=False`
 
 If you want a strict partitura-only workflow (no music21 fallback), set:
 - `allow_music21_fallback=False`

@@ -136,6 +136,8 @@ def _convert_mei_with_verovio_for_partitura(
     source_path: str,
     *,
     mensural_to_cmn: bool = True,
+    duration_equivalence: Optional[float] = None,
+    mensural_score_up: bool = False,
 ) -> Tuple[str, Optional[Callable[[], None]], int, int]:
     """
     Convert MEI to a partitura-friendlier MEI with a local Verovio toolkit instance.
@@ -150,15 +152,22 @@ def _convert_mei_with_verovio_for_partitura(
     with open(source_path, "r", encoding="utf-8", errors="ignore") as f:
         mei_text = f.read()
 
+    options: Dict[str, Any] = {
+        "inputFrom": "mei",
+        "outputFormatRaw": True,
+        "removeIds": False,
+        "mensuralToCmn": bool(mensural_to_cmn),
+    }
+    if duration_equivalence is not None:
+        duration_equivalence_value = float(duration_equivalence)
+        if not np.isfinite(duration_equivalence_value) or duration_equivalence_value <= 0:
+            raise ValueError("duration_equivalence must be a finite positive number")
+        options["durationEquivalence"] = duration_equivalence_value
+    if mensural_score_up:
+        options["mensuralScoreUp"] = True
+
     tk = verovio.toolkit()
-    tk.setOptions(
-        {
-            "inputFrom": "mei",
-            "outputFormatRaw": True,
-            "removeIds": False,
-            "mensuralToCmn": bool(mensural_to_cmn),
-        }
-    )
+    tk.setOptions(options)
     tk.loadData(mei_text)
     converted_mei = tk.getMEI()
     if not isinstance(converted_mei, str) or not converted_mei.strip():
@@ -269,6 +278,38 @@ def _postprocess_mei_for_partitura(mei_text: str) -> Tuple[str, int, int]:
 
     out = etree.tostring(root, encoding="unicode")
     return out, removed_annot, wrapped_staff_groups
+
+
+def _looks_mensural_mei_text(mei_text: str) -> bool:
+    """
+    Heuristic detector for mensural MEI content.
+    """
+    import re
+
+    text = (mei_text or "").lower()
+    if "<mensur" in text:
+        return True
+    if re.search(
+        r"\b(?:tempus|prolatio|modusmaior|modusminor)\s*=\s*['\"][^'\"]+['\"]",
+        text,
+    ):
+        return True
+    if re.search(
+        r"\bdur\s*=\s*['\"](?:maxima|longa?|brevis|semibrevis|minima|semiminima|fusa|semifusa)['\"]",
+        text,
+    ):
+        return True
+    return False
+
+
+def _file_looks_mensural_mei(path: str) -> bool:
+    if Path(path).suffix.lower() != ".mei":
+        return False
+    try:
+        text = Path(path).read_text(encoding="utf-8", errors="ignore")
+    except Exception:
+        return False
+    return _looks_mensural_mei_text(text)
 
 
 def _slugify_name(text: str) -> str:
@@ -700,7 +741,10 @@ def parse_files_partitura(
     default_meter_count: int = DEFAULT_METER_COUNT,
     default_meter_unit: int = DEFAULT_METER_UNIT,
     try_verovio_mei_conversion: bool = True,
+    prefer_verovio_for_mensural: bool = True,
     verovio_mensural_to_cmn: bool = True,
+    verovio_duration_equivalence: Optional[float] = None,
+    verovio_mensural_score_up: bool = False,
     allow_music21_fallback: bool = True,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, pd.DataFrame], Optional[pd.DataFrame]]:
     """
@@ -712,8 +756,12 @@ def parse_files_partitura(
       (e.g. `semibrevis`) to partitura-compatible values.
     - `inject_missing_meter_signature=True` injects default meter attributes
       when missing (`meter.count` / `meter.unit`).
+    - `prefer_verovio_for_mensural=True` runs mensural MEI through Verovio first
+      (before regex-based duration/meter patching).
     - `try_verovio_mei_conversion=True` retries unsupported MEI structures by
       converting through Verovio and then parsing with partitura.
+    - `verovio_duration_equivalence` forwards Verovio's duration scaling option.
+    - `verovio_mensural_score_up` forwards Verovio's mensural score-up option.
     """
     results: List[Dict[str, Any]] = []
     dfs_by_name: Dict[str, pd.DataFrame] = {}
@@ -744,14 +792,60 @@ def parse_files_partitura(
                     pbar.set_postfix_str(short_name)
 
                 file_path = get_file_path(file_source)
-                sanitized_path, cleanup_fn, mensural_replacements, meter_injections = _sanitize_source_for_partitura(
-                    file_path,
+                conversion_cleanup_fns: List[Callable[[], None]] = []
+                conversion_source_path = file_path
+                if (
+                    try_verovio_mei_conversion
+                    and prefer_verovio_for_mensural
+                    and _file_looks_mensural_mei(file_path)
+                ):
+                    log(
+                        "Detected mensural MEI markers. "
+                        "Applying Verovio conversion before partitura parsing."
+                    )
+                    try:
+                        (
+                            conversion_source_path,
+                            converted_cleanup_fn,
+                            removed_annots,
+                            wrapped_staff_groups,
+                        ) = _convert_mei_with_verovio_for_partitura(
+                            file_path,
+                            mensural_to_cmn=verovio_mensural_to_cmn,
+                            duration_equivalence=verovio_duration_equivalence,
+                            mensural_score_up=verovio_mensural_score_up,
+                        )
+                        if converted_cleanup_fn:
+                            conversion_cleanup_fns.append(converted_cleanup_fn)
+                        if removed_annots > 0:
+                            log(
+                                "Verovio MEI postprocess: removed "
+                                f"{removed_annots} <annot> element(s)."
+                            )
+                        if wrapped_staff_groups > 0:
+                            log(
+                                "Verovio MEI postprocess: wrapped "
+                                f"{wrapped_staff_groups} section-level staff group(s) "
+                                "into synthetic measure elements."
+                            )
+                    except Exception as conv_exc:
+                        log(
+                            "Warning: Verovio-first mensural conversion failed "
+                            f"('{conv_exc}'). Continuing with text normalization fallback."
+                        )
+
+                (
+                    sanitized_path,
+                    cleanup_fn,
+                    mensural_replacements,
+                    meter_injections,
+                ) = _sanitize_source_for_partitura(
+                    conversion_source_path,
                     normalize_mensural_durations=normalize_mensural_durations,
                     inject_missing_meter_signature=inject_missing_meter_signature,
                     default_meter_count=default_meter_count,
                     default_meter_unit=default_meter_unit,
                 )
-                converted_cleanup_fn: Optional[Callable[[], None]] = None
                 try:
                     if mensural_replacements > 0:
                         log(
@@ -786,7 +880,11 @@ def parse_files_partitura(
                             ) = _convert_mei_with_verovio_for_partitura(
                                 sanitized_path,
                                 mensural_to_cmn=verovio_mensural_to_cmn,
+                                duration_equivalence=verovio_duration_equivalence,
+                                mensural_score_up=verovio_mensural_score_up,
                             )
+                            if converted_cleanup_fn:
+                                conversion_cleanup_fns.append(converted_cleanup_fn)
                             if removed_annots > 0:
                                 log(
                                     "Verovio MEI postprocess: removed "
@@ -804,8 +902,8 @@ def parse_files_partitura(
                 finally:
                     if cleanup_fn:
                         cleanup_fn()
-                    if converted_cleanup_fn:
-                        converted_cleanup_fn()
+                    for _fn in conversion_cleanup_fns:
+                        _fn()
 
                 # Only include xml_id when MEI source detected and option enabled
                 is_mei = str(sanitized_path).lower().endswith(".mei")

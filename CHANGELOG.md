@@ -10,3 +10,7 @@
 - Added a partitura-first retry path that converts unsupported MEI structures through Verovio before parsing (reducing reliance on the legacy music21 fallback).
 
 ## 0.1.1
+
+- Updated mensural parsing flow to prefer Verovio-first conversion when mensural MEI markers are detected.
+- Added Verovio mensural options passthrough in partitura backend: `verovio_duration_equivalence` and `verovio_mensural_score_up`.
+- Kept regex duration normalization and default meter injection as fallback compatibility steps after conversion.
