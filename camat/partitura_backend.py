@@ -413,7 +413,9 @@ def _sanitize_source_for_partitura(
 
     mensural_replacement_count = 0
     meter_injection_count = 0
-    if suffix == ".mei" and (normalize_mensural_durations or inject_missing_meter_signature):
+    is_mensural_mei = suffix == ".mei" and _looks_mensural_mei_text(sanitized)
+    if is_mensural_mei and (normalize_mensural_durations or inject_missing_meter_signature):
+        # Keep mensural preprocessing isolated from common-notation MEI.
         sanitized, mensural_replacement_count, _, meter_injection_count = (
             normalize_mensural_mei_for_partitura_text(
                 sanitized,
@@ -751,11 +753,12 @@ def parse_files_partitura(
     Parse multiple symbolic music files using partitura, producing CAMAT-ready dataframes.
 
     Parameters mirror camat.music_utils.parse_files for drop-in compatibility.
-    For MEI files:
+    For mensural MEI files:
     - `normalize_mensural_durations=True` rewrites mensural duration labels
       (e.g. `semibrevis`) to partitura-compatible values.
     - `inject_missing_meter_signature=True` injects default meter attributes
       when missing (`meter.count` / `meter.unit`).
+    For common-notation MEI files these options are intentionally ignored.
     - `prefer_verovio_for_mensural=True` runs mensural MEI through Verovio first
       (before regex-based duration/meter patching).
     - `try_verovio_mei_conversion=True` retries unsupported MEI structures by
@@ -785,6 +788,9 @@ def parse_files_partitura(
         for idx, file_source in enumerate(sources):
             file_path: Optional[str] = None
             try:
+                if idx > 0 and len(sources) > 1:
+                    # Separate the previous file's preview/output from the next file header.
+                    log("")
                 name = _source_to_name(file_source, idx)
                 short_name = os.path.basename(file_source).split("?")[0].split("#")[0]
                 log(f"Processing (partitura): {short_name} -> {name}")
@@ -794,10 +800,21 @@ def parse_files_partitura(
                 file_path = get_file_path(file_source)
                 conversion_cleanup_fns: List[Callable[[], None]] = []
                 conversion_source_path = file_path
+                is_mei_source = Path(file_path).suffix.lower() == ".mei"
+                is_mensural_source = _file_looks_mensural_mei(file_path)
+                if (
+                    is_mei_source
+                    and not is_mensural_source
+                    and (normalize_mensural_durations or inject_missing_meter_signature)
+                ):
+                    log(
+                        "Detected common-notation MEI. "
+                        "Skipping mensural duration/meter preprocessing."
+                    )
                 if (
                     try_verovio_mei_conversion
                     and prefer_verovio_for_mensural
-                    and _file_looks_mensural_mei(file_path)
+                    and is_mensural_source
                 ):
                     log(
                         "Detected mensural MEI markers. "

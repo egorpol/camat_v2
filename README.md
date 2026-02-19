@@ -29,6 +29,18 @@ results, dfs_by_name, last_df = parse_files(["path/to/score.mxl"])
 # out = run_pattern_search(matrix_source, kernel_source)
 ```
 
+## Documentation
+
+This repo includes a Read the Docs-ready Sphinx project in `docs/` and
+config in `.readthedocs.yaml`.
+
+Local build:
+
+```bash
+pip install -r docs/requirements.txt
+sphinx-build -b html docs docs/_build/html
+```
+
 ## Mensural MEI Helper
 
 If your MEI files use mensural duration labels (for example `semibrevis`), you can normalize them for partitura compatibility:

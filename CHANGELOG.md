@@ -14,3 +14,8 @@
 - Updated mensural parsing flow to prefer Verovio-first conversion when mensural MEI markers are detected.
 - Added Verovio mensural options passthrough in partitura backend: `verovio_duration_equivalence` and `verovio_mensural_score_up`.
 - Kept regex duration normalization and default meter injection as fallback compatibility steps after conversion.
+
+## 0.1.2
+
+- Read the Docs template integration
+- clearer parser printout output formatting

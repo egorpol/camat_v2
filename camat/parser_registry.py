@@ -119,6 +119,9 @@ def parse_files(file_sources, *,
     if summary_enabled and isinstance(outputs, (list, tuple)) and outputs:
         result_list = outputs[0]
         if isinstance(result_list, list):
+            if len(result_list) > 1:
+                # Visual separation from per-file parser logs.
+                print("")
             print_parsed_summary(result_list, **summary_kwargs)
 
     return outputs
