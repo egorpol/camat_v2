@@ -70,9 +70,12 @@ def parse_files(
     backend: str = "plt",
     show_measure_lines: bool = True,
     measure_line_color: str = "red",
+    plot_parsed_barlines_with_voice_coloring: bool = False,
     show_hover: bool = True,
     hover_fields: Optional[List[str]] = None,
-    display_preview: bool = True,
+    display_preview_df_pitch: bool = True,
+    display_preview_df_events: bool = True,
+    display_preview: Optional[bool] = None,
     preview_rows: int = 20,
     cleanup_remote: bool = True,
     return_plots: bool = False,
@@ -98,6 +101,10 @@ def parse_files(
       accidentals schema (clamped to ±5 as a failsafe) and warn if any notes exceed
       that limit. No extra rank column is added.
     """
+    if display_preview is not None:
+        display_preview_df_pitch = bool(display_preview)
+        display_preview_df_events = bool(display_preview)
+
     results: List[Dict[str, Any]] = []
     dfs_by_name: Dict[str, pd.DataFrame] = {}
     last_df: Optional[pd.DataFrame] = None
@@ -211,6 +218,7 @@ def parse_files(
                         df_processed,
                         measure_offsets=measure_offsets,
                         backend=backend,
+                        plot_parsed_barlines_with_voice_coloring=False,
                         show_measure_lines=show_measure_lines,
                     measure_line_color=measure_line_color,
                     show_hover=show_hover,
@@ -224,7 +232,7 @@ def parse_files(
                     palette=palette,
                     )
 
-                if display_preview and ipy_display is not None:
+                if display_preview_df_pitch and ipy_display is not None:
                     ipy_display(df_processed.head(preview_rows))
                     log(f"Rows: {len(df_processed)}, unique pitches: {df_processed['MIDI'].nunique()}")
 

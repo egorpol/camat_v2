@@ -181,6 +181,8 @@ def draw_piano_roll(
     measure_offsets: Optional[List[float]] = None,
     *,
     backend: str = "plt",
+    barline_events: Optional[pd.DataFrame] = None,
+    plot_parsed_barlines_with_voice_coloring: bool = False,
     show_measure_lines: bool = True,
     measure_line_color: str = "red",
     show_hover: bool = True,
@@ -198,6 +200,7 @@ def draw_piano_roll(
     open_html_after_save: bool = False,
     colorize_voices: bool = False,
     palette: Optional[Union[str, Sequence[str]]] = None,
+    voice_color_order: Optional[Sequence[str]] = None,
 ) -> Any:
     """
     Draw a piano roll visualization using the selected backend.
@@ -210,6 +213,11 @@ def draw_piano_roll(
         Global onset times where measures start. Vertical lines drawn at these positions.
     backend : {"plt", "bokeh"}
         Plotting backend to use.
+    barline_events : pandas.DataFrame, optional
+        Event DataFrame (typically `df_events`) containing parsed barlines.
+        Expected fields include 'type', 'Global Onset', 'Voice', and 'form'.
+    plot_parsed_barlines_with_voice_coloring : bool
+        If True, overlay parsed barline events and color them by Voice labels.
     show_measure_lines : bool
         Whether to draw vertical red measure separation lines when measure offsets are provided.
     measure_line_color : str
@@ -256,6 +264,10 @@ def draw_piano_roll(
               * For Matplotlib (plt): any valid colormap name (e.g., 'tab20', 'tab10', 'Set3')
               * For Bokeh: any key in bokeh.palettes.all_palettes (e.g., 'Category10', 'Category20')
         If not provided, a sensible categorical default is used.
+    voice_color_order : Sequence[str], optional
+        Optional global voice ordering used for stable color assignment across
+        filtered subsets. When provided, voices in `df['Voice']` use colors
+        based on this order instead of first appearance in `df`.
 
     Returns
     -------
@@ -378,15 +390,92 @@ def draw_piano_roll(
             return None
         voices_series = df["Voice"].astype(str)
         unique_voices = list(pd.unique(voices_series))
-        num_groups = len(unique_voices)
-        if num_groups <= 0:
+        if not unique_voices:
             return None
+        if voice_color_order is not None:
+            preferred_full = [str(v) for v in voice_color_order if str(v)]
+            all_groups = list(dict.fromkeys(preferred_full + unique_voices))
+            if for_backend == "plt":
+                all_colors = _resolve_palette_matplotlib(palette, len(all_groups))
+            else:
+                all_colors = _resolve_palette_bokeh(palette, len(all_groups))
+            global_map: Dict[str, str] = {
+                v: all_colors[i % len(all_colors)] for i, v in enumerate(all_groups)
+            }
+            return [global_map.get(v, "#87CEEB") for v in voices_series.tolist()]
+        num_groups = len(unique_voices)
         if for_backend == "plt":
             group_colors = _resolve_palette_matplotlib(palette, num_groups)
         else:
             group_colors = _resolve_palette_bokeh(palette, num_groups)
         color_map: Dict[str, str] = {v: group_colors[i % len(group_colors)] for i, v in enumerate(unique_voices)}
         return [color_map[v] for v in voices_series.tolist()]
+
+    def _voice_color_dict(for_backend: str, voices: Sequence[str]) -> Dict[str, str]:
+        unique_voices = [str(v) for v in dict.fromkeys(voices) if str(v)]
+        if not unique_voices:
+            return {}
+        if voice_color_order is not None:
+            preferred_full = [str(v) for v in voice_color_order if str(v)]
+            all_groups = list(dict.fromkeys(preferred_full + unique_voices))
+            if for_backend == "plt":
+                all_colors = _resolve_palette_matplotlib(palette, len(all_groups))
+            else:
+                all_colors = _resolve_palette_bokeh(palette, len(all_groups))
+            global_map = {
+                v: all_colors[i % len(all_colors)] for i, v in enumerate(all_groups)
+            }
+            return {v: global_map[v] for v in unique_voices if v in global_map}
+        if for_backend == "plt":
+            group_colors = _resolve_palette_matplotlib(palette, len(unique_voices))
+        else:
+            group_colors = _resolve_palette_bokeh(palette, len(unique_voices))
+        return {
+            voice: group_colors[i % len(group_colors)]
+            for i, voice in enumerate(unique_voices)
+        }
+
+    def _barline_dash_style(form_value: Any, for_backend: str) -> Any:
+        key = str(form_value or "").strip().lower()
+        if key in {"dashed", "dash"}:
+            return "dashed"
+        if key in {"dotted", "dot"}:
+            return "dotted"
+        if key in {"double"}:
+            return (0, (6, 2)) if for_backend == "plt" else "dashed"
+        return "solid"
+
+    def _iter_barline_events() -> List[Dict[str, Any]]:
+        if not plot_parsed_barlines_with_voice_coloring or barline_events is None:
+            return []
+        try:
+            ev_df = pd.DataFrame(barline_events).copy()
+        except Exception:
+            return []
+        if ev_df.empty or "Global Onset" not in ev_df.columns:
+            return []
+        if "type" in ev_df.columns:
+            ev_df = ev_df[ev_df["type"].astype(str).str.lower() == "barline"]
+        if ev_df.empty:
+            return []
+        out_events: List[Dict[str, Any]] = []
+        for _, erow in ev_df.iterrows():
+            try:
+                onset = float(erow.get("Global Onset"))
+            except Exception:
+                continue
+            if not np.isfinite(onset):
+                continue
+            voice = erow.get("Voice", "")
+            form = erow.get("form", "solid")
+            out_events.append(
+                {
+                    "Global Onset": onset,
+                    "Voice": str(voice).strip() if voice is not None else "",
+                    "form": form,
+                }
+            )
+        return out_events
 
     if backend == "plt":
         # Convert pixels to inches for matplotlib
@@ -415,6 +504,20 @@ def draw_piano_roll(
         if show_measure_lines and measure_offsets is not None:
             for m_offset in measure_offsets:
                 ax.axvline(x=m_offset, color=str(measure_line_color), linestyle="--", linewidth=0.8)
+
+        barline_plot_events = _iter_barline_events()
+        if barline_plot_events:
+            voice_order = [evt["Voice"] for evt in barline_plot_events if evt["Voice"]]
+            voice_colors = _voice_color_dict("plt", voice_order)
+            for evt in barline_plot_events:
+                color = voice_colors.get(evt["Voice"], str(measure_line_color))
+                ax.axvline(
+                    x=evt["Global Onset"],
+                    color=str(color),
+                    linestyle=_barline_dash_style(evt.get("form"), "plt"),
+                    linewidth=1.1,
+                    alpha=0.9,
+                )
 
         ax.grid(True, axis="x", linestyle="--", alpha=0.7)
         fig.tight_layout()
@@ -561,6 +664,22 @@ def draw_piano_roll(
             if show_measure_lines and measure_offsets is not None:
                 for m_offset in measure_offsets:
                     plot.add_layout(Span(location=m_offset, dimension="height", line_color=str(measure_line_color), line_dash="dashed", line_width=1))
+
+            barline_plot_events = _iter_barline_events()
+            if barline_plot_events:
+                voice_order = [evt["Voice"] for evt in barline_plot_events if evt["Voice"]]
+                voice_colors = _voice_color_dict("bokeh", voice_order)
+                for evt in barline_plot_events:
+                    color = voice_colors.get(evt["Voice"], str(measure_line_color))
+                    plot.add_layout(
+                        Span(
+                            location=evt["Global Onset"],
+                            dimension="height",
+                            line_color=str(color),
+                            line_dash=_barline_dash_style(evt.get("form"), "bokeh"),
+                            line_width=1.2,
+                        )
+                    )
 
             if pitch_labels:
                 plot.yaxis.ticker = midi_values

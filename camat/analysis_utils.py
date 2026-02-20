@@ -1347,9 +1347,14 @@ def display_filtered_piano_roll(
     pitch_range: Optional[Union[str, Sequence[Any]]] = None,
     results: Optional[Sequence[Mapping[str, Any]]] = None,
     measure_offsets: Optional[Sequence[float]] = None,
+    events_df: Optional[pd.DataFrame] = None,
+    plot_parsed_barlines_with_voice_coloring: bool = False,
     plotting_backend: str = 'plt',
     plot_width: Optional[int] = None,
     plot_height: Optional[int] = None,
+    colorize_voices: bool = False,
+    palette: Optional[Union[str, Sequence[str]]] = None,
+    preserve_voice_color_mapping: bool = True,
     zoom_drag_dim: Optional[str] = None,
     zoom_wheel_dim: Optional[str] = None,
     show_measure_lines: bool = True,
@@ -1380,10 +1385,23 @@ def display_filtered_piano_roll(
     measure_offsets : sequence of float, optional
         Explicit measure offsets. When provided, this overrides lookup via `results`
         or automatic grouping by 'Measure'.
+    events_df : pandas.DataFrame, optional
+        Parsed events dataframe (typically `df_events`) used to overlay barlines.
+        When None, this helper attempts to fetch matching events from `results`.
+    plot_parsed_barlines_with_voice_coloring : bool
+        If True, pass parsed barline events to `draw_piano_roll` and color them
+        according to their Voice labels.
     plotting_backend : {'plt', 'bokeh'}
         Backend for `draw_piano_roll`.
     plot_width, plot_height : int, optional
         Plot dimensions passed through to `draw_piano_roll`.
+    colorize_voices : bool
+        If True, color notes by voice labels.
+    palette : str | Sequence[str], optional
+        Palette passed to `draw_piano_roll` when colorizing voices.
+    preserve_voice_color_mapping : bool
+        If True (default), keep voice-to-color mapping stable by using voice
+        order from `source_df` even when plotting a filtered subset.
     zoom_drag_dim, zoom_wheel_dim : {"width", "height", "both"}, optional
         Zoom configuration forwarded to `draw_piano_roll` (Bokeh backend).
     show_measure_lines : bool
@@ -1507,14 +1525,80 @@ def display_filtered_piano_roll(
     if visible_measure_offsets:
         visible_measure_offsets = sorted({round(float(m), 6) for m in visible_measure_offsets})
 
-    # 8. Plot
+    # 8. Resolve event overlays (barlines)
+    resolved_events_df: Optional[pd.DataFrame] = events_df
+    if resolved_events_df is None and results is not None:
+        try:
+            matched_item = None
+            for item in results:
+                if item.get('df') is source_df or item.get('df_pitch') is source_df:
+                    matched_item = item
+                    break
+            if matched_item is not None:
+                candidate = matched_item.get('df_events')
+                if isinstance(candidate, pd.DataFrame):
+                    resolved_events_df = candidate
+        except Exception:
+            resolved_events_df = None
+
+    visible_events_df: Optional[pd.DataFrame] = None
+    if bool(plot_parsed_barlines_with_voice_coloring) and isinstance(resolved_events_df, pd.DataFrame):
+        try:
+            ev = resolved_events_df.copy()
+            if 'type' in ev.columns:
+                ev = ev[ev['type'].astype(str).str.lower() == 'barline']
+            if 'Global Onset' in ev.columns:
+                ev = ev[
+                    (ev['Global Onset'] >= (plot_start - eps)) &
+                    (ev['Global Onset'] <= (plot_end + eps))
+                ]
+            if voice_query is not None and 'Voice' in ev.columns:
+                if isinstance(voice_query, (list, tuple, set)):
+                    ev = ev[ev['Voice'].isin(list(voice_query))]
+                else:
+                    pattern = str(voice_query)
+                    ev = ev[ev['Voice'].astype(str).str.contains(pattern, regex=True, na=False)]
+            visible_events_df = ev
+        except Exception:
+            visible_events_df = None
+
+    # When parsed barline overlays are enabled, prefer their onsets for measure guides.
+    # This avoids mixing inferred/default grid lines with explicit MEI barline events.
+    if bool(plot_parsed_barlines_with_voice_coloring) and isinstance(visible_events_df, pd.DataFrame) and not visible_events_df.empty:
+        try:
+            parsed_offsets = [
+                float(x)
+                for x in pd.unique(visible_events_df['Global Onset'])
+                if np.isfinite(float(x))
+            ]
+            if parsed_offsets:
+                visible_measure_offsets = sorted({round(x, 6) for x in parsed_offsets})
+        except Exception:
+            pass
+
+    # 9. Plot
     backend = (plotting_backend or 'plt').strip().lower()
+    voice_color_order: Optional[List[str]] = None
+    if bool(colorize_voices) and bool(preserve_voice_color_mapping) and 'Voice' in source_df.columns:
+        try:
+            voice_color_order = [
+                str(v)
+                for v in pd.unique(source_df['Voice'].dropna())
+                if str(v).strip()
+            ]
+        except Exception:
+            voice_color_order = None
     draw_piano_roll(
         selection,
         measure_offsets=visible_measure_offsets,
+        barline_events=visible_events_df,
+        plot_parsed_barlines_with_voice_coloring=bool(plot_parsed_barlines_with_voice_coloring),
         backend=backend,
         plot_width=plot_width,
         plot_height=plot_height,
+        colorize_voices=bool(colorize_voices),
+        palette=palette,
+        voice_color_order=voice_color_order,
         zoom_drag_dim=zoom_drag_dim,
         zoom_wheel_dim=zoom_wheel_dim,
         show_measure_lines=bool(show_measure_lines),
