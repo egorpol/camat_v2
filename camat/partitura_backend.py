@@ -1,14 +1,51 @@
 from __future__ import annotations
 
+import io
 import os
 import sys
 import tempfile
 import types
+import warnings
+from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Union, Sequence
+from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Tuple, Union, Sequence
 
 import numpy as np
 import pandas as pd
+
+from .quiet_utils import suppress_native_output
+
+
+@contextmanager
+def _suppress_partitura_user_warnings(enabled: bool):
+    """
+    Optionally suppress noisy UserWarnings emitted by partitura during MEI import.
+    """
+    if not enabled:
+        yield
+        return
+
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            category=UserWarning,
+            module=r"partitura(\.|$)",
+        )
+        yield
+
+
+@contextmanager
+def _suppress_partitura_dependency_output(enabled: bool):
+    """
+    Optionally suppress print()/stderr chatter from dependency code while leaving CAMAT logs alone.
+    """
+    if not enabled:
+        yield
+        return
+
+    sink = io.StringIO()
+    with redirect_stdout(sink), redirect_stderr(sink), suppress_native_output(enabled=True):
+        yield
 
 
 def _ensure_pkg_resources_shim() -> None:
@@ -85,6 +122,59 @@ __all__ = ["partitura_score_to_dataframe", "parse_files_partitura"]
 _PITCH_CLASS_NAMES = ("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B")
 _TEXTUAL_EXTENSIONS = {".xml", ".musicxml", ".mei", ".krn", ".kern", ".hum"}
 _MENSURAL_DURATION_TOKENS = set(DEFAULT_MENSURAL_DURATION_MAP.keys())
+_MEI_EVENT_TYPE_MAP = {
+    "annot": "annot",
+    "arpeg": "arpeg",
+    "barLine": "barline",
+    "breath": "breath",
+    "caesura": "caesura",
+    "dir": "direction",
+    "dynam": "dynamic",
+    "fermata": "fermata",
+    "gliss": "gliss",
+    "harm": "harm",
+    "hairpin": "hairpin",
+    "harpPedal": "harp_pedal",
+    "phrase": "phrase",
+    "reh": "reh",
+    "repeatMark": "repeat_mark",
+    "syl": "lyric",
+    "slur": "slur",
+    "tempo": "tempo",
+    "tie": "tie",
+}
+_EVENT_DF_COLUMNS = [
+    "type",
+    "subtype",
+    "Measure",
+    "Local Onset",
+    "Global Onset",
+    "Duration",
+    "Voice",
+    "xml_id",
+    "start_xml_id",
+    "end_xml_id",
+    "staff_n",
+    "staff_raw",
+    "layer_n",
+    "layer_raw",
+    "scope",
+    "text",
+    "text_role",
+    "form",
+    "place",
+    "func",
+    "plist",
+    "tstamp_raw",
+    "tstamp2_raw",
+    "verse_n",
+    "wordpos",
+    "con",
+    "mm",
+    "mm_unit",
+    "mm_dots",
+    "extra",
+]
 
 
 def _midi_to_pitch_name(midi: int) -> str:
@@ -138,6 +228,7 @@ def _convert_mei_with_verovio_for_partitura(
     mensural_to_cmn: bool = True,
     duration_equivalence: Optional[float] = None,
     mensural_score_up: bool = False,
+    quiet_native_warnings: bool = False,
 ) -> Tuple[str, Optional[Callable[[], None]], int, int]:
     """
     Convert MEI to a partitura-friendlier MEI with a local Verovio toolkit instance.
@@ -167,9 +258,10 @@ def _convert_mei_with_verovio_for_partitura(
         options["mensuralScoreUp"] = True
 
     tk = verovio.toolkit()
-    tk.setOptions(options)
-    tk.loadData(mei_text)
-    converted_mei = tk.getMEI()
+    with suppress_native_output(enabled=quiet_native_warnings):
+        tk.setOptions(options)
+        tk.loadData(mei_text)
+        converted_mei = tk.getMEI()
     if not isinstance(converted_mei, str) or not converted_mei.strip():
         raise RuntimeError("Verovio conversion returned empty MEI data")
 
@@ -714,9 +806,270 @@ def _partitura_measure_offsets(score) -> List[float]:
     return sorted(offsets)
 
 
-def _extract_mei_barline_events(mei_path: str) -> List[Dict[str, Any]]:
+def _normalize_xml_ref(raw: Any) -> Optional[str]:
+    if raw is None:
+        return None
+    try:
+        value = str(raw).strip()
+    except Exception:
+        return None
+    if not value:
+        return None
+    return value.lstrip("#")
+
+
+def _clean_string(raw: Any) -> Optional[str]:
+    if raw is None:
+        return None
+    try:
+        value = str(raw).strip()
+    except Exception:
+        return None
+    return value or None
+
+
+def _coerce_number(raw: Any) -> Any:
+    text = _clean_string(raw)
+    if text is None:
+        return None
+    try:
+        value = float(text)
+    except Exception:
+        return text
+    if not np.isfinite(value):
+        return text
+    if float(value).is_integer():
+        return int(value)
+    return float(value)
+
+
+def _event_voice_label(staff_n: Any, layer_n: Any) -> Any:
+    if staff_n is None:
+        return pd.NA
+    staff_s = str(staff_n).strip()
+    if not staff_s:
+        return pd.NA
+    voice_label = f"Staff {staff_s}"
+    if layer_n is not None:
+        layer_s = str(layer_n).strip()
+        if layer_s:
+            voice_label = f"{voice_label} - Layer {layer_s}"
+    return voice_label
+
+
+def _empty_event_dataframe() -> pd.DataFrame:
+    return pd.DataFrame(columns=list(_EVENT_DF_COLUMNS))
+
+
+def _dedupe_mei_events_prefer_anchored(
+    events: Sequence[Mapping[str, Any]],
+) -> Tuple[List[Dict[str, Any]], int]:
     """
-    Extract MEI barLine elements as lightweight event dictionaries.
+    Drop weaker duplicate lyric/text events when the same semantic event appears
+    both with and without usable anchors in the source MEI.
+    """
+    if not events:
+        return [], 0
+
+    keyed_indices: Dict[Tuple[str, str, str, str, str, str, str, str], List[int]] = {}
+    out: List[Dict[str, Any]] = [dict(evt) for evt in events]
+
+    for idx, event in enumerate(out):
+        event_type = str(event.get("event", "") or "").strip().lower()
+        if event_type not in {"lyric", "direction", "dynamic", "tempo", "reh", "harm"}:
+            continue
+        key = (
+            event_type,
+            str(event.get("measure", "") or "").strip(),
+            str(event.get("staff_n", "") or "").strip(),
+            str(event.get("layer_n", "") or "").strip(),
+            str(event.get("text", "") or "").strip(),
+            str(event.get("verse_n", "") or "").strip(),
+            str(event.get("wordpos", "") or "").strip(),
+            str(event.get("con", "") or "").strip(),
+        )
+        keyed_indices.setdefault(key, []).append(idx)
+
+    drop_indices: set[int] = set()
+
+    def _anchor_rank(event: Mapping[str, Any]) -> int:
+        rank = 0
+        if _clean_string(event.get("start_xml_id")):
+            rank += 4
+        if _clean_string(event.get("end_xml_id")):
+            rank += 2
+        if _clean_string(event.get("xml_id")):
+            rank += 1
+        if _clean_string(event.get("tstamp_raw")):
+            rank += 1
+        if _clean_string(event.get("tstamp2_raw")):
+            rank += 1
+        return rank
+
+    for indices in keyed_indices.values():
+        if len(indices) < 2:
+            continue
+        ranks = [_anchor_rank(out[i]) for i in indices]
+        best_rank = max(ranks)
+        if best_rank <= 0:
+            continue
+        for idx, rank in zip(indices, ranks):
+            if rank <= 0:
+                drop_indices.add(idx)
+
+    if not drop_indices:
+        return out, 0
+
+    filtered = [evt for idx, evt in enumerate(out) if idx not in drop_indices]
+    return filtered, len(drop_indices)
+
+
+def _event_row(
+    *,
+    event: Mapping[str, Any],
+    event_type: str,
+    global_onset: Any,
+    duration: Any,
+    local_onset: Any,
+    text_role: Any = pd.NA,
+) -> Dict[str, Any]:
+    start_xml_id = _normalize_xml_ref(event.get("start_xml_id"))
+    end_xml_id = _normalize_xml_ref(event.get("end_xml_id"))
+    mm_value = event.get("mm")
+    mm_unit = event.get("mm_unit", pd.NA)
+    mm_dots = event.get("mm_dots", pd.NA)
+    return {
+        "type": event_type,
+        "subtype": event.get("subtype", pd.NA),
+        "Measure": event.get("measure"),
+        "Local Onset": local_onset,
+        "Global Onset": global_onset,
+        "Duration": duration,
+        "Voice": _event_voice_label(event.get("staff_n"), event.get("layer_n")),
+        "xml_id": event.get("xml_id", pd.NA),
+        "start_xml_id": start_xml_id if start_xml_id else pd.NA,
+        "end_xml_id": end_xml_id if end_xml_id else pd.NA,
+        "staff_n": event.get("staff_n", pd.NA),
+        "staff_raw": event.get("staff_raw", pd.NA),
+        "layer_n": event.get("layer_n", pd.NA),
+        "layer_raw": event.get("layer_raw", pd.NA),
+        "scope": event.get("scope", pd.NA),
+        "text": event.get("text", pd.NA),
+        "text_role": text_role,
+        "form": event.get("form", pd.NA),
+        "place": event.get("place", pd.NA),
+        "func": event.get("func", pd.NA),
+        "plist": event.get("plist", pd.NA),
+        "tstamp_raw": event.get("tstamp_raw", pd.NA),
+        "tstamp2_raw": event.get("tstamp2_raw", pd.NA),
+        "verse_n": event.get("verse_n", pd.NA),
+        "wordpos": event.get("wordpos", pd.NA),
+        "con": event.get("con", pd.NA),
+        "mm": mm_value if mm_value is not None else pd.NA,
+        "mm_unit": mm_unit,
+        "mm_dots": mm_dots,
+        "extra": event.get("extra", pd.NA),
+    }
+
+
+def _measure_start_from_offsets(
+    measure_index: Any,
+    measure_offsets: Sequence[float],
+) -> Optional[float]:
+    offsets: List[float] = []
+    for value in measure_offsets:
+        try:
+            fval = float(value)
+        except Exception:
+            continue
+        if np.isfinite(fval):
+            offsets.append(fval)
+    if not offsets:
+        return None
+
+    try:
+        idx = int(measure_index)
+    except Exception:
+        return None
+    if idx <= 0:
+        return None
+    if idx <= len(offsets):
+        return float(offsets[idx - 1])
+
+    if len(offsets) >= 2:
+        step = offsets[-1] - offsets[-2]
+        if np.isfinite(step) and step > 0:
+            return float(offsets[-1] + step * (idx - len(offsets)))
+    return None
+
+
+def _resolve_measure_tstamp(
+    measure_index: Any,
+    tstamp_value: Any,
+    measure_offsets: Sequence[float],
+) -> Optional[float]:
+    measure_start = _measure_start_from_offsets(measure_index, measure_offsets)
+    if measure_start is None or tstamp_value is None:
+        return None
+    try:
+        beat = float(str(tstamp_value).strip())
+    except Exception:
+        return None
+    if not np.isfinite(beat):
+        return None
+    rel = beat if beat < 1.0 else beat - 1.0
+    return float(measure_start + rel)
+
+
+def _resolve_measure_tstamp2(
+    measure_index: Any,
+    tstamp2_value: Any,
+    measure_offsets: Sequence[float],
+) -> Optional[float]:
+    if tstamp2_value is None:
+        return None
+    import re
+
+    text = str(tstamp2_value).strip()
+    if not text:
+        return None
+    match = re.fullmatch(r"(?:(\d+)m\+)?([0-9]+(?:\.[0-9]+)?)", text)
+    if not match:
+        return None
+    measure_delta = int(match.group(1) or "0")
+    beat = float(match.group(2))
+    if not np.isfinite(beat):
+        return None
+    try:
+        base_index = int(measure_index)
+    except Exception:
+        return None
+    target_index = base_index + measure_delta
+    measure_start = _measure_start_from_offsets(target_index, measure_offsets)
+    if measure_start is None:
+        return None
+    rel = beat if beat < 1.0 else beat - 1.0
+    return float(measure_start + rel)
+
+
+def _note_timing_maps(df_pitch: pd.DataFrame) -> Tuple[Dict[str, float], Dict[str, float]]:
+    if "xml_id" not in df_pitch.columns:
+        return {}, {}
+    work = df_pitch[["xml_id", "Global Onset", "Duration"]].copy()
+    work["xml_id"] = work["xml_id"].astype(str).str.strip().str.lstrip("#")
+    work = work[(work["xml_id"] != "") & work["xml_id"].notna()]
+    if work.empty:
+        return {}, {}
+    grouped = work.groupby("xml_id", dropna=True)
+    onset_map = grouped["Global Onset"].min().to_dict()
+    work["end_onset"] = work["Global Onset"] + work["Duration"]
+    end_map = work.groupby("xml_id", dropna=True)["end_onset"].max().to_dict()
+    return onset_map, end_map
+
+
+def _extract_mei_events(mei_path: str) -> List[Dict[str, Any]]:
+    """
+    Extract supported MEI control/text elements as lightweight event dictionaries.
     """
     if Path(mei_path).suffix.lower() != ".mei":
         return []
@@ -736,114 +1089,269 @@ def _extract_mei_barline_events(mei_path: str) -> List[Dict[str, Any]]:
         if el is None:
             return None
         raw = el.attrib.get(xml_id_key) or el.attrib.get("xml:id")
+        return _normalize_xml_ref(raw)
+
+    def _first_token(raw: Any) -> Optional[str]:
         if raw is None:
             return None
-        s = str(raw).strip()
-        return s or None
+        try:
+            tokens = [tok for tok in str(raw).strip().split() if tok]
+        except Exception:
+            return None
+        return tokens[0] if tokens else None
+
+    def _ancestor(el: Any, local_name: str) -> Any:
+        cur = parent_map.get(el)
+        while cur is not None and _local_name(cur.tag) != local_name:
+            cur = parent_map.get(cur)
+        return cur
+
+    def _nearest_note_or_chord(el: Any) -> Any:
+        cur = parent_map.get(el)
+        while cur is not None:
+            if _local_name(cur.tag) in {"note", "chord"}:
+                return cur
+            cur = parent_map.get(cur)
+        return None
+
+    def _clean_text(el: Any) -> Optional[str]:
+        try:
+            text = " ".join(" ".join(el.itertext()).split())
+        except Exception:
+            return None
+        return text or None
+
+    def _collect_extra_attrs(el: Any, consumed_keys: Sequence[str]) -> Dict[str, Any]:
+        consumed = set(consumed_keys)
+        out: Dict[str, Any] = {}
+        for raw_key, raw_value in el.attrib.items():
+            if raw_key == xml_id_key:
+                continue
+            key_name = _local_name(raw_key)
+            if key_name in consumed:
+                continue
+            cleaned = _clean_string(raw_value)
+            if cleaned is not None:
+                out[key_name] = cleaned
+        return out
 
     xml_id_key = "{http://www.w3.org/XML/1998/namespace}id"
     parent_map = {child: parent for parent in root.iter() for child in parent}
     measure_elements = [el for el in root.iter() if _local_name(el.tag) == "measure"]
     measure_index_map = {id(el): idx for idx, el in enumerate(measure_elements, start=1)}
     events: List[Dict[str, Any]] = []
-    barline_elements = [el for el in root.iter() if _local_name(el.tag) == "barLine"]
+    barline_ordinal = 0
 
-    for ordinal, barline_el in enumerate(barline_elements, start=1):
-        form = str(barline_el.attrib.get("form", "single")).strip() or "single"
-        xml_id = barline_el.attrib.get(xml_id_key) or barline_el.attrib.get("xml:id")
+    for el in root.iter():
+        tag_name = _local_name(el.tag)
+        if tag_name not in _MEI_EVENT_TYPE_MAP:
+            continue
 
-        # Locate nearest ancestor staff/layer for voice context when available
-        staff_el = parent_map.get(barline_el)
-        while staff_el is not None and _local_name(staff_el.tag) != "staff":
-            staff_el = parent_map.get(staff_el)
-        layer_el = parent_map.get(barline_el)
-        while layer_el is not None and _local_name(layer_el.tag) != "layer":
-            layer_el = parent_map.get(layer_el)
-        staff_n = None if staff_el is None else (staff_el.attrib.get("n") or None)
-        layer_n = None if layer_el is None else (layer_el.attrib.get("n") or None)
+        event_type = _MEI_EVENT_TYPE_MAP[tag_name]
+        staff_el = _ancestor(el, "staff")
+        layer_el = _ancestor(el, "layer")
+        measure_el = _ancestor(el, "measure")
 
-        # Locate nearest ancestor measure if available
-        measure_el = parent_map.get(barline_el)
-        while measure_el is not None and _local_name(measure_el.tag) != "measure":
-            measure_el = parent_map.get(measure_el)
+        staff_raw = _clean_string(el.attrib.get("staff"))
+        layer_raw = _clean_string(el.attrib.get("layer"))
+        staff_n = _first_token(staff_raw)
+        if staff_n is None and staff_el is not None:
+            staff_n = _first_token(staff_el.attrib.get("n"))
+        layer_n = _first_token(layer_raw)
+        if layer_n is None and layer_el is not None:
+            layer_n = _first_token(layer_el.attrib.get("n"))
 
-        measure_index: Optional[int]
-        measure_number: Optional[int]
-        measure_xml_id: Optional[str]
-        if measure_el is None:
-            measure_index = None
-            measure_number = None
-            measure_xml_id = None
-        else:
+        measure_index: Optional[int] = None
+        measure_number: Optional[int] = None
+        if measure_el is not None:
             measure_index = measure_index_map.get(id(measure_el))
-            measure_n_raw = measure_el.attrib.get("n")
             try:
-                measure_number = int(str(measure_n_raw))
+                measure_number = int(str(measure_el.attrib.get("n")))
             except Exception:
                 measure_number = measure_index
-            measure_xml_id = measure_el.attrib.get(xml_id_key) or measure_el.attrib.get("xml:id")
 
         event: Dict[str, Any] = {
-            "event": "barline",
-            "scope": "measure_end",
-            "form": form,
-            "barline_ordinal": ordinal,
+            "event": event_type,
+            "scope": "point",
         }
+        xml_id = _get_xml_id(el)
+        if xml_id:
+            event["xml_id"] = xml_id
         if measure_index is not None:
             event["measure_index"] = measure_index
         if measure_number is not None:
             event["measure"] = measure_number
-        if measure_xml_id:
-            event["measure_xml_id"] = measure_xml_id
-        if xml_id:
-            event["xml_id"] = xml_id
+        if measure_el is not None:
+            measure_xml_id = _get_xml_id(measure_el)
+            if measure_xml_id:
+                event["measure_xml_id"] = measure_xml_id
         if staff_n is not None:
-            event["staff_n"] = str(staff_n).strip()
+            event["staff_n"] = staff_n
+        if staff_raw is not None:
+            event["staff_raw"] = staff_raw
         if layer_n is not None:
-            event["layer_n"] = str(layer_n).strip()
+            event["layer_n"] = layer_n
+        if layer_raw is not None:
+            event["layer_raw"] = layer_raw
 
-        # Try to anchor barline timing to neighboring note/chord xml:ids in this layer.
-        if layer_el is not None:
-            try:
-                children = list(layer_el)
-                bar_idx = next((i for i, ch in enumerate(children) if ch is barline_el), None)
-            except Exception:
-                bar_idx = None
-                children = []
-            if bar_idx is not None:
-                prev_note_id: Optional[str] = None
-                next_note_id: Optional[str] = None
-                prev_note_ordinal: Optional[int] = None
-                for j in range(int(bar_idx) - 1, -1, -1):
-                    local = _local_name(children[j].tag)
-                    if local in {"note", "chord"}:
-                        prev_note_id = _get_xml_id(children[j])
-                        if prev_note_id:
-                            break
+        start_xml_id = _normalize_xml_ref(el.attrib.get("startid"))
+        end_xml_id = _normalize_xml_ref(el.attrib.get("endid"))
+        if tag_name == "syl" and not start_xml_id:
+            note_like_el = _nearest_note_or_chord(el)
+            start_xml_id = _get_xml_id(note_like_el)
+        if start_xml_id:
+            event["start_xml_id"] = start_xml_id
+        if end_xml_id:
+            event["end_xml_id"] = end_xml_id
+
+        tstamp = el.attrib.get("tstamp")
+        if tstamp is not None:
+            event["tstamp_raw"] = str(tstamp).strip()
+        tstamp2 = el.attrib.get("tstamp2")
+        if tstamp2 is not None:
+            event["tstamp2_raw"] = str(tstamp2).strip()
+
+        raw_type_value = _clean_string(el.attrib.get("type"))
+        if raw_type_value is not None:
+            event["subtype"] = raw_type_value
+
+        form_value = el.attrib.get("form")
+        if form_value is not None:
+            form_s = str(form_value).strip()
+            if form_s:
+                event["form"] = form_s
+
+        func_value = _clean_string(el.attrib.get("func"))
+        if func_value is not None:
+            event["func"] = func_value
+
+        plist_value = _clean_string(el.attrib.get("plist"))
+        if plist_value is not None:
+            event["plist"] = plist_value
+
+        mm_value = _coerce_number(el.attrib.get("mm"))
+        if mm_value is not None:
+            event["mm"] = mm_value
+
+        mm_unit_value = _clean_string(el.attrib.get("mm.unit"))
+        if mm_unit_value is not None:
+            event["mm_unit"] = mm_unit_value
+
+        mm_dots_value = _coerce_number(el.attrib.get("mm.dots"))
+        if mm_dots_value is not None:
+            event["mm_dots"] = mm_dots_value
+
+        place_value = el.attrib.get("place")
+        if place_value is None and tag_name in {"slur", "tie"}:
+            place_value = el.attrib.get("curvedir")
+        if place_value is not None:
+            place_s = str(place_value).strip()
+            if place_s:
+                event["place"] = place_s
+
+        text_value = _clean_text(el)
+        if text_value:
+            event["text"] = text_value
+            event["text_role"] = event_type
+
+        if tag_name == "syl":
+            verse_el = _ancestor(el, "verse")
+            verse_n = None if verse_el is None else _first_token(verse_el.attrib.get("n"))
+            if verse_n:
+                event["verse_n"] = verse_n
+            wordpos = _clean_string(el.attrib.get("wordpos"))
+            if wordpos:
+                event["wordpos"] = wordpos
+            con = _clean_string(el.attrib.get("con"))
+            if con:
+                event["con"] = con
+            event["subtype"] = event.get("subtype", "syllable")
+            event["text_role"] = "lyric"
+            event["scope"] = "note_attached"
+
+        if tag_name == "barLine":
+            barline_ordinal += 1
+            event["scope"] = "measure_end"
+            event["form"] = str(el.attrib.get("form", "single")).strip() or "single"
+            event["subtype"] = event.get("subtype", event["form"])
+            event["barline_ordinal"] = barline_ordinal
+            if layer_el is not None:
                 try:
-                    count_before = sum(
-                        1 for ch in children[:int(bar_idx)]
-                        if _local_name(ch.tag) in {"note", "chord"}
-                    )
-                    if count_before > 0:
-                        prev_note_ordinal = int(count_before)
+                    children = list(layer_el)
+                    bar_idx = next((i for i, ch in enumerate(children) if ch is el), None)
                 except Exception:
-                    prev_note_ordinal = None
-                for j in range(int(bar_idx) + 1, len(children)):
-                    local = _local_name(children[j].tag)
-                    if local in {"note", "chord"}:
-                        next_note_id = _get_xml_id(children[j])
-                        if next_note_id:
-                            break
-                if prev_note_id:
-                    event["prev_note_xml_id"] = prev_note_id
-                if next_note_id:
-                    event["next_note_xml_id"] = next_note_id
-                if prev_note_ordinal is not None:
-                    event["prev_note_ordinal_staff"] = prev_note_ordinal
+                    bar_idx = None
+                    children = []
+                if bar_idx is not None:
+                    prev_note_id: Optional[str] = None
+                    next_note_id: Optional[str] = None
+                    prev_note_ordinal: Optional[int] = None
+                    for j in range(int(bar_idx) - 1, -1, -1):
+                        local = _local_name(children[j].tag)
+                        if local in {"note", "chord"}:
+                            prev_note_id = _get_xml_id(children[j])
+                            if prev_note_id:
+                                break
+                    try:
+                        count_before = sum(
+                            1 for ch in children[:int(bar_idx)]
+                            if _local_name(ch.tag) in {"note", "chord"}
+                        )
+                        if count_before > 0:
+                            prev_note_ordinal = int(count_before)
+                    except Exception:
+                        prev_note_ordinal = None
+                    for j in range(int(bar_idx) + 1, len(children)):
+                        local = _local_name(children[j].tag)
+                        if local in {"note", "chord"}:
+                            next_note_id = _get_xml_id(children[j])
+                            if next_note_id:
+                                break
+                    if prev_note_id:
+                        event["prev_note_xml_id"] = prev_note_id
+                    if next_note_id:
+                        event["next_note_xml_id"] = next_note_id
+                    if prev_note_ordinal is not None:
+                        event["prev_note_ordinal_staff"] = prev_note_ordinal
+        elif tag_name in {"slur", "tie", "hairpin", "phrase", "gliss"}:
+            event["scope"] = "span"
+            if tag_name == "hairpin" and "form" in event and "subtype" not in event:
+                event["subtype"] = event["form"]
+        elif tag_name in {"annot", "dynam", "dir", "tempo", "harm", "repeatMark", "harpPedal"} and "tstamp2_raw" in event:
+            event["scope"] = "span"
+
+        extra_attrs = _collect_extra_attrs(
+            el,
+            consumed_keys=[
+                "staff",
+                "layer",
+                "startid",
+                "endid",
+                "tstamp",
+                "tstamp2",
+                "type",
+                "form",
+                "place",
+                "curvedir",
+                "func",
+                "plist",
+                "mm",
+                "mm.unit",
+                "mm.dots",
+                "wordpos",
+                "con",
+            ],
+        )
+        if extra_attrs:
+            event["extra"] = extra_attrs
+
         events.append(event)
 
     return events
+
+
+def _extract_mei_barline_events(mei_path: str) -> List[Dict[str, Any]]:
+    return [evt for evt in _extract_mei_events(mei_path) if evt.get("event") == "barline"]
 
 
 def _attach_barline_event_offsets(
@@ -1021,61 +1529,109 @@ def _barline_events_to_dataframe(barline_events: Sequence[Dict[str, Any]]) -> pd
     """
     Convert extracted barline events to a uniform event DataFrame schema.
     """
+    if not barline_events:
+        return _empty_event_dataframe()
     rows: List[Dict[str, Any]] = []
     for event in barline_events:
-        staff_n = event.get("staff_n")
-        layer_n = event.get("layer_n")
-        voice_label = pd.NA
-        if staff_n is not None:
-            s = str(staff_n).strip()
-            if s:
-                voice_label = f"Staff {s}"
-                if layer_n is not None:
-                    l = str(layer_n).strip()
-                    if l:
-                        voice_label = f"{voice_label} - Layer {l}"
         rows.append(
-            {
-                "type": "barline",
-                "Measure": event.get("measure"),
-                "Local Onset": np.nan,
-                "Global Onset": event.get("global_onset", np.nan),
-                "Duration": 0.0,
-                "Pitch": pd.NA,
-                "Pitch Enharmonic": pd.NA,
-                "MIDI": np.nan,
-                "Voice": voice_label,
-                "xml_id": event.get("xml_id", pd.NA),
-                "form": event.get("form", "single"),
-                "scope": event.get("scope", pd.NA),
-                "staff_n": event.get("staff_n", pd.NA),
-                "layer_n": event.get("layer_n", pd.NA),
-            }
+            _event_row(
+                event=event,
+                event_type="barline",
+                global_onset=event.get("global_onset", np.nan),
+                duration=0.0,
+                local_onset=np.nan,
+            )
         )
 
     df_events = pd.DataFrame(rows)
-    expected = [
-        "type",
-        "Measure",
-        "Local Onset",
-        "Global Onset",
-        "Duration",
-        "Pitch",
-        "Pitch Enharmonic",
-        "MIDI",
-        "Voice",
-        "xml_id",
-        "form",
-        "scope",
-        "staff_n",
-        "layer_n",
-    ]
-    for col in expected:
+    for col in _EVENT_DF_COLUMNS:
         if col not in df_events.columns:
             df_events[col] = pd.NA
-    df_events = df_events[expected]
+    df_events = df_events[_EVENT_DF_COLUMNS]
     if len(df_events) and "Global Onset" in df_events.columns:
         df_events = df_events.sort_values("Global Onset").reset_index(drop=True)
+    return df_events
+
+
+def _other_mei_events_to_dataframe(
+    events: Sequence[Dict[str, Any]],
+    df_pitch: pd.DataFrame,
+    *,
+    measure_offsets: Sequence[float],
+) -> pd.DataFrame:
+    """
+    Convert extracted non-barline MEI events to the uniform event DataFrame schema.
+    """
+    if not events:
+        return _empty_event_dataframe()
+
+    onset_map, end_map = _note_timing_maps(df_pitch)
+    rows: List[Dict[str, Any]] = []
+    for event in events:
+        event_type = str(event.get("event", "") or "").strip().lower()
+        if not event_type or event_type == "barline":
+            continue
+
+        global_onset = np.nan
+        start_xml_id = _normalize_xml_ref(event.get("start_xml_id"))
+        end_xml_id = _normalize_xml_ref(event.get("end_xml_id"))
+
+        if start_xml_id and start_xml_id in onset_map:
+            global_onset = float(onset_map[start_xml_id])
+        else:
+            resolved = _resolve_measure_tstamp(
+                event.get("measure_index"),
+                event.get("tstamp_raw"),
+                measure_offsets,
+            )
+            if resolved is not None:
+                global_onset = float(resolved)
+
+        global_end: Optional[float] = None
+        if end_xml_id and end_xml_id in end_map:
+            global_end = float(end_map[end_xml_id])
+        elif end_xml_id and end_xml_id in onset_map:
+            global_end = float(onset_map[end_xml_id])
+        else:
+            resolved_end = _resolve_measure_tstamp2(
+                event.get("measure_index"),
+                event.get("tstamp2_raw"),
+                measure_offsets,
+            )
+            if resolved_end is not None:
+                global_end = float(resolved_end)
+
+        duration = 0.0
+        if np.isfinite(global_onset) and global_end is not None and np.isfinite(global_end):
+            duration = max(0.0, float(global_end - global_onset))
+
+        local_onset = np.nan
+        if np.isfinite(global_onset):
+            measure_start = _measure_start_from_offsets(event.get("measure_index"), measure_offsets)
+            if measure_start is not None and np.isfinite(measure_start):
+                local_onset = float(global_onset - measure_start)
+
+        rows.append(
+            _event_row(
+                event=event,
+                event_type=event_type,
+                global_onset=global_onset,
+                duration=duration,
+                local_onset=local_onset,
+                text_role=event.get("text_role", pd.NA),
+            )
+        )
+
+    if not rows:
+        return _empty_event_dataframe()
+
+    df_events = pd.DataFrame(rows)
+    for col in _EVENT_DF_COLUMNS:
+        if col not in df_events.columns:
+            df_events[col] = pd.NA
+    df_events = df_events[_EVENT_DF_COLUMNS]
+    if len(df_events):
+        df_events = df_events.sort_values("Global Onset", na_position="last").reset_index(drop=True)
     return df_events
 
 
@@ -1247,6 +1803,8 @@ def parse_files_partitura(
     verovio_duration_equivalence: Optional[float] = None,
     verovio_mensural_score_up: bool = False,
     allow_music21_fallback: bool = True,
+    dedupe_weaker_text_events: bool = True,
+    quiet_native_warnings: bool = False,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, pd.DataFrame], Optional[pd.DataFrame]]:
     """
     Parse multiple symbolic music files using partitura, producing CAMAT-ready dataframes.
@@ -1266,6 +1824,12 @@ def parse_files_partitura(
     - `verovio_mensural_score_up` forwards Verovio's mensural score-up option.
     - `plot_parsed_barlines_with_voice_coloring=True` overlays parsed barline events
       (when available) in the piano roll using voice-based colors.
+    - `dedupe_weaker_text_events=True` drops duplicate text-like MEI events when a
+      stronger anchored copy and an unanchored copy are both present in the source.
+      Set it to False to preserve the raw extracted event set.
+    - `quiet_native_warnings=True` suppresses noisy dependency stdout/stderr chatter
+      and partitura-emitted `UserWarning`s during loading/conversion while
+      preserving CAMAT logs.
     """
     if display_preview is not None:
         # Backward compatibility: legacy flag controls both previews when provided.
@@ -1308,7 +1872,7 @@ def parse_files_partitura(
                 conversion_source_path = file_path
                 is_mei_source = Path(file_path).suffix.lower() == ".mei"
                 is_mensural_source = _file_looks_mensural_mei(file_path)
-                source_barline_events = _extract_mei_barline_events(file_path) if is_mei_source else []
+                source_mei_events = _extract_mei_events(file_path) if is_mei_source else []
                 used_verovio_conversion = False
                 if (
                     is_mei_source
@@ -1339,6 +1903,7 @@ def parse_files_partitura(
                             mensural_to_cmn=verovio_mensural_to_cmn,
                             duration_equivalence=verovio_duration_equivalence,
                             mensural_score_up=verovio_mensural_score_up,
+                            quiet_native_warnings=quiet_native_warnings,
                         )
                         used_verovio_conversion = True
                         if converted_cleanup_fn:
@@ -1373,7 +1938,7 @@ def parse_files_partitura(
                     default_meter_unit=default_meter_unit,
                     force_mensural_processing=is_mensural_source,
                 )
-                barline_events: List[Dict[str, Any]] = []
+                extracted_mei_events: List[Dict[str, Any]] = []
                 score_source_path = sanitized_path
                 try:
                     if mensural_replacements > 0:
@@ -1389,7 +1954,10 @@ def parse_files_partitura(
                             f"{default_meter_count}/{default_meter_unit}."
                         )
                     try:
-                        score = _load_partitura_score(sanitized_path)
+                        warning_ctx = _suppress_partitura_user_warnings(quiet_native_warnings)
+                        output_ctx = _suppress_partitura_dependency_output(quiet_native_warnings)
+                        with warning_ctx, output_ctx:
+                            score = _load_partitura_score(sanitized_path)
                     except Exception as load_exc:
                         is_mei_source = str(sanitized_path).lower().endswith(".mei")
                         if (
@@ -1411,6 +1979,7 @@ def parse_files_partitura(
                                 mensural_to_cmn=verovio_mensural_to_cmn,
                                 duration_equivalence=verovio_duration_equivalence,
                                 mensural_score_up=verovio_mensural_score_up,
+                                quiet_native_warnings=quiet_native_warnings,
                             )
                             used_verovio_conversion = True
                             if converted_cleanup_fn:
@@ -1426,12 +1995,15 @@ def parse_files_partitura(
                                     f"{wrapped_staff_groups} section-level staff group(s) "
                                     "into synthetic measure elements."
                                 )
-                            score = _load_partitura_score(converted_path)
+                            warning_ctx = _suppress_partitura_user_warnings(quiet_native_warnings)
+                            output_ctx = _suppress_partitura_dependency_output(quiet_native_warnings)
+                            with warning_ctx, output_ctx:
+                                score = _load_partitura_score(converted_path)
                             score_source_path = converted_path
                         else:
                             raise
                     if str(score_source_path).lower().endswith(".mei"):
-                        barline_events = _extract_mei_barline_events(score_source_path)
+                        extracted_mei_events = _extract_mei_events(score_source_path)
                 finally:
                     if cleanup_fn:
                         cleanup_fn()
@@ -1442,11 +2014,14 @@ def parse_files_partitura(
                 is_mei = str(sanitized_path).lower().endswith(".mei")
                 want_xml_ids = bool(include_xml_ids)
                 include_ids_this_score = want_xml_ids and is_mei
-                df_raw = partitura_score_to_dataframe(
-                    score,
-                    parse_enharmonic=parse_enharmonic,
-                    include_xml_ids=include_ids_this_score,
-                )
+                warning_ctx = _suppress_partitura_user_warnings(quiet_native_warnings)
+                output_ctx = _suppress_partitura_dependency_output(quiet_native_warnings)
+                with warning_ctx, output_ctx:
+                    df_raw = partitura_score_to_dataframe(
+                        score,
+                        parse_enharmonic=parse_enharmonic,
+                        include_xml_ids=include_ids_this_score,
+                    )
                 # Optionally align accidental schema prior to duration filtering (no extra rank column)
                 excess_clamped = 0
                 if align_accident_schema:
@@ -1483,20 +2058,61 @@ def parse_files_partitura(
                 if want_xml_ids and not include_ids_this_score and "xml_id" not in df_processed.columns:
                     df_processed["xml_id"] = pd.NA
 
-                measure_offsets = _partitura_measure_offsets(score)
-                _log_measure_grid_diagnostics(
-                    log,
-                    measure_offsets,
-                    default_meter_count=default_meter_count,
-                    default_meter_unit=default_meter_unit,
-                    meter_injections=meter_injections,
-                    used_verovio=used_verovio_conversion,
-                )
-                if not barline_events and source_barline_events:
-                    barline_events = source_barline_events
+                warning_ctx = _suppress_partitura_user_warnings(quiet_native_warnings)
+                output_ctx = _suppress_partitura_dependency_output(quiet_native_warnings)
+                with warning_ctx, output_ctx:
+                    measure_offsets = _partitura_measure_offsets(score)
+                if is_mensural_source:
+                    _log_measure_grid_diagnostics(
+                        log,
+                        measure_offsets,
+                        default_meter_count=default_meter_count,
+                        default_meter_unit=default_meter_unit,
+                        meter_injections=meter_injections,
+                        used_verovio=used_verovio_conversion,
+                    )
+                if source_mei_events:
+                    merged_events: List[Dict[str, Any]] = []
+                    seen_event_keys: set[Tuple[str, str, str, str, str, str, str, str, str, str]] = set()
+                    for raw_event in list(extracted_mei_events) + list(source_mei_events):
+                        event = dict(raw_event)
+                        key = (
+                            str(event.get("event", "") or "").strip().lower(),
+                            str(event.get("subtype", "") or "").strip(),
+                            str(event.get("xml_id", "") or "").strip(),
+                            str(event.get("start_xml_id", "") or "").strip(),
+                            str(event.get("end_xml_id", "") or "").strip(),
+                            str(event.get("measure_index", "") or "").strip(),
+                            str(event.get("tstamp_raw", "") or "").strip(),
+                            str(event.get("tstamp2_raw", "") or "").strip(),
+                            str(event.get("text", "") or "").strip(),
+                            str(event.get("verse_n", "") or "").strip(),
+                        )
+                        if key in seen_event_keys:
+                            continue
+                        seen_event_keys.add(key)
+                        merged_events.append(event)
+                    extracted_mei_events = merged_events
+                if dedupe_weaker_text_events:
+                    extracted_mei_events, weak_dupe_count = _dedupe_mei_events_prefer_anchored(
+                        extracted_mei_events
+                    )
+                    if weak_dupe_count > 0:
+                        log(
+                            "Dropped weaker duplicate MEI text events: "
+                            f"{weak_dupe_count} row(s) without usable anchors."
+                        )
 
                 df_pitch = df_processed
                 staff_to_part = _staff_index_to_part_label_map(score)
+                barline_events = [
+                    dict(evt) for evt in extracted_mei_events
+                    if str(evt.get("event", "")).strip().lower() == "barline"
+                ]
+                other_events = [
+                    dict(evt) for evt in extracted_mei_events
+                    if str(evt.get("event", "")).strip().lower() != "barline"
+                ]
                 barline_events = _attach_barline_event_onsets_from_pitch_df(
                     barline_events,
                     df_pitch,
@@ -1509,7 +2125,40 @@ def parse_files_partitura(
                         "Extracted MEI barline events: "
                         f"{len(barline_events)} event(s), forms={forms}."
                     )
-                df_events = _barline_events_to_dataframe(barline_events)
+                if other_events:
+                    types = sorted({str(evt.get("event", "")).strip().lower() for evt in other_events})
+                    log(
+                        "Extracted non-barline MEI events: "
+                        f"{len(other_events)} event(s), types={types}."
+                    )
+                df_barlines = _barline_events_to_dataframe(barline_events)
+                df_other_events = _other_mei_events_to_dataframe(
+                    other_events,
+                    df_pitch,
+                    measure_offsets=measure_offsets,
+                )
+                event_frames = [frame for frame in (df_barlines, df_other_events) if not frame.empty]
+                if not event_frames:
+                    df_events = _empty_event_dataframe()
+                elif len(event_frames) == 1:
+                    df_events = event_frames[0].copy()
+                else:
+                    df_events = pd.concat(
+                        event_frames,
+                        ignore_index=True,
+                        sort=False,
+                    )
+                if df_events.empty:
+                    df_events = _empty_event_dataframe()
+                else:
+                    for col in _EVENT_DF_COLUMNS:
+                        if col not in df_events.columns:
+                            df_events[col] = pd.NA
+                    df_events = df_events[_EVENT_DF_COLUMNS]
+                    df_events = df_events.sort_values(
+                        "Global Onset",
+                        na_position="last",
+                    ).reset_index(drop=True)
                 df_events = _align_event_voices_to_pitch_df(
                     df_events,
                     df_pitch,
@@ -1637,22 +2286,7 @@ def parse_files_partitura(
                                 fb_entry["name"] = name
                                 fb_entry["source"] = file_source
                                 fb_entry["df_pitch"] = fb_df
-                                fb_entry["df_events"] = pd.DataFrame(
-                                    columns=[
-                                        "type",
-                                        "Measure",
-                                        "Local Onset",
-                                        "Global Onset",
-                                        "Duration",
-                                        "Pitch",
-                                        "Pitch Enharmonic",
-                                        "MIDI",
-                                        "Voice",
-                                        "xml_id",
-                                        "form",
-                                        "scope",
-                                    ]
-                                )
+                                fb_entry["df_events"] = _empty_event_dataframe()
                                 fb_entry["df_name_pitch"] = f"{name}_pitch"
                                 fb_entry["df_name_events"] = f"{name}_events"
                                 fb_entry["barline_events"] = []

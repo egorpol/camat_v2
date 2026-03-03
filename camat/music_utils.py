@@ -2,14 +2,16 @@ from __future__ import annotations
 
 import os
 import tempfile
+import warnings
 from typing import List, Tuple, Optional, Dict, Any, Iterable, Sequence, Union
 import textwrap
 
-import requests
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-from music21 import note, chord, pitch as pitch_module
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore")
+    from music21 import note, chord, pitch as pitch_module
 try:
     from tqdm.auto import tqdm as _tqdm  # Notebook/terminal-friendly progress bar
 except Exception:  # pragma: no cover - optional dependency at runtime
@@ -42,6 +44,16 @@ __all__ = [
 BOKEH_NOTEBOOK_INITIALIZED = False
 
 
+def _get_requests_module():
+    """
+    Import requests lazily so local-only workflows do not emit dependency warnings.
+    """
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        import requests  # type: ignore
+    return requests
+
+
 def get_file_path(file_source: str, *, timeout_seconds: int = 30) -> str:
     """
     Resolve a local path from a URL or verify a local path exists.
@@ -66,6 +78,7 @@ def get_file_path(file_source: str, *, timeout_seconds: int = 30) -> str:
         If the local file does not exist.
     """
     if file_source.startswith(("http://", "https://")):
+        requests = _get_requests_module()
         try:
             response = requests.get(file_source, stream=True, timeout=timeout_seconds)
             response.raise_for_status()
@@ -1994,4 +2007,3 @@ def plot_prototype_binary_matrix(
         show_measure_lines=show_measure_lines,
         show=show,
     )
-

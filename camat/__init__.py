@@ -1,7 +1,7 @@
-__version__ = "0.1.1"
+__version__ = "0.1.3"
 
 from .pattern_search import run_pattern_search
-from .parser_registry import get_parse_files, list_parsers
+from .parser_registry import get_parse_files, list_parsers, parse_files_quiet
 from .verovio_render import (
     get_toolkit as vrv_get_toolkit,
     vrv_set_options,
@@ -13,6 +13,7 @@ from .verovio_render import (
     vrv_render_page,
     vrv_render_all_pages,
     vrv_display_svg,
+    vrv_quiet,
     vrv_find_elements_at_time,
     vrv_timemap,
     vrv_get_mei,
@@ -70,6 +71,7 @@ __all__ = [
     'run_pattern_search',
     'get_parse_files',
     'list_parsers',
+    'parse_files_quiet',
     'vrv_get_toolkit',
     'vrv_set_options',
     'vrv_guess_input_from',
@@ -80,6 +82,7 @@ __all__ = [
     'vrv_render_page',
     'vrv_render_all_pages',
     'vrv_display_svg',
+    'vrv_quiet',
     'vrv_find_elements_at_time',
     'vrv_timemap',
     'vrv_get_mei',

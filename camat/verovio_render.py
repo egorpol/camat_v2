@@ -3,9 +3,13 @@ from __future__ import annotations
 import io
 import os
 import re
+import warnings
+import json
+import hashlib
+from contextlib import contextmanager
 from typing import Any, Dict, List, Optional, Tuple
 
-import requests
+from .quiet_utils import suppress_native_output
 
 try:  # pragma: no cover - optional in some environments
     import verovio  # type: ignore
@@ -36,15 +40,30 @@ __all__ = [
     "vrv_highlight_ids",
     "vrv_debug_info",
     "vrv_process_annotations",
+    "vrv_quiet",
 ]
 
 
 _VRV_TOOLKIT = verovio.toolkit()
 _EXTRA_SVG_CSS = ""
+_VRV_OPTION_SUPPORT_CACHE: Dict[str, bool] = {}
+_VRV_QUIET_NATIVE_OUTPUT = False
+_VRV_QUIET_SUPPRESS_STDOUT = True
+_VRV_QUIET_SUPPRESS_STDERR = True
 
 # Common namespaces
 MEI_NS = "http://www.music-encoding.org/ns/mei"
 XML_NS = "http://www.w3.org/XML/1998/namespace"
+
+
+def _get_requests_module():
+    """
+    Import requests lazily so unrelated workflows do not emit dependency warnings.
+    """
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        import requests  # type: ignore
+    return requests
 
 
 def vrv_namespaces() -> Dict[str, str]:
@@ -59,12 +78,143 @@ def get_toolkit():
     return _VRV_TOOLKIT
 
 
+@contextmanager
+def vrv_quiet(
+    enabled: bool = True,
+    *,
+    suppress_stdout: bool = True,
+    suppress_stderr: bool = True,
+):
+    """
+    Temporarily suppress native Verovio stdout/stderr output.
+    """
+    global _VRV_QUIET_NATIVE_OUTPUT, _VRV_QUIET_SUPPRESS_STDOUT, _VRV_QUIET_SUPPRESS_STDERR
+    prev = (
+        _VRV_QUIET_NATIVE_OUTPUT,
+        _VRV_QUIET_SUPPRESS_STDOUT,
+        _VRV_QUIET_SUPPRESS_STDERR,
+    )
+    _VRV_QUIET_NATIVE_OUTPUT = bool(enabled)
+    _VRV_QUIET_SUPPRESS_STDOUT = bool(suppress_stdout)
+    _VRV_QUIET_SUPPRESS_STDERR = bool(suppress_stderr)
+    try:
+        yield
+    finally:
+        (
+            _VRV_QUIET_NATIVE_OUTPUT,
+            _VRV_QUIET_SUPPRESS_STDOUT,
+            _VRV_QUIET_SUPPRESS_STDERR,
+        ) = prev
+
+
+def _vrv_suppress_if_needed():
+    return suppress_native_output(
+        enabled=_VRV_QUIET_NATIVE_OUTPUT,
+        suppress_stdout=_VRV_QUIET_SUPPRESS_STDOUT,
+        suppress_stderr=_VRV_QUIET_SUPPRESS_STDERR,
+    )
+
+
 def _ensure_svg(svg: Any) -> str:
     if svg is None:
         return ""
     if isinstance(svg, bytes):
         return svg.decode("utf-8", errors="ignore")
     return str(svg)
+
+
+def _dedupe_preserve_order(values: List[str]) -> List[str]:
+    seen: set[str] = set()
+    deduped: List[str] = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        deduped.append(value)
+    return deduped
+
+
+def _xml_local_name(tag: str) -> str:
+    if "}" in tag:
+        return tag.rsplit("}", 1)[-1]
+    return tag
+
+
+def _vrv_parse_option_payload(payload: Any) -> Optional[Dict[str, Any]]:
+    if payload is None:
+        return None
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except Exception:
+            return None
+    if isinstance(payload, dict):
+        return payload
+    return None
+
+
+def _vrv_supports_option(option_name: str) -> bool:
+    cached = _VRV_OPTION_SUPPORT_CACHE.get(option_name)
+    if cached is not None:
+        return cached
+
+    payload = None
+    if hasattr(_VRV_TOOLKIT, "getAvailableOptions"):
+        try:
+            payload = _VRV_TOOLKIT.getAvailableOptions()
+        except Exception:
+            payload = None
+    if payload is None and hasattr(_VRV_TOOLKIT, "getOptions"):
+        try:
+            payload = _VRV_TOOLKIT.getOptions()
+        except Exception:
+            payload = None
+
+    parsed = _vrv_parse_option_payload(payload)
+    supported = bool(parsed and option_name in parsed)
+    _VRV_OPTION_SUPPORT_CACHE[option_name] = supported
+    return supported
+
+
+def _vrv_annotation_signature(annot: Dict[str, Any]) -> str:
+    """
+    Build a stable signature for an annotation spec, ignoring xml_id.
+    """
+    normalized: Dict[str, Any] = {}
+    for key, value in annot.items():
+        if key == "xml_id" or value is None:
+            continue
+        if isinstance(value, list):
+            normalized[key] = [str(item) for item in value]
+        else:
+            normalized[key] = value
+    return json.dumps(normalized, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+
+
+def _vrv_assign_stable_annotation_ids(annotations: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Return copies of annotation specs with deterministic xml_id values when absent.
+
+    This keeps repeated vrv_process_annotations calls idempotent even when callers
+    omit xml_id in convenience notebook code.
+    """
+    seen_counts: Dict[str, int] = {}
+    prepared: List[Dict[str, Any]] = []
+
+    for annot in annotations:
+        current = dict(annot)
+        if current.get("xml_id"):
+            prepared.append(current)
+            continue
+
+        signature = _vrv_annotation_signature(current)
+        count = seen_counts.get(signature, 0) + 1
+        seen_counts[signature] = count
+        digest = hashlib.sha1(signature.encode("utf-8")).hexdigest()[:12]
+        current["xml_id"] = f"auto-annot-{digest}-{count}"
+        prepared.append(current)
+
+    return prepared
 
 
 def vrv_set_options(**kwargs: Any) -> None:
@@ -81,7 +231,8 @@ def vrv_set_options(**kwargs: Any) -> None:
         "adjustPageHeight": True,
     }
     opts = {**defaults, **kwargs}
-    _VRV_TOOLKIT.setOptions(opts)
+    with _vrv_suppress_if_needed():
+        _VRV_TOOLKIT.setOptions(opts)
 
 
 def vrv_guess_input_from(source_hint: Optional[str] = None, content: Optional[str] = None) -> Optional[str]:
@@ -131,9 +282,10 @@ def vrv_load_data(data: str, *, input_from: Optional[str] = None) -> int:
     Set input_from to one of {'mei', 'musicxml', 'humdrum'}; if None, attempts to guess from content.
     """
     inferred = input_from or vrv_guess_input_from(None, data) or "musicxml"
-    _VRV_TOOLKIT.setOptions({"inputFrom": inferred})
-    _VRV_TOOLKIT.loadData(data)
-    return _VRV_TOOLKIT.getPageCount()
+    with _vrv_suppress_if_needed():
+        _VRV_TOOLKIT.setOptions({"inputFrom": inferred})
+        _VRV_TOOLKIT.loadData(data)
+        return _VRV_TOOLKIT.getPageCount()
 
 
 def vrv_load_from_file(path: str, *, input_from: Optional[str] = None, encoding: str = "utf-8") -> int:
@@ -148,6 +300,7 @@ def vrv_load_from_url(url: str, *, input_from: Optional[str] = None, timeout: in
     Load MEI/MusicXML/Humdrum from URL, auto-detecting inputFrom when not provided.
     Returns page count.
     """
+    requests = _get_requests_module()
     resp = requests.get(url, timeout=timeout)
     resp.raise_for_status()
     # Prefer text; fall back to bytes decode
@@ -191,12 +344,14 @@ def vrv_convert_to_mei(
 
 
 def vrv_render_page(page: int) -> str:
-    svg = _VRV_TOOLKIT.renderToSVG(page)
+    with _vrv_suppress_if_needed():
+        svg = _VRV_TOOLKIT.renderToSVG(page)
     return _ensure_svg(svg)
 
 
 def vrv_render_all_pages() -> List[str]:
-    pages = _VRV_TOOLKIT.getPageCount()
+    with _vrv_suppress_if_needed():
+        pages = _VRV_TOOLKIT.getPageCount()
     return [vrv_render_page(p) for p in range(1, pages + 1)]
 
 
@@ -210,12 +365,16 @@ def vrv_display_svg(svg: str) -> None:
 
 
 def vrv_find_elements_at_time(ms: float):
-    return _VRV_TOOLKIT.getElementsAtTime(ms) if hasattr(_VRV_TOOLKIT, "getElementsAtTime") else None
+    if not hasattr(_VRV_TOOLKIT, "getElementsAtTime"):
+        return None
+    with _vrv_suppress_if_needed():
+        return _VRV_TOOLKIT.getElementsAtTime(ms)
 
 
 def vrv_timemap():
     if hasattr(_VRV_TOOLKIT, "renderToTimemap"):
-        tm = _VRV_TOOLKIT.renderToTimemap()
+        with _vrv_suppress_if_needed():
+            tm = _VRV_TOOLKIT.renderToTimemap()
         try:
             import json as _json  # type: ignore
             return _json.loads(tm) if isinstance(tm, str) else tm
@@ -228,7 +387,8 @@ def vrv_get_mei() -> str:
     """
     Return the current score as MEI XML.
     """
-    mei = _VRV_TOOLKIT.getMEI()
+    with _vrv_suppress_if_needed():
+        mei = _VRV_TOOLKIT.getMEI()
     if mei is None:
         raise RuntimeError(
             "Verovio returned no MEI. Make sure a score is loaded first."
@@ -251,9 +411,10 @@ def vrv_set_mei(mei_xml: str) -> int:
     """
     Replace the current score with the provided MEI XML. Returns page count.
     """
-    _VRV_TOOLKIT.setOptions({"inputFrom": "mei"})
-    _VRV_TOOLKIT.loadData(mei_xml)
-    pages = _VRV_TOOLKIT.getPageCount()
+    with _vrv_suppress_if_needed():
+        _VRV_TOOLKIT.setOptions({"inputFrom": "mei"})
+        _VRV_TOOLKIT.loadData(mei_xml)
+        pages = _VRV_TOOLKIT.getPageCount()
     if pages <= 0:
         log_msg = ""
         if hasattr(_VRV_TOOLKIT, "getLog"):
@@ -480,7 +641,10 @@ def vrv_set_additional_css(css: str, *, append: bool = True) -> None:
         _EXTRA_SVG_CSS = f"{_EXTRA_SVG_CSS}\n{css}"
     else:
         _EXTRA_SVG_CSS = css
-    _VRV_TOOLKIT.setOptions({"svgAdditionalCSS": _EXTRA_SVG_CSS})
+    if not _vrv_supports_option("svgAdditionalCSS"):
+        return
+    with _vrv_suppress_if_needed():
+        _VRV_TOOLKIT.setOptions({"svgAdditionalCSS": _EXTRA_SVG_CSS})
 
 
 def vrv_highlight_ids(
@@ -607,18 +771,97 @@ def _vrv_resolve_svg_ids(mei_ids: List[str], *, page: int = 1, include_bbox_ids:
     Returns a dict: {mei_pointer: [svg_ids...]}
     """
     svg = vrv_render_page(page) if page else vrv_render_page(1)
+    return _vrv_resolve_svg_ids_in_svg(
+        svg,
+        mei_ids,
+        include_bbox_ids=include_bbox_ids,
+        include_derived_ids=include_derived_ids,
+    )
+
+
+def _vrv_resolve_svg_ids_in_svg(svg_text: str, mei_ids: List[str], *, include_bbox_ids: bool = False, include_derived_ids: bool = False) -> Dict[str, List[str]]:
+    """
+    Resolve one or more MEI ids against a provided SVG string.
+    """
     resolved: Dict[str, List[str]] = {}
     for target in mei_ids:
-        resolved[target] = _vrv_find_svg_ids(svg, target, include_bbox_ids=include_bbox_ids, include_derived_ids=include_derived_ids)
+        resolved[target] = _vrv_find_svg_ids(
+            svg_text,
+            target,
+            include_bbox_ids=include_bbox_ids,
+            include_derived_ids=include_derived_ids,
+        )
     return resolved
 
 
-def vrv_inject_highlight_css(svg_text: str, ids: List[str], *, color: str = "#ff0", shape_only: bool = True, include_rects: bool = False) -> str:
+def _vrv_collect_beam_shape_selectors(svg_text: str, target_ids: List[str]) -> List[str]:
+    """
+    Return direct-child shape selectors for beam groups enclosing the given ids.
+
+    This lets us color the beam polygon itself without also coloring every note
+    nested inside the same beam group.
+    """
+    if not svg_text or not target_ids:
+        return []
+
+    try:
+        from xml.etree import ElementTree as ET  # type: ignore
+    except Exception:
+        return []
+
+    try:
+        root = ET.fromstring(svg_text)
+    except Exception:
+        return []
+
+    wanted_ids = {target.lstrip("#") for target in target_ids if target}
+    if not wanted_ids:
+        return []
+
+    parent_map = {child: parent for parent in root.iter() for child in parent}
+    beam_shape_tags = {"path", "polygon", "ellipse", "circle", "line", "use"}
+    selectors: List[str] = []
+    seen: set[str] = set()
+
+    for element in root.iter():
+        if element.attrib.get("id") not in wanted_ids:
+            continue
+
+        current = parent_map.get(element)
+        while current is not None:
+            classes = set(current.attrib.get("class", "").split())
+            beam_id = current.attrib.get("id")
+            if "beam" in classes and beam_id:
+                for child in list(current):
+                    tag = _xml_local_name(child.tag)
+                    if tag not in beam_shape_tags:
+                        continue
+                    selector = f"#{beam_id} > {tag}"
+                    if selector in seen:
+                        continue
+                    seen.add(selector)
+                    selectors.append(selector)
+                break
+            current = parent_map.get(current)
+
+    return selectors
+
+
+def vrv_inject_highlight_css(
+    svg_text: str,
+    ids: List[str],
+    *,
+    color: str = "#ff0",
+    shape_only: bool = True,
+    include_rects: bool = False,
+    extra_shape_selectors: Optional[List[str]] = None,
+) -> str:
     """
     Inject an inline <style> block to color-highlight the given ids inside a single SVG string.
     - When shape_only is True, target only shape elements (path/polygon/ellipse/circle/line/use).
       Rectangles are optionally included if include_rects is True.
     - When shape_only is False, target shapes plus text/tspan, still avoiding rects unless include_rects is True.
+    - extra_shape_selectors can be used for page-local selectors such as beam polygons.
     """
     shape_tags = ["path", "polygon", "ellipse", "circle", "line", "use"]
     if include_rects:
@@ -655,6 +898,9 @@ def vrv_inject_highlight_css(svg_text: str, ids: List[str], *, color: str = "#ff
             shape_selectors.append(f"#{bare} use")
             shape_selectors.append(f"#{bare} text")
             shape_selectors.append(f"#{bare} tspan")
+
+    if extra_shape_selectors:
+        shape_selectors.extend(extra_shape_selectors)
 
     if not shape_selectors:
         return svg_text
@@ -745,7 +991,13 @@ def vrv_insert_annot_plist(
             vrv_insert_annot(text=plist_annot_text, type="score", plist=plist_targets, xml_id="plist-demo-1")
 
     # 4) Map to actual SVG ids (page 1) and build highlight list
-    resolved = _vrv_resolve_svg_ids(plist_targets, page=1, include_bbox_ids=include_bbox_ids, include_derived_ids=include_derived_ids)
+    first_svg = vrv_render_page(1)
+    resolved = _vrv_resolve_svg_ids_in_svg(
+        first_svg,
+        plist_targets,
+        include_bbox_ids=include_bbox_ids,
+        include_derived_ids=include_derived_ids,
+    )
     highlight_ids: List[str] = []
     for base, hits in resolved.items():
         if hits:
@@ -755,6 +1007,7 @@ def vrv_insert_annot_plist(
         else:
             # Fall back to base pointer
             highlight_ids.append(base)
+    highlight_ids = _dedupe_preserve_order(highlight_ids)
 
     # 5) Apply toolkit CSS (take effect on subsequent renders)
     vrv_highlight_ids(highlight_ids, color=highlight_color, shape_only=shape_only, include_rects=include_rects)
@@ -763,8 +1016,18 @@ def vrv_insert_annot_plist(
     pages_list = pages or list(range(1, get_toolkit().getPageCount() + 1))
     final_svgs: List[str] = []
     for p in pages_list:
-        svg = vrv_render_page(p)
-        final_svgs.append(vrv_inject_highlight_css(svg, highlight_ids, color=highlight_color, shape_only=shape_only, include_rects=include_rects))
+        svg = first_svg if p == 1 else vrv_render_page(p)
+        beam_selectors = _vrv_collect_beam_shape_selectors(svg, highlight_ids)
+        final_svgs.append(
+            vrv_inject_highlight_css(
+                svg,
+                highlight_ids,
+                color=highlight_color,
+                shape_only=shape_only,
+                include_rects=include_rects,
+                extra_shape_selectors=beam_selectors,
+            )
+        )
 
     if display:
         for svg in final_svgs:
@@ -844,11 +1107,13 @@ def vrv_process_annotations(
     3. Highlight the plist targets in the rendered SVG.
     4. Display the result (if display=True).
     """
+    prepared_annotations = _vrv_assign_stable_annotation_ids(annotations)
+
     # 1. Insert all annotations
     # We track plist targets to highlight them later
     all_plist_targets: List[str] = []
 
-    for annot in annotations:
+    for annot in prepared_annotations:
         # Extract plist if present to track for highlighting
         plist = annot.get("plist")
         if plist:
@@ -862,7 +1127,7 @@ def vrv_process_annotations(
         vrv_insert_annot(**annot)
 
     # Deduplicate targets
-    unique_targets = list(set(all_plist_targets))
+    unique_targets = _dedupe_preserve_order(all_plist_targets)
 
     # 2. & 3. Resolve IDs, Highlight, and Render
     # We can reuse logic similar to vrv_insert_annot_plist but adapted
@@ -872,7 +1137,13 @@ def vrv_process_annotations(
     # For multi-page scores, this might need more robust handling if IDs are on later pages.
     # However, vrv_highlight_ids sets global CSS which applies to all pages.
     
-    resolved = _vrv_resolve_svg_ids(unique_targets, page=1, include_bbox_ids=False, include_derived_ids=False)
+    first_svg = vrv_render_page(1)
+    resolved = _vrv_resolve_svg_ids_in_svg(
+        first_svg,
+        unique_targets,
+        include_bbox_ids=False,
+        include_derived_ids=False,
+    )
     highlight_ids: List[str] = []
     for base, hits in resolved.items():
         if hits:
@@ -880,6 +1151,7 @@ def vrv_process_annotations(
                 highlight_ids.append(h if h.startswith("#") else f"#{h}")
         else:
             highlight_ids.append(base)
+    highlight_ids = _dedupe_preserve_order(highlight_ids)
 
     # Apply toolkit CSS
     vrv_highlight_ids(highlight_ids, color=highlight_color, shape_only=shape_only, include_rects=include_rects)
@@ -888,13 +1160,21 @@ def vrv_process_annotations(
     pages_count = get_toolkit().getPageCount()
     final_svgs: List[str] = []
     for p in range(1, pages_count + 1):
-        svg = vrv_render_page(p)
+        svg = first_svg if p == 1 else vrv_render_page(p)
         # Inject CSS for notebook display (since vrv_highlight_ids only affects toolkit state for future renders, 
         # but we just rendered. Actually vrv_highlight_ids sets svgAdditionalCSS which IS used in vrv_render_page.
         # BUT vrv_inject_highlight_css is for INLINE css injection if we want to be sure or if we are manipulating existing SVGs.
         # The existing vrv_insert_annot_plist does BOTH: sets toolkit options AND injects inline. 
         # Let's follow that pattern for consistency.
-        svg = vrv_inject_highlight_css(svg, highlight_ids, color=highlight_color, shape_only=shape_only, include_rects=include_rects)
+        beam_selectors = _vrv_collect_beam_shape_selectors(svg, highlight_ids)
+        svg = vrv_inject_highlight_css(
+            svg,
+            highlight_ids,
+            color=highlight_color,
+            shape_only=shape_only,
+            include_rects=include_rects,
+            extra_shape_selectors=beam_selectors,
+        )
         final_svgs.append(svg)
 
     if display:

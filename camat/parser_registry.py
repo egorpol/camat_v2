@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import os
+import io
+from contextlib import nullcontext, redirect_stderr, redirect_stdout
 from importlib import import_module
 from typing import Any, Callable, Dict, List, Mapping, Tuple
 
 from .parser_utils import print_parsed_summary
+from .quiet_utils import suppress_native_output
 
-__all__ = ["get_parse_files", "list_parsers", "normalize_backend_name", "parse_files"]
+__all__ = ["get_parse_files", "list_parsers", "normalize_backend_name", "parse_files", "parse_files_quiet"]
 
 
 # Map canonical backend names to (module, attribute)
@@ -124,5 +127,30 @@ def parse_files(file_sources, *,
             print_parsed_summary(result_list, **summary_kwargs)
 
     return outputs
+
+
+def parse_files_quiet(file_sources, *,
+                      parsing_backend: str | None = None,
+                      quiet_native_warnings: bool = True,
+                      suppress_stdout: bool = True,
+                      suppress_stderr: bool = True,
+                      **kwargs):
+    """
+    Convenience wrapper around parse_files that suppresses noisy native backend
+    stdout/stderr output. For the partitura backend it also enables the backend's
+    targeted native warning suppression.
+    """
+    backend_name = normalize_backend_name(parsing_backend)
+    if backend_name == "partitura":
+        kwargs.setdefault("quiet_native_warnings", bool(quiet_native_warnings))
+    stdout_cm = redirect_stdout(io.StringIO()) if suppress_stdout else nullcontext()
+    stderr_cm = redirect_stderr(io.StringIO()) if suppress_stderr else nullcontext()
+    with stdout_cm, stderr_cm:
+        with suppress_native_output(
+            enabled=bool(quiet_native_warnings),
+            suppress_stdout=bool(suppress_stdout),
+            suppress_stderr=bool(suppress_stderr),
+        ):
+            return parse_files(file_sources, parsing_backend=parsing_backend, **kwargs)
 
 

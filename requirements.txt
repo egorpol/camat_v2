@@ -1,5 +1,6 @@
 bokeh
 ipycanvas
+ipykernel
 ipython
 ipywidgets
 matplotlib

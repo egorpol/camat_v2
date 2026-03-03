@@ -1,5 +1,4 @@
 name: Release
-
 on:
   push:
     tags:
@@ -10,13 +9,54 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    outputs:
+      package_version: ${{ steps.version_check.outputs.package_version }}
+      tag_name: ${{ steps.version_check.outputs.tag_name }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: python -m pip install -U build
+      - name: Verify tag matches package version
+        id: version_check
+        run: |
+          python - <<'PY'
+          import os
+          import pathlib
+          import re
+          import tomllib
+
+          tag_name = os.environ["GITHUB_REF_NAME"]
+          tag_version = tag_name.removeprefix("v")
+
+          pyproject = tomllib.loads(pathlib.Path("pyproject.toml").read_text(encoding="utf-8"))
+          package_version = pyproject["project"]["version"]
+
+          init_text = pathlib.Path("camat/__init__.py").read_text(encoding="utf-8")
+          match = re.search(r'^__version__\s*=\s*"([^"]+)"', init_text, re.MULTILINE)
+          if match is None:
+              raise SystemExit("Could not find camat.__version__ in camat/__init__.py.")
+          module_version = match.group(1)
+
+          mismatches = []
+          if tag_version != package_version:
+              mismatches.append(
+                  f"Tag {tag_name!r} does not match pyproject version {package_version!r}."
+              )
+          if module_version != package_version:
+              mismatches.append(
+                  f"camat.__version__ {module_version!r} does not match pyproject version {package_version!r}."
+              )
+          if mismatches:
+              raise SystemExit(" ".join(mismatches))
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
+              fh.write(f"package_version={package_version}\n")
+              fh.write(f"tag_name={tag_name}\n")
+          PY
+      - run: python -m pip install -U build twine
       - run: python -m build
+      - run: python -m twine check dist/*
       - uses: actions/upload-artifact@v4
         with:
           name: dists
@@ -34,3 +74,23 @@ jobs:
           name: dists
           path: dist/
       - uses: pypa/gh-action-pypi-publish@release/v1
+
+  github_release:
+    needs:
+      - build
+      - publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dists
+          path: dist/
+      - uses: softprops/action-gh-release@v2
+        with:
+          name: camat ${{ needs.build.outputs.package_version }}
+          tag_name: ${{ needs.build.outputs.tag_name }}
+          generate_release_notes: true
+          files: |
+            dist/*

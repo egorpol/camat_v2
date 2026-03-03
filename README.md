@@ -41,6 +41,16 @@ pip install -r docs/requirements.txt
 sphinx-build -b html docs docs/_build/html
 ```
 
+## Releasing
+
+Releases are tag-driven.
+
+1. Update `pyproject.toml`, `camat/__init__.py`, and `CHANGELOG.md`.
+2. Create and push a version tag in the form `vX.Y.Z`.
+3. GitHub Actions will verify that the tag matches the package version, publish the built distributions to PyPI, and create the corresponding GitHub Release with the generated artifacts.
+
+Manual `twine upload` is no longer part of the release flow.
+
 ## Mensural MEI Helper
 
 If your MEI files use mensural duration labels (for example `semibrevis`), you can normalize them for partitura compatibility:
