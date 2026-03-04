@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+### Changed
+
+### Fixed
+
+## [0.1.4] - 2026-03-04
+
+### Added
+
+- Added a repository-level `.readthedocs.yaml` so Read the Docs can build the bundled Sphinx docs without extra project-specific setup.
+- Added `check_monophonic_input(...)` in `camat.analysis_utils` for reusable monophony validation, including per-voice checks when a voice column is available.
+- Added `melodic_interval_distribution(...)` in `camat.analysis_utils` for successive melodic interval analysis, with optional per-voice pooling and the same monophony safety checks used by the successive pitch bigram utilities.
+- Added `display_melodic_interval_distribution(...)` in `camat.analysis_utils` as a notebook-facing wrapper for interval distribution tables and bar plots, with multi-source support, optional normalization, and display-only float formatting.
+
+### Changed
+
+- Added project URL metadata in `pyproject.toml` to improve the PyPI project sidebar links.
+- Refreshed the README header and docs section with badges, corrected Python support wording, and updated local documentation preview instructions.
+- Expanded `camat.analysis_utils` notebook plotting helpers:
+  `display_pitch_distribution(...)`, `display_duration_distribution(...)`, and `display_pitch_class_distributions(...)` now support per-source normalization, explicit normalized plot titles, and configurable display-only float formatting for tables and plot labels/hover values.
+- Updated pitch-class distribution helpers to accept `pitch_axis` / `order_axis_by` controls and improved octave-less pitch-class sorting so chromatic ordering via MIDI semantics works for labels such as `C#`, `Db`, and similar spellings.
+- Updated `display_successive_pitch_transition_heatmaps(...)` so `normalize` is the primary normalization control (`False`/`'count'`, `'row'`, `'column'`, `'all'`), added display-only float formatting, and made monophony validation enabled by default via `require_monophonic=True`.
+
+### Fixed
+
+- Removed a pandas future warning in successive-pitch heatmap row normalization by avoiding object-dtype `fillna(...)` during matrix division.
+
 ## [0.1.3] - 2026-03-03
 
 ### Added
@@ -87,7 +115,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-[Unreleased]: https://github.com/egorpol/camat_v2/compare/v0.1.3...HEAD
+[Unreleased]: https://github.com/egorpol/camat_v2/compare/v0.1.4...HEAD
+[0.1.4]: https://github.com/egorpol/camat_v2/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/egorpol/camat_v2/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/egorpol/camat_v2/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/egorpol/camat_v2/compare/v0.1.0...v0.1.1

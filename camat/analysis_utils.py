@@ -153,6 +153,93 @@ def _guess_labels_for_dfs(
     return out
 
 
+def _coerce_float_format(float_format: Optional[str]) -> Optional[str]:
+    if float_format is None:
+        return None
+    spec = str(float_format).strip()
+    if not spec:
+        return None
+    # Accept shorthand like "3f" and turn it into Python's ".3f".
+    if len(spec) >= 2 and spec[:-1].isdigit() and spec[-1].lower() in ('f', 'e', 'g', '%'):
+        spec = f".{spec}"
+    return spec
+
+
+def _bokeh_tick_format_from_float_format(float_format: Optional[str]) -> Optional[str]:
+    spec = _coerce_float_format(float_format)
+    if spec is None or len(spec) < 2 or not spec.startswith('.'):
+        return None
+    precision = spec[1:-1]
+    kind = spec[-1].lower()
+    if not precision.isdigit():
+        return None
+    zeros = "0" * int(precision)
+    if kind in ('f', 'g', 'e'):
+        return f"0.{zeros}" if zeros else "0"
+    if kind == '%':
+        return f"0.{zeros}%" if zeros else "0%"
+    return None
+
+
+def _format_number_for_display(value: Any, float_format: Optional[str]) -> str:
+    spec = _coerce_float_format(float_format)
+    if spec is None:
+        return str(value)
+    try:
+        if pd.isna(value):
+            return str(value)
+    except Exception:
+        pass
+    try:
+        return format(float(value), spec)
+    except Exception:
+        return str(value)
+
+
+def _format_table_for_display(table_df: pd.DataFrame, float_format: Optional[str]) -> pd.DataFrame:
+    spec = _coerce_float_format(float_format)
+    if spec is None:
+        return table_df
+
+    out = table_df.copy()
+    for col in out.columns:
+        if pd.api.types.is_float_dtype(out[col]):
+            out[col] = out[col].map(lambda v: _format_number_for_display(v, spec))
+    return out
+
+
+def _pitch_distribution_title(normalize: bool) -> str:
+    if normalize:
+        return 'Pitch Distribution (Normalized)'
+    return 'Pitch Distribution'
+
+
+def _duration_distribution_title(normalize: bool) -> str:
+    if normalize:
+        return 'Duration Distribution (Normalized)'
+    return 'Duration Distribution'
+
+
+def _pitch_class_distribution_title(kind: str, normalize: bool) -> str:
+    title = f'Pitch Class Distribution ({kind})'
+    if normalize:
+        title = f'{title} (Normalized)'
+    return title
+
+
+def _resolve_pitch_class_order_axis(
+    pitch_axis: Optional[str],
+    order_axis_by: Optional[str],
+) -> str:
+    if order_axis_by is not None and str(order_axis_by).strip():
+        return str(order_axis_by)
+
+    axis = str(pitch_axis or '').strip().lower()
+    if axis in ('midi', 'pitch real', 'pitch', 'real'):
+        return 'midi'
+    return 'pitch by name'
+
+
 def _plot_multi_bar(
     *,
     categories: Sequence[Any],
@@ -167,6 +254,7 @@ def _plot_multi_bar(
     show_hover: bool,
     bar_color: Union[str, Sequence[str], None],
     default_palette: Sequence[str],
+    float_format: Optional[str] = None,
 ):
     """
     Generic grouped bar plotter for both Matplotlib and Bokeh.
@@ -184,6 +272,7 @@ def _plot_multi_bar(
 
     if backend_opt == 'plt':
         import matplotlib.pyplot as plt
+        from matplotlib.ticker import FuncFormatter
 
         fig, ax = plt.subplots(figsize=(plot_width / 100.0, plot_height / 100.0))
         x_indices = list(range(len(x_labels)))
@@ -201,6 +290,10 @@ def _plot_multi_bar(
         ax.set_xlabel(x_label)
         ax.set_ylabel(y_label)
         ax.set_title(title)
+        if _coerce_float_format(float_format) is not None:
+            ax.yaxis.set_major_formatter(
+                FuncFormatter(lambda v, _pos: _format_number_for_display(v, float_format))
+            )
         ax.legend()
         plt.tight_layout()
         plt.show()
@@ -218,6 +311,10 @@ def _plot_multi_bar(
         data = {'x': x_labels}
         for j, _label in enumerate(series_labels):
             data[f's{j}'] = [float(v) for v in series_values[j]]
+            if _coerce_float_format(float_format) is not None:
+                data[f's{j}_display'] = [
+                    _format_number_for_display(v, float_format) for v in series_values[j]
+                ]
 
         source = ColumnDataSource(data)
 
@@ -254,7 +351,12 @@ def _plot_multi_bar(
                         tooltips=[
                             (x_label, '@x'),
                             ('Series', str(label)),
-                            (y_label, f'@{field_name}'),
+                            (
+                                y_label,
+                                f'@{field_name}_display'
+                                if _coerce_float_format(float_format) is not None
+                                else f'@{field_name}',
+                            ),
                         ],
                     )
                 )
@@ -400,7 +502,11 @@ def _display_series_from_axis(df: pd.DataFrame, axis_option: str) -> Tuple[pd.Se
     raise ValueError("No pitch-related columns found. Expected 'MIDI' and/or 'Pitch' and/or 'Pitch Enharmonic'.")
 
 
-def build_pitch_counts(df: pd.DataFrame, axis_option: str) -> Tuple[pd.DataFrame, str]:
+def build_pitch_counts(
+    df: pd.DataFrame,
+    axis_option: str,
+    normalize: bool = False,
+) -> Tuple[pd.DataFrame, str]:
     series, display_col = _display_series_from_axis(df, axis_option)
     counts_df = (
         pd.DataFrame({display_col: series})
@@ -409,6 +515,13 @@ def build_pitch_counts(df: pd.DataFrame, axis_option: str) -> Tuple[pd.DataFrame
         .rename('count')
         .reset_index()
     )
+    if normalize:
+        counts_df['count_raw'] = counts_df['count']
+        total = float(counts_df['count_raw'].sum())
+        if total > 0.0:
+            counts_df['count'] = counts_df['count_raw'].astype(float) / total
+        else:
+            counts_df['count'] = counts_df['count_raw'].astype(float)
     return counts_df, display_col
 
 
@@ -418,7 +531,14 @@ def _to_midi_for_sort(display_col: str, val) -> Optional[int]:
             return int(val)
         except Exception:
             return None
-    return name_to_midi(val)
+    midi_val = name_to_midi(val)
+    if midi_val is not None:
+        return midi_val
+
+    letter, acc, _ = parse_pitch_name(str(val) if val is not None else None)
+    if letter is None:
+        return None
+    return (_NOTE_TO_PC[letter] + _accidental_to_semitones(acc)) % 12
 
 
 def sort_pitch_counts(counts_df: pd.DataFrame, display_col: str, order_option: str) -> pd.DataFrame:
@@ -487,6 +607,9 @@ def plot_pitch_distribution(
     plot_height: int = 350,
     show_hover: bool = True,
     bar_color: str = '#4682B4',
+    y_label: str = 'Count',
+    title: str = 'Pitch Distribution',
+    float_format: Optional[str] = None,
 ):
     backend_opt = (backend or 'plt').strip().lower()
     x_labels = counts_df[display_col].astype(str).tolist()
@@ -494,11 +617,17 @@ def plot_pitch_distribution(
 
     if backend_opt == 'plt':
         import matplotlib.pyplot as plt
+        from matplotlib.ticker import FuncFormatter
+
         fig, ax = plt.subplots(figsize=(plot_width / 100.0, plot_height / 100.0))
         ax.bar(x_labels, y_values, color=bar_color)
         ax.set_xlabel(display_col)
-        ax.set_ylabel('Count')
-        ax.set_title('Pitch Distribution')
+        ax.set_ylabel(y_label)
+        ax.set_title(title)
+        if _coerce_float_format(float_format) is not None:
+            ax.yaxis.set_major_formatter(
+                FuncFormatter(lambda v, _pos: _format_number_for_display(v, float_format))
+            )
         plt.xticks(rotation=90)
         plt.tight_layout()
         plt.show()
@@ -510,19 +639,36 @@ def plot_pitch_distribution(
         from bokeh.models import ColumnDataSource, HoverTool
 
         output_notebook()
-        source = ColumnDataSource(dict(x=x_labels, count=y_values))
+        source_data = dict(x=x_labels, count=y_values)
+        if _coerce_float_format(float_format) is not None:
+            source_data['count_display'] = [
+                _format_number_for_display(v, float_format) for v in y_values
+            ]
+        source = ColumnDataSource(source_data)
         p = figure(
             x_range=x_labels,
             height=plot_height,
             width=plot_width,
-            title='Pitch Distribution',
+            title=title,
             toolbar_location='right',
         )
         p.vbar(x='x', top='count', width=0.9, source=source, fill_color=bar_color)
         if show_hover:
-            p.add_tools(HoverTool(tooltips=[("Pitch", "@x"), ("Count", "@count")]))
+            p.add_tools(
+                HoverTool(
+                    tooltips=[
+                        ("Pitch", "@x"),
+                        (
+                            y_label,
+                            '@count_display'
+                            if _coerce_float_format(float_format) is not None
+                            else '@count',
+                        ),
+                    ]
+                )
+            )
         p.xaxis.axis_label = display_col
-        p.yaxis.axis_label = 'Count'
+        p.yaxis.axis_label = y_label
         p.xgrid.grid_line_color = None
         p.y_range.start = 0
         show(p)
@@ -543,6 +689,8 @@ def display_pitch_distribution(
     show_table: bool = True,
     bar_color: Union[str, Sequence[str]] = '#4682B4',
     source_labels: Optional[Sequence[str]] = None,
+    normalize: bool = False,
+    float_format: Optional[str] = None,
 ) -> Union[pd.DataFrame, Mapping[str, pd.DataFrame]]:
     """
     Build and display a pitch distribution table and plot from a DataFrame.
@@ -565,12 +713,20 @@ def display_pitch_distribution(
         Enable hover tooltips (Bokeh only).
     show_table : bool
         Whether to display the counts table.
+    normalize : bool
+        When True, convert counts to per-source proportions that sum to 1.0.
+        Raw counts are preserved in a `count_raw` column.
+    float_format : str or None
+        Optional Python-style float format for displayed values, e.g. '.3f'.
+        Shorthand like '3f' is also accepted and treated as '.3f'.
 
     Returns
     -------
     pandas.DataFrame
         - Single-source call: the sorted counts DataFrame with columns
-          [display_col, 'count'] (plus sort helper columns).
+          [display_col, 'count'] (plus sort helper columns). When
+          `normalize=True`, `count` contains proportions and `count_raw`
+          stores the original counts.
         - Multi-source call: a dict mapping source label -> corresponding
           counts DataFrame.
     """
@@ -588,14 +744,23 @@ def display_pitch_distribution(
     # Single-source (backwards-compatible)
     # --------------------------
     if len(dfs) == 1:
-        counts_df, display_col = build_pitch_counts(dfs[0], pitch_axis)
+        counts_df, display_col = build_pitch_counts(
+            dfs[0],
+            pitch_axis,
+            normalize=bool(normalize),
+        )
         counts_df = sort_pitch_counts(counts_df, display_col, order_axis_by)
 
         if show_table:
+            table_df = counts_df[[display_col, 'count']].copy()
+            if normalize and 'count_raw' in counts_df.columns:
+                table_df.insert(1, 'count_raw', counts_df['count_raw'])
+                table_df = table_df.rename(columns={'count': 'share'})
+            table_df = _format_table_for_display(table_df, float_format)
             try:
-                ipy_display(counts_df[[display_col, 'count']].set_index(display_col))
+                ipy_display(table_df.set_index(display_col))
             except Exception:
-                print(counts_df[[display_col, 'count']].set_index(display_col))
+                print(table_df.set_index(display_col))
 
         # If bar_color is a list in single-source mode, just use the first color.
         if not isinstance(bar_color, str):
@@ -614,6 +779,9 @@ def display_pitch_distribution(
             plot_height=plot_height,
             show_hover=bool(show_hover),
             bar_color=bar_color_single,
+            y_label=('Proportion' if normalize else 'Count'),
+            title=_pitch_distribution_title(bool(normalize)),
+            float_format=float_format,
         )
         return counts_df
 
@@ -632,7 +800,11 @@ def display_pitch_distribution(
     display_col: Optional[str] = None
 
     for idx, (df, label) in enumerate(zip(dfs, labels)):
-        counts_df_i, display_col_i = build_pitch_counts(df, pitch_axis)
+        counts_df_i, display_col_i = build_pitch_counts(
+            df,
+            pitch_axis,
+            normalize=bool(normalize),
+        )
         if display_col is None:
             display_col = display_col_i
         elif display_col_i != display_col:
@@ -642,10 +814,15 @@ def display_pitch_distribution(
 
         if show_table:
             print(f"=== Pitch Distribution ({label}) ===")
+            table_df_i = counts_df_i[[display_col, 'count']].copy()
+            if normalize and 'count_raw' in counts_df_i.columns:
+                table_df_i.insert(1, 'count_raw', counts_df_i['count_raw'])
+                table_df_i = table_df_i.rename(columns={'count': 'share'})
+            table_df_i = _format_table_for_display(table_df_i, float_format)
             try:
-                ipy_display(counts_df_i[[display_col, 'count']].set_index(display_col))
+                ipy_display(table_df_i.set_index(display_col))
             except Exception:
-                print(counts_df_i[[display_col, 'count']].set_index(display_col))
+                print(table_df_i.set_index(display_col))
 
     if display_col is None:
         return {}
@@ -668,15 +845,16 @@ def display_pitch_distribution(
         categories=categories,
         series_values=series_values,
         series_labels=labels,
-        title='Pitch Distribution',
+        title=_pitch_distribution_title(bool(normalize)),
         x_label=display_col,
-        y_label='Count',
+        y_label=('Proportion' if normalize else 'Count'),
         backend=(backend.lower() if isinstance(backend, str) else 'plt'),
         plot_width=plot_width,
         plot_height=plot_height,
         show_hover=bool(show_hover),
         bar_color=bar_color,
         default_palette=_DEFAULT_PITCH_PALETTE,
+        float_format=float_format,
     )
 
     return per_source_counts
@@ -695,6 +873,8 @@ def _get_pitch_class_from_name(val: Any) -> Optional[str]:
 def build_pc_counts_from_names(
     name_series: pd.Series,
     pc_label: str,
+    order_axis_by: str = 'pitch by name',
+    normalize: bool = False,
 ) -> Tuple[Optional[pd.DataFrame], Optional[str]]:
     """
     Build a pitch-class counts table (C, C#, D, ...) from a series of pitch names.
@@ -710,8 +890,9 @@ def build_pc_counts_from_names(
     -------
     (counts_df, label) : (pandas.DataFrame or None, str or None)
         When successful, `counts_df` has columns [pc_label, 'count'] and is ordered
-        chromatically using 'pitch by name'. When the input series yields no valid
-        pitch classes, both elements are None.
+        according to `order_axis_by`. When `normalize=True`, `count` contains
+        per-series proportions and `count_raw` stores the original counts.
+        When the input series yields no valid pitch classes, both elements are None.
     """
     pc_series = name_series.dropna().map(_get_pitch_class_from_name).dropna()
     if pc_series.empty:
@@ -719,12 +900,22 @@ def build_pc_counts_from_names(
 
     counts_pc = pc_series.value_counts().rename('count').reset_index()
     counts_pc.columns = [pc_label, 'count']
-    counts_pc = sort_pitch_counts(counts_pc, pc_label, 'pitch by name')
+    if normalize:
+        counts_pc['count_raw'] = counts_pc['count']
+        total = float(counts_pc['count_raw'].sum())
+        if total > 0.0:
+            counts_pc['count'] = counts_pc['count_raw'].astype(float) / total
+        else:
+            counts_pc['count'] = counts_pc['count_raw'].astype(float)
+    counts_pc = sort_pitch_counts(counts_pc, pc_label, order_axis_by)
     return counts_pc, pc_label
 
 
 def build_pitch_class_distributions(
     source_df: pd.DataFrame,
+    pitch_axis: str = 'pitch enharmonic',
+    order_axis_by: Optional[str] = None,
+    normalize: bool = False,
 ) -> Tuple[
     Optional[pd.DataFrame],
     Optional[pd.DataFrame],
@@ -739,6 +930,10 @@ def build_pitch_class_distributions(
     - 'Pitch' (real names) and/or 'MIDI' to build a real pitch-class histogram.
     - 'Pitch Enharmonic' to build a written/enharmonic pitch-class histogram.
 
+    `pitch_axis` is used here only to resolve the default pitch-class ordering
+    when `order_axis_by` is not provided. This function still builds both
+    distributions when the required source columns are available.
+
     Returns
     -------
     counts_real, counts_enh, label_real, label_enh :
@@ -751,18 +946,23 @@ def build_pitch_class_distributions(
     label_real: Optional[str] = None
     counts_enh: Optional[pd.DataFrame] = None
     label_enh: Optional[str] = None
+    resolved_order = _resolve_pitch_class_order_axis(pitch_axis, order_axis_by)
 
     # Real pitch classes (collapse by sounding pitch)
     if 'Pitch' in source_df.columns:
         counts_real, label_real = build_pc_counts_from_names(
             source_df['Pitch'],
             'Pitch Class (Real)',
+            order_axis_by=resolved_order,
+            normalize=bool(normalize),
         )
     elif 'MIDI' in source_df.columns:
         real_names = source_df['MIDI'].dropna().map(midi_to_name)
         counts_real, label_real = build_pc_counts_from_names(
             real_names,
             'Pitch Class (Real from MIDI)',
+            order_axis_by=resolved_order,
+            normalize=bool(normalize),
         )
 
     # Enharmonic / written pitch classes (collapse by notation spelling)
@@ -770,6 +970,8 @@ def build_pitch_class_distributions(
         counts_enh, label_enh = build_pc_counts_from_names(
             source_df['Pitch Enharmonic'],
             'Pitch Class (Enharmonic)',
+            order_axis_by=resolved_order,
+            normalize=bool(normalize),
         )
 
     return counts_real, counts_enh, label_real, label_enh
@@ -778,6 +980,8 @@ def build_pitch_class_distributions(
 def display_pitch_class_distributions(
     source_df: pd.DataFrame,
     *more_source_dfs: pd.DataFrame,
+    pitch_axis: str = 'pitch enharmonic',
+    order_axis_by: Optional[str] = None,
     backend: str = 'bokeh',
     plot_width: int = 1200,
     plot_height: int = 450,
@@ -785,6 +989,8 @@ def display_pitch_class_distributions(
     show_table: bool = True,
     bar_color: Union[str, Sequence[str]] = '#4682B4',
     source_labels: Optional[Sequence[str]] = None,
+    normalize: bool = False,
+    float_format: Optional[str] = None,
 ) -> Mapping[str, Any]:
     """
     Build and display pitch-class distributions (real + enharmonic) from a notes DataFrame.
@@ -793,6 +999,13 @@ def display_pitch_class_distributions(
     ----------
     source_df : pandas.DataFrame
         Notes DataFrame with at least one of: 'MIDI', 'Pitch', 'Pitch Enharmonic'.
+    pitch_axis : str
+        Used to resolve the default pitch-class x-axis ordering when
+        `order_axis_by` is not provided. This function still displays both
+        real and enharmonic pitch-class distributions when available.
+    order_axis_by : str or None
+        Sort order for pitch-class categories. If omitted, a default is chosen
+        from `pitch_axis`.
     backend : {'plt', 'bokeh'}
         Plotting backend for the bar charts.
     plot_width, plot_height : int
@@ -801,6 +1014,12 @@ def display_pitch_class_distributions(
         Enable hover tooltips (Bokeh backend only).
     show_table : bool
         Whether to display the counts tables.
+    normalize : bool
+        When True, convert counts to per-source proportions that sum to 1.0.
+        Raw counts are preserved in a `count_raw` column.
+    float_format : str or None
+        Optional Python-style float format for displayed values, e.g. '.3f'.
+        Shorthand like '3f' is also accepted and treated as '.3f'.
 
     Returns
     -------
@@ -822,6 +1041,8 @@ def display_pitch_class_distributions(
     """
     # Allow either multiple positional DataFrames or a single tuple/list of
     # DataFrames passed as the first argument.
+    resolved_order = _resolve_pitch_class_order_axis(pitch_axis, order_axis_by)
+
     if not more_source_dfs and not isinstance(source_df, pd.DataFrame):
         if isinstance(source_df, (list, tuple)):
             dfs = list(source_df)
@@ -834,18 +1055,27 @@ def display_pitch_class_distributions(
     # Single-source (backwards-compatible)
     # --------------------------
     if len(dfs) == 1:
-        counts_real, counts_enh, label_real, label_enh = build_pitch_class_distributions(dfs[0])
+        counts_real, counts_enh, label_real, label_enh = build_pitch_class_distributions(
+            dfs[0],
+            pitch_axis=pitch_axis,
+            order_axis_by=resolved_order,
+            normalize=bool(normalize),
+        )
 
         any_done = False
 
         if counts_real is not None and label_real is not None:
             any_done = True
-            print("=== Pitch Class Distribution (Real) ===")
+            print(f"=== {_pitch_class_distribution_title('Real', bool(normalize))} ===")
             if show_table:
+                table_real = counts_real.copy()
+                if normalize and 'count_raw' in table_real.columns:
+                    table_real = table_real.rename(columns={'count': 'share'})
+                table_real = _format_table_for_display(table_real, float_format)
                 try:
-                    ipy_display(counts_real.set_index(label_real).T)
+                    ipy_display(table_real.set_index(label_real).T)
                 except Exception:
-                    print(counts_real.set_index(label_real).T)
+                    print(table_real.set_index(label_real).T)
 
             if not isinstance(bar_color, str):
                 try:
@@ -863,16 +1093,23 @@ def display_pitch_class_distributions(
                 plot_height=plot_height,
                 show_hover=show_hover,
                 bar_color=bar_color_single,
+                y_label=('Proportion' if normalize else 'Count'),
+                title=_pitch_class_distribution_title('Real', bool(normalize)),
+                float_format=float_format,
             )
 
         if counts_enh is not None and label_enh is not None:
             any_done = True
-            print("=== Pitch Class Distribution (Enharmonic / Written) ===")
+            print(f"=== {_pitch_class_distribution_title('Enharmonic / Written', bool(normalize))} ===")
             if show_table:
+                table_enh = counts_enh.copy()
+                if normalize and 'count_raw' in table_enh.columns:
+                    table_enh = table_enh.rename(columns={'count': 'share'})
+                table_enh = _format_table_for_display(table_enh, float_format)
                 try:
-                    ipy_display(counts_enh.set_index(label_enh).T)
+                    ipy_display(table_enh.set_index(label_enh).T)
                 except Exception:
-                    print(counts_enh.set_index(label_enh).T)
+                    print(table_enh.set_index(label_enh).T)
 
             if not isinstance(bar_color, str):
                 try:
@@ -890,6 +1127,9 @@ def display_pitch_class_distributions(
                 plot_height=plot_height,
                 show_hover=show_hover,
                 bar_color=bar_color_single,
+                y_label=('Proportion' if normalize else 'Count'),
+                title=_pitch_class_distribution_title('Enharmonic / Written', bool(normalize)),
+                float_format=float_format,
             )
 
         if not any_done:
@@ -919,7 +1159,12 @@ def display_pitch_class_distributions(
     label_enh_main: Optional[str] = None
 
     for df, lbl in zip(dfs, labels):
-        counts_real, counts_enh, label_real, label_enh = build_pitch_class_distributions(df)
+        counts_real, counts_enh, label_real, label_enh = build_pitch_class_distributions(
+            df,
+            pitch_axis=pitch_axis,
+            order_axis_by=resolved_order,
+            normalize=bool(normalize),
+        )
 
         # Real
         if counts_real is not None and label_real is not None:
@@ -946,18 +1191,22 @@ def display_pitch_class_distributions(
             for lbl in labels:
                 if lbl not in real_counts_by_label:
                     continue
-                print(f"=== Pitch Class Distribution (Real) — {lbl} ===")
+                print(f"=== {_pitch_class_distribution_title('Real', bool(normalize))} - {lbl} ===")
+                table_real = real_counts_by_label[lbl].copy()
+                if normalize and 'count_raw' in table_real.columns:
+                    table_real = table_real.rename(columns={'count': 'share'})
+                table_real = _format_table_for_display(table_real, float_format)
                 try:
-                    ipy_display(real_counts_by_label[lbl].set_index(label_real_main).T)
+                    ipy_display(table_real.set_index(label_real_main).T)
                 except Exception:
-                    print(real_counts_by_label[lbl].set_index(label_real_main).T)
+                    print(table_real.set_index(label_real_main).T)
 
         all_vals_real = pd.concat(
             [df[label_real_main] for df in real_counts_by_label.values()],
             ignore_index=True,
         ).drop_duplicates()
         tmp_real = pd.DataFrame({label_real_main: all_vals_real, 'count': [0] * len(all_vals_real)})
-        tmp_real_sorted = sort_pitch_counts(tmp_real, label_real_main, 'pitch by name')
+        tmp_real_sorted = sort_pitch_counts(tmp_real, label_real_main, resolved_order)
         categories_real = tmp_real_sorted[label_real_main].tolist()
 
         series_values_real: list[list[float]] = []
@@ -973,15 +1222,16 @@ def display_pitch_class_distributions(
             categories=categories_real,
             series_values=series_values_real,
             series_labels=labels,
-            title='Pitch Class Distribution (Real)',
+            title=_pitch_class_distribution_title('Real', bool(normalize)),
             x_label=label_real_main,
-            y_label='Count',
+            y_label=('Proportion' if normalize else 'Count'),
             backend=backend_opt,
             plot_width=plot_width,
             plot_height=plot_height,
             show_hover=bool(show_hover),
             bar_color=bar_color,
             default_palette=_DEFAULT_PITCH_PALETTE,
+            float_format=float_format,
         )
 
     # Enharmonic pitch-class tables + combined plot
@@ -990,18 +1240,22 @@ def display_pitch_class_distributions(
             for lbl in labels:
                 if lbl not in enh_counts_by_label:
                     continue
-                print(f"=== Pitch Class Distribution (Enharmonic / Written) — {lbl} ===")
+                print(f"=== {_pitch_class_distribution_title('Enharmonic / Written', bool(normalize))} - {lbl} ===")
+                table_enh = enh_counts_by_label[lbl].copy()
+                if normalize and 'count_raw' in table_enh.columns:
+                    table_enh = table_enh.rename(columns={'count': 'share'})
+                table_enh = _format_table_for_display(table_enh, float_format)
                 try:
-                    ipy_display(enh_counts_by_label[lbl].set_index(label_enh_main).T)
+                    ipy_display(table_enh.set_index(label_enh_main).T)
                 except Exception:
-                    print(enh_counts_by_label[lbl].set_index(label_enh_main).T)
+                    print(table_enh.set_index(label_enh_main).T)
 
         all_vals_enh = pd.concat(
             [df[label_enh_main] for df in enh_counts_by_label.values()],
             ignore_index=True,
         ).drop_duplicates()
         tmp_enh = pd.DataFrame({label_enh_main: all_vals_enh, 'count': [0] * len(all_vals_enh)})
-        tmp_enh_sorted = sort_pitch_counts(tmp_enh, label_enh_main, 'pitch by name')
+        tmp_enh_sorted = sort_pitch_counts(tmp_enh, label_enh_main, resolved_order)
         categories_enh = tmp_enh_sorted[label_enh_main].tolist()
 
         series_values_enh: list[list[float]] = []
@@ -1016,15 +1270,16 @@ def display_pitch_class_distributions(
             categories=categories_enh,
             series_values=series_values_enh,
             series_labels=labels,
-            title='Pitch Class Distribution (Enharmonic / Written)',
+            title=_pitch_class_distribution_title('Enharmonic / Written', bool(normalize)),
             x_label=label_enh_main,
-            y_label='Count',
+            y_label=('Proportion' if normalize else 'Count'),
             backend=backend_opt,
             plot_width=plot_width,
             plot_height=plot_height,
             show_hover=bool(show_hover),
             bar_color=bar_color,
             default_palette=_DEFAULT_PITCH_PALETTE,
+            float_format=float_format,
         )
 
     if not real_counts_by_label and not enh_counts_by_label:
@@ -1041,7 +1296,8 @@ def display_pitch_class_distributions(
 def build_duration_counts(
     df: pd.DataFrame,
     drop_zero: bool = True,
-    round_decimals: Optional[int] = 4
+    round_decimals: Optional[int] = 4,
+    normalize: bool = False,
 ) -> Tuple[pd.DataFrame, str]:
     # Detect duration column
     duration_col = None
@@ -1070,6 +1326,13 @@ def build_duration_counts(
     counts_df = counts.rename('count').reset_index()
     # Ensure columns are named correctly (reset_index names the index column as 'index' if name is None)
     counts_df.columns = [duration_col, 'count']
+    if normalize:
+        counts_df['count_raw'] = counts_df['count']
+        total = float(counts_df['count_raw'].sum())
+        if total > 0.0:
+            counts_df['count'] = counts_df['count_raw'].astype(float) / total
+        else:
+            counts_df['count'] = counts_df['count_raw'].astype(float)
     
     return counts_df, duration_col
 
@@ -1082,6 +1345,9 @@ def plot_duration_distribution(
     plot_height: int = 350,
     show_hover: bool = True,
     bar_color: str = '#2E8B57',
+    y_label: str = 'Count',
+    title: str = 'Duration Distribution',
+    float_format: Optional[str] = None,
 ):
     backend_opt = (backend or 'plt').strip().lower()
     x_labels = counts_df[display_col].astype(str).tolist()
@@ -1089,11 +1355,17 @@ def plot_duration_distribution(
 
     if backend_opt == 'plt':
         import matplotlib.pyplot as plt
+        from matplotlib.ticker import FuncFormatter
+
         fig, ax = plt.subplots(figsize=(plot_width / 100.0, plot_height / 100.0))
         ax.bar(x_labels, y_values, color=bar_color)
         ax.set_xlabel(display_col)
-        ax.set_ylabel('Count')
-        ax.set_title('Duration Distribution')
+        ax.set_ylabel(y_label)
+        ax.set_title(title)
+        if _coerce_float_format(float_format) is not None:
+            ax.yaxis.set_major_formatter(
+                FuncFormatter(lambda v, _pos: _format_number_for_display(v, float_format))
+            )
         plt.xticks(rotation=90)
         plt.tight_layout()
         plt.show()
@@ -1104,21 +1376,38 @@ def plot_duration_distribution(
         from bokeh.io import output_notebook
         from bokeh.models import ColumnDataSource, HoverTool
         output_notebook()
-        
-        source = ColumnDataSource(dict(x=x_labels, count=y_values))
+
+        source_data = dict(x=x_labels, count=y_values)
+        if _coerce_float_format(float_format) is not None:
+            source_data['count_display'] = [
+                _format_number_for_display(v, float_format) for v in y_values
+            ]
+        source = ColumnDataSource(source_data)
         p = figure(
             x_range=x_labels,
             height=plot_height,
             width=plot_width,
-            title='Duration Distribution',
+            title=title,
             toolbar_location='right',
         )
         p.vbar(x='x', top='count', width=0.9, source=source, fill_color=bar_color)
         if show_hover:
-             p.add_tools(HoverTool(tooltips=[("Duration", "@x"), ("Count", "@count")]))
+             p.add_tools(
+                 HoverTool(
+                     tooltips=[
+                         ("Duration", "@x"),
+                         (
+                             y_label,
+                             '@count_display'
+                             if _coerce_float_format(float_format) is not None
+                             else '@count',
+                         ),
+                     ]
+                 )
+             )
         
         p.xaxis.axis_label = display_col
-        p.yaxis.axis_label = 'Count'
+        p.yaxis.axis_label = y_label
         p.xgrid.grid_line_color = None
         p.y_range.start = 0
         show(p)
@@ -1139,6 +1428,8 @@ def display_duration_distribution(
     show_table: bool = True,
     bar_color: Union[str, Sequence[str]] = '#2E8B57',
     source_labels: Optional[Sequence[str]] = None,
+    normalize: bool = False,
+    float_format: Optional[str] = None,
 ) -> Union[pd.DataFrame, Mapping[str, pd.DataFrame]]:
     """
     Build and display a duration distribution table and plot from a DataFrame.
@@ -1161,6 +1452,12 @@ def display_duration_distribution(
         Enable hover tooltips (Bokeh only).
     show_table : bool
         Whether to display the counts table.
+    normalize : bool
+        When True, convert counts to per-source proportions that sum to 1.0.
+        Raw counts are preserved in a `count_raw` column.
+    float_format : str or None
+        Optional Python-style float format for displayed values, e.g. '.3f'.
+        Shorthand like '3f' is also accepted and treated as '.3f'.
 
     Returns
     -------
@@ -1183,13 +1480,23 @@ def display_duration_distribution(
     # Single-source (backwards-compatible)
     # --------------------------
     if len(dfs) == 1:
-        counts_df, display_col = build_duration_counts(dfs[0], drop_zero, round_decimals)
+        counts_df, display_col = build_duration_counts(
+            dfs[0],
+            drop_zero,
+            round_decimals,
+            normalize=bool(normalize),
+        )
 
         if show_table:
+            table_df = counts_df[[display_col, 'count']].copy()
+            if normalize and 'count_raw' in counts_df.columns:
+                table_df.insert(1, 'count_raw', counts_df['count_raw'])
+                table_df = table_df.rename(columns={'count': 'share'})
+            table_df = _format_table_for_display(table_df, float_format)
             try:
-                ipy_display(counts_df[[display_col, 'count']].set_index(display_col))
+                ipy_display(table_df.set_index(display_col))
             except Exception:
-                print(counts_df[[display_col, 'count']].set_index(display_col))
+                print(table_df.set_index(display_col))
 
         if not isinstance(bar_color, str):
             try:
@@ -1207,6 +1514,9 @@ def display_duration_distribution(
             plot_height=plot_height,
             show_hover=bool(show_hover),
             bar_color=bar_color_single,
+            y_label=('Proportion' if normalize else 'Count'),
+            title=_duration_distribution_title(bool(normalize)),
+            float_format=float_format,
         )
 
         return counts_df
@@ -1226,7 +1536,12 @@ def display_duration_distribution(
     display_col: Optional[str] = None
 
     for df, label in zip(dfs, labels):
-        counts_df_i, display_col_i = build_duration_counts(df, drop_zero, round_decimals)
+        counts_df_i, display_col_i = build_duration_counts(
+            df,
+            drop_zero,
+            round_decimals,
+            normalize=bool(normalize),
+        )
         if display_col is None:
             display_col = display_col_i
         elif display_col_i != display_col:
@@ -1235,10 +1550,15 @@ def display_duration_distribution(
 
         if show_table:
             print(f"=== Duration Distribution ({label}) ===")
+            table_df_i = counts_df_i[[display_col, 'count']].copy()
+            if normalize and 'count_raw' in counts_df_i.columns:
+                table_df_i.insert(1, 'count_raw', counts_df_i['count_raw'])
+                table_df_i = table_df_i.rename(columns={'count': 'share'})
+            table_df_i = _format_table_for_display(table_df_i, float_format)
             try:
-                ipy_display(counts_df_i[[display_col, 'count']].set_index(display_col))
+                ipy_display(table_df_i.set_index(display_col))
             except Exception:
-                print(counts_df_i[[display_col, 'count']].set_index(display_col))
+                print(table_df_i.set_index(display_col))
 
     if display_col is None:
         return {}
@@ -1262,15 +1582,16 @@ def display_duration_distribution(
         categories=categories,
         series_values=series_values,
         series_labels=labels,
-        title='Duration Distribution',
+        title=_duration_distribution_title(bool(normalize)),
         x_label=display_col,
-        y_label='Count',
+        y_label=('Proportion' if normalize else 'Count'),
         backend=(backend.lower() if isinstance(backend, str) else 'plt'),
         plot_width=plot_width,
         plot_height=plot_height,
         show_hover=bool(show_hover),
         bar_color=bar_color,
         default_palette=_DEFAULT_DURATION_PALETTE,
+        float_format=float_format,
     )
 
     return per_source_counts
@@ -1607,15 +1928,541 @@ def display_filtered_piano_roll(
     return selection
 
 
+def _summarize_monophony_segments(
+    notes: pd.DataFrame,
+    *,
+    onset_col: str,
+    duration_col: str,
+) -> dict[str, Any]:
+    eps = 1e-12
+    check = notes.copy()
+    check["_start"] = pd.to_numeric(check[onset_col], errors="coerce")
+    check["_dur"] = pd.to_numeric(check[duration_col], errors="coerce")
+    check["_end"] = check["_start"] + check["_dur"]
+    check = check[
+        check["_start"].notnull()
+        & check["_end"].notnull()
+        & (check["_end"] > check["_start"] + eps)
+    ].copy()
+
+    if check.empty:
+        return {
+            "note_count": 0,
+            "valid_note_count": 0,
+            "is_monophonic": True,
+            "max_polyphony": 0,
+            "num_overlap_spans": 0,
+            "first_overlap": None,
+        }
+
+    events: list[tuple[float, int]] = []
+    for row in check[["_start", "_end"]].itertuples(index=False):
+        events.append((float(row[0]), 0))
+        events.append((float(row[1]), 1))
+    events.sort(key=lambda item: (item[0], item[1]))
+
+    active_count = 0
+    max_polyphony = 0
+    num_overlap_spans = 0
+    first_overlap: Optional[dict[str, Any]] = None
+    last_t: Optional[float] = None
+
+    for t, kind in events:
+        if last_t is not None and t > last_t + eps:
+            max_polyphony = max(max_polyphony, active_count)
+            if active_count > 1:
+                num_overlap_spans += 1
+                if first_overlap is None:
+                    first_overlap = {
+                        "start": last_t,
+                        "end": t,
+                        "active_count": active_count,
+                    }
+        if kind == 0:
+            active_count += 1
+        else:
+            active_count = max(0, active_count - 1)
+        last_t = t
+
+    return {
+        "note_count": int(len(notes)),
+        "valid_note_count": int(len(check)),
+        "is_monophonic": num_overlap_spans == 0,
+        "max_polyphony": max_polyphony,
+        "num_overlap_spans": num_overlap_spans,
+        "first_overlap": first_overlap,
+    }
+
+
+def check_monophonic_input(
+    notes: pd.DataFrame,
+    *,
+    label: str = "selection",
+    onset_candidates: Sequence[str] = ("Global Onset", "Onset", "global_onset", "Local Onset", "local_onset"),
+    duration_candidates: Sequence[str] = ("Duration", "duration"),
+    voice_candidates: Sequence[str] = ("Voice", "voice"),
+    by_voice: bool = True,
+    raise_on_polyphony: bool = False,
+) -> Mapping[str, Any]:
+    """
+    Check whether the analyzed note stream is monophonic.
+
+    When `by_voice=True` and a matching voice column exists, the check is
+    performed separately for each voice. This allows multiple voices to
+    overlap in time while still enforcing monophony within each individual
+    melodic stream.
+
+    Returns a summary dict with per-group diagnostics. If
+    `raise_on_polyphony=True`, a `ValueError` is raised when overlap is found.
+    """
+    if notes is None or len(notes) == 0:
+        return {
+            "label": label,
+            "is_monophonic": True,
+            "checked_by_voice": False,
+            "onset_column": None,
+            "duration_column": None,
+            "voice_column": None,
+            "note_count": 0,
+            "valid_note_count": 0,
+            "max_polyphony": 0,
+            "num_overlap_spans": 0,
+            "first_overlap": None,
+            "groups": [],
+        }
+
+    onset_col = None
+    for c in onset_candidates:
+        if c in notes.columns:
+            onset_col = c
+            break
+    if onset_col is None:
+        raise ValueError(f"Could not find an onset column. Tried: {list(onset_candidates)}")
+
+    duration_col = None
+    for c in duration_candidates:
+        if c in notes.columns:
+            duration_col = c
+            break
+    if duration_col is None:
+        raise ValueError(f"Could not find a duration column. Tried: {list(duration_candidates)}")
+
+    voice_col = None
+    for c in voice_candidates:
+        if c in notes.columns:
+            voice_col = c
+            break
+
+    use_voice_groups = bool(by_voice and voice_col is not None)
+    if use_voice_groups:
+        grouped_iter = list(notes.groupby(voice_col, dropna=False))
+    else:
+        grouped_iter = [(None, notes)]
+
+    group_summaries: list[dict[str, Any]] = []
+    first_overlap: Optional[dict[str, Any]] = None
+    max_polyphony = 0
+    num_overlap_spans = 0
+    valid_note_count = 0
+
+    for group_name, group_df in grouped_iter:
+        summary = _summarize_monophony_segments(
+            group_df,
+            onset_col=onset_col,
+            duration_col=duration_col,
+        )
+        group_summary = {
+            "group": group_name,
+            **summary,
+        }
+        group_summaries.append(group_summary)
+        valid_note_count += int(summary["valid_note_count"])
+        max_polyphony = max(max_polyphony, int(summary["max_polyphony"]))
+        num_overlap_spans += int(summary["num_overlap_spans"])
+        if first_overlap is None and summary["first_overlap"] is not None:
+            first_overlap = {
+                "group": group_name,
+                **dict(summary["first_overlap"]),
+            }
+
+    is_monophonic = all(bool(item["is_monophonic"]) for item in group_summaries)
+    result = {
+        "label": label,
+        "is_monophonic": is_monophonic,
+        "checked_by_voice": use_voice_groups,
+        "onset_column": onset_col,
+        "duration_column": duration_col,
+        "voice_column": voice_col,
+        "note_count": int(len(notes)),
+        "valid_note_count": valid_note_count,
+        "max_polyphony": max_polyphony,
+        "num_overlap_spans": num_overlap_spans,
+        "first_overlap": first_overlap,
+        "groups": group_summaries,
+    }
+
+    if raise_on_polyphony and not is_monophonic:
+        overlap = first_overlap or {}
+        start = overlap.get("start")
+        end = overlap.get("end")
+        group_name = overlap.get("group")
+        scope = f"voice {group_name!r}" if use_voice_groups else "the analyzed stream"
+        raise ValueError(
+            f"Non-monophonic input detected for {label!r}: overlap found in {scope}. "
+            f"First overlap span: [{start}, {end}] with max polyphony {max_polyphony}."
+        )
+
+    return result
+
+
+def melodic_interval_distribution(
+    notes: pd.DataFrame,
+    *,
+    label: str = "selection",
+    onset_candidates: Sequence[str] = ("Global Onset", "Onset", "global_onset", "Local Onset", "local_onset"),
+    duration_candidates: Sequence[str] = ("Duration", "duration"),
+    midi_candidates: Sequence[str] = ("MIDI", "midi"),
+    voice_candidates: Sequence[str] = ("Voice", "voice"),
+    by_voice: bool = True,
+    require_monophonic: bool = True,
+) -> Tuple[pd.DataFrame, pd.Series]:
+    """
+    Compute melodic interval distribution from successive notes.
+
+    Intervals are measured in semitones between consecutive notes. When
+    `by_voice=True` and a matching voice column exists, successive intervals
+    are computed separately per voice and pooled into one distribution.
+
+    If `require_monophonic=True`, each analyzed stream must be monophonic.
+    This uses `check_monophonic_input(...)` and raises when overlaps are
+    detected in the active analysis stream(s).
+    """
+    if notes is None or len(notes) == 0:
+        raise ValueError("Empty notes selection.")
+
+    df = notes.copy()
+
+    onset_col = None
+    for c in onset_candidates:
+        if c in df.columns:
+            onset_col = c
+            break
+    midi_col = None
+    for c in midi_candidates:
+        if c in df.columns:
+            midi_col = c
+            break
+    duration_col = None
+    for c in duration_candidates:
+        if c in df.columns:
+            duration_col = c
+            break
+    voice_col = None
+    for c in voice_candidates:
+        if c in df.columns:
+            voice_col = c
+            break
+
+    if onset_col is None or midi_col is None:
+        raise ValueError("Need onset and MIDI columns for interval analysis.")
+
+    df["_onset"] = pd.to_numeric(df[onset_col], errors="coerce")
+    df["_midi"] = pd.to_numeric(df[midi_col], errors="coerce")
+    df = df[df["_onset"].notnull() & df["_midi"].notnull()].copy()
+    if df.empty:
+        raise ValueError("No valid onset/MIDI rows after filtering.")
+
+    if require_monophonic:
+        if duration_col is None:
+            raise ValueError(
+                "Could not verify monophony safely because no duration column was found. "
+                f"Tried: {list(duration_candidates)}"
+            )
+        check_monophonic_input(
+            df,
+            label=label,
+            onset_candidates=(onset_col,),
+            duration_candidates=(duration_col,),
+            voice_candidates=((voice_col,) if voice_col is not None else ()),
+            by_voice=bool(by_voice),
+            raise_on_polyphony=True,
+        )
+
+    if by_voice and voice_col is not None and voice_col in df.columns:
+        groups_iter = list(df.groupby(voice_col, dropna=False))
+    else:
+        groups_iter = [(None, df)]
+
+    interval_values: list[float] = []
+    for _group_name, group_df in groups_iter:
+        g = group_df.sort_values(["_onset", "_midi"], kind="mergesort").reset_index(drop=True)
+        if len(g) < 2:
+            continue
+        diffs = g["_midi"].diff().dropna()
+        interval_values.extend(float(v) for v in diffs.tolist())
+
+    intervals = pd.Series(interval_values, name="interval_semitones", dtype=float)
+
+    def label_interval(semitones: float) -> str:
+        """
+        Map semitone distance to a signed interval label like +M3 or -P8.
+
+        Compound intervals are folded into octaves and keep their direction.
+        """
+        if pd.isna(semitones):
+            return "?"
+
+        if semitones > 0:
+            sign = "+"
+        elif semitones < 0:
+            sign = "-"
+        else:
+            sign = ""
+
+        n = int(round(abs(float(semitones))))
+        if n == 0:
+            return f"{sign}P1"
+
+        base_map = {
+            0: ("P", 1),
+            1: ("m", 2),
+            2: ("M", 2),
+            3: ("m", 3),
+            4: ("M", 3),
+            5: ("P", 4),
+            6: ("d", 5),
+            7: ("P", 5),
+            8: ("m", 6),
+            9: ("M", 6),
+            10: ("m", 7),
+            11: ("M", 7),
+        }
+
+        octaves, rem = divmod(n, 12)
+        if rem == 0:
+            quality, simple_number = ("P", 1)
+        else:
+            quality, simple_number = base_map.get(rem, (None, None))
+
+        if quality is None or simple_number is None:
+            return f"{sign}{n} st"
+
+        interval_number = simple_number + 7 * octaves
+        return f"{sign}{quality}{interval_number}"
+
+    if intervals.empty:
+        dist_df = pd.DataFrame(
+            columns=["interval", "count", "mean_semitones"]
+        )
+        return dist_df, intervals
+
+    labels = intervals.map(label_interval)
+    order = intervals.round().astype(int)
+
+    dist_df = (
+        pd.DataFrame({"interval": labels, "order": order})
+        .groupby("interval")
+        .agg(count=("order", "size"), mean_semitones=("order", "mean"))
+        .reset_index()
+    )
+    dist_df = dist_df.sort_values("mean_semitones").reset_index(drop=True)
+
+    return dist_df, intervals
+
+
+def _melodic_interval_distribution_title(normalize: bool) -> str:
+    if normalize:
+        return "Melodic Interval Distribution (Normalized)"
+    return "Melodic Interval Distribution"
+
+
+def _normalize_melodic_interval_counts(counts_df: pd.DataFrame, normalize: bool) -> pd.DataFrame:
+    out = counts_df.copy()
+    if normalize:
+        out["count_raw"] = out["count"]
+        total = float(out["count_raw"].sum())
+        if total > 0.0:
+            out["count"] = out["count_raw"].astype(float) / total
+        else:
+            out["count"] = out["count_raw"].astype(float)
+    return out
+
+
+def _sort_melodic_interval_counts(counts_df: pd.DataFrame) -> pd.DataFrame:
+    out = counts_df.copy()
+    if "mean_semitones" in out.columns:
+        return out.sort_values(["mean_semitones", "interval"], kind="mergesort").reset_index(drop=True)
+    return out.sort_values(["interval"], kind="mergesort").reset_index(drop=True)
+
+
+def display_melodic_interval_distribution(
+    source_df: pd.DataFrame,
+    *more_source_dfs: pd.DataFrame,
+    source_labels: Optional[Sequence[str]] = None,
+    onset_candidates: Sequence[str] = ("Global Onset", "Onset", "global_onset", "Local Onset", "local_onset"),
+    duration_candidates: Sequence[str] = ("Duration", "duration"),
+    midi_candidates: Sequence[str] = ("MIDI", "midi"),
+    voice_candidates: Sequence[str] = ("Voice", "voice"),
+    by_voice: bool = True,
+    require_monophonic: bool = True,
+    normalize: bool = False,
+    backend: str = "plt",
+    plot_width: int = 900,
+    plot_height: int = 350,
+    show_hover: bool = True,
+    show_table: bool = True,
+    bar_color: Union[str, Sequence[str]] = "#4682B4",
+    float_format: Optional[str] = None,
+) -> Union[pd.DataFrame, Mapping[str, pd.DataFrame]]:
+    """
+    Build and display a melodic interval distribution table and plot.
+
+    Single-source calls return one interval distribution DataFrame. Multi-source
+    calls return a mapping of source label -> interval distribution DataFrame.
+    When `normalize=True`, counts are converted to per-source proportions and
+    raw counts are preserved in `count_raw`.
+    """
+    if not more_source_dfs and not isinstance(source_df, pd.DataFrame):
+        if isinstance(source_df, (list, tuple)):
+            dfs = list(source_df)
+        else:
+            dfs = [source_df]
+    else:
+        dfs = [source_df] + list(more_source_dfs)
+
+    if source_labels is not None:
+        labels = list(source_labels)[:len(dfs)]
+        if len(labels) < len(dfs):
+            labels.extend(_guess_labels_for_dfs(dfs[len(labels):], default_prefix="Source"))
+    else:
+        labels = _guess_labels_for_dfs(dfs, default_prefix="Source")
+
+    if len(dfs) == 1:
+        counts_df, _intervals = melodic_interval_distribution(
+            dfs[0],
+            label=labels[0],
+            onset_candidates=onset_candidates,
+            duration_candidates=duration_candidates,
+            midi_candidates=midi_candidates,
+            voice_candidates=voice_candidates,
+            by_voice=bool(by_voice),
+            require_monophonic=bool(require_monophonic),
+        )
+        counts_df = _normalize_melodic_interval_counts(counts_df, bool(normalize))
+        counts_df = _sort_melodic_interval_counts(counts_df)
+
+        if show_table:
+            table_df = counts_df[["interval", "count", "mean_semitones"]].copy()
+            if normalize and "count_raw" in counts_df.columns:
+                table_df.insert(1, "count_raw", counts_df["count_raw"])
+                table_df = table_df.rename(columns={"count": "share"})
+            table_df = _format_table_for_display(table_df, float_format)
+            try:
+                ipy_display(table_df.set_index("interval"))
+            except Exception:
+                print(table_df.set_index("interval"))
+
+        if not isinstance(bar_color, str):
+            try:
+                bar_color_single = str(list(bar_color)[0])  # type: ignore[arg-type]
+            except Exception:
+                bar_color_single = "#4682B4"
+        else:
+            bar_color_single = bar_color
+
+        plot_pitch_distribution(
+            counts_df,
+            "interval",
+            backend=(backend.lower() if isinstance(backend, str) else "plt"),
+            plot_width=plot_width,
+            plot_height=plot_height,
+            show_hover=bool(show_hover),
+            bar_color=bar_color_single,
+            y_label=("Proportion" if normalize else "Count"),
+            title=_melodic_interval_distribution_title(bool(normalize)),
+            float_format=float_format,
+        )
+        return counts_df
+
+    per_source_counts: dict[str, pd.DataFrame] = {}
+    category_mean: dict[str, float] = {}
+
+    for df, label in zip(dfs, labels):
+        counts_df_i, _intervals_i = melodic_interval_distribution(
+            df,
+            label=label,
+            onset_candidates=onset_candidates,
+            duration_candidates=duration_candidates,
+            midi_candidates=midi_candidates,
+            voice_candidates=voice_candidates,
+            by_voice=bool(by_voice),
+            require_monophonic=bool(require_monophonic),
+        )
+        counts_df_i = _normalize_melodic_interval_counts(counts_df_i, bool(normalize))
+        counts_df_i = _sort_melodic_interval_counts(counts_df_i)
+        per_source_counts[label] = counts_df_i
+
+        if "mean_semitones" in counts_df_i.columns:
+            for row in counts_df_i[["interval", "mean_semitones"]].itertuples(index=False):
+                if row[0] not in category_mean:
+                    category_mean[str(row[0])] = float(row[1])
+
+        if show_table:
+            print(f"=== Melodic Interval Distribution ({label}) ===")
+            table_df_i = counts_df_i[["interval", "count", "mean_semitones"]].copy()
+            if normalize and "count_raw" in counts_df_i.columns:
+                table_df_i.insert(1, "count_raw", counts_df_i["count_raw"])
+                table_df_i = table_df_i.rename(columns={"count": "share"})
+            table_df_i = _format_table_for_display(table_df_i, float_format)
+            try:
+                ipy_display(table_df_i.set_index("interval"))
+            except Exception:
+                print(table_df_i.set_index("interval"))
+
+    if not per_source_counts:
+        return {}
+
+    categories = sorted(
+        category_mean.keys(),
+        key=lambda k: (category_mean.get(k, 0.0), k),
+    )
+
+    series_values: list[list[float]] = []
+    for label in labels:
+        df_i = per_source_counts[label].set_index("interval")["count"]
+        series_values.append([float(df_i.get(cat, 0.0)) for cat in categories])
+
+    _plot_multi_bar(
+        categories=categories,
+        series_values=series_values,
+        series_labels=labels,
+        title=_melodic_interval_distribution_title(bool(normalize)),
+        x_label="interval",
+        y_label=("Proportion" if normalize else "Count"),
+        backend=(backend.lower() if isinstance(backend, str) else "plt"),
+        plot_width=plot_width,
+        plot_height=plot_height,
+        show_hover=bool(show_hover),
+        bar_color=bar_color,
+        default_palette=_DEFAULT_PITCH_PALETTE,
+        float_format=float_format,
+    )
+
+    return per_source_counts
+
+
 def display_successive_pitch_transition_heatmaps(
     source: Union[pd.DataFrame, Sequence[pd.DataFrame]],
     *,
     source_labels: Optional[Sequence[str]] = None,
     onset_candidates: Sequence[str] = ("Global Onset", "Onset", "global_onset", "Local Onset", "local_onset"),
+    duration_candidates: Sequence[str] = ("Duration", "duration"),
     midi_candidates: Sequence[str] = ("MIDI", "midi"),
     voice_candidates: Sequence[str] = ("Voice", "voice"),
     by_voice: bool = True,
-    normalize: Optional[str] = None,  # None/'count' | 'row' | 'all'
+    normalize: Union[bool, str, None] = False,  # False/'count' | True/'row' | 'column' | 'all'
+    normalize_rows: Optional[bool] = None,
+    require_monophonic: bool = True,
     max_pitches: Optional[int] = None,
     backend: str = "bokeh",
     plot_width: int = 1000,
@@ -1623,6 +2470,7 @@ def display_successive_pitch_transition_heatmaps(
     plot_height_pc: int = 450,
     show_hover: bool = True,
     show_table: bool = True,
+    float_format: Optional[str] = None,
 ):
     """
     Build and visualize successive-pitch transition matrices (bigram heatmaps):
@@ -1632,9 +2480,27 @@ def display_successive_pitch_transition_heatmaps(
     The matrix is: rows = previous, cols = next.
 
     normalize:
-      - None / 'count': raw counts
-      - 'row': row-normalized probabilities (P(next | prev))
-      - 'all': global-normalized probabilities (P(prev,next))
+      Primary normalization control:
+      - `False`, `None`, or 'count': raw counts (no normalization)
+      - `True` or 'row': row-normalized probabilities (P(next | prev))
+      - 'column': column-normalized probabilities (P(prev | next))
+      - 'all': global-normalized probabilities over the full heatmap
+      Default is `False` (raw counts).
+    normalize_rows:
+      Backwards-compatible boolean alias.
+      - `True` forces row-normalized probabilities.
+      - `False` forces raw counts.
+      - `None` leaves `normalize` unchanged.
+      If provided, this takes precedence over `normalize`.
+    require_monophonic:
+      If True, validate that each analyzed stream is monophonic before
+      building bigrams. When `by_voice=True` and a voice column exists,
+      the check is applied separately per voice; overlaps across different
+      voices are then allowed. If no duration column is available, the
+      function raises because monophony cannot be verified safely.
+    float_format:
+      Optional Python-style float format for displayed values, e.g. '.3f'.
+      Shorthand like '3f' is also accepted and treated as '.3f'.
     """
 
     def _pick_first_existing(df: pd.DataFrame, candidates: Sequence[str]) -> Optional[str]:
@@ -1648,19 +2514,33 @@ def display_successive_pitch_transition_heatmaps(
             return [src]
         return [df for df in src]
 
-    def _normalize_matrix(mat: pd.DataFrame, mode: Optional[str]) -> pd.DataFrame:
-        m = (mode or "count").strip().lower() if mode is not None else "count"
+    def _normalize_matrix(mat: pd.DataFrame, mode: Union[bool, str, None]) -> pd.DataFrame:
+        if mode is True:
+            m = "row"
+        elif mode is False or mode is None:
+            m = "count"
+        else:
+            m = str(mode).strip().lower()
         if m in ("count", "counts", "none", ""):
             return mat
         if mat.empty:
             return mat
         if m in ("row", "rows", "rowwise"):
-            denom = mat.sum(axis=1).replace(0, pd.NA)
-            return mat.div(denom, axis=0).fillna(0.0)
+            mat_float = mat.astype(float)
+            denom = mat_float.sum(axis=1).astype(float).replace(0.0, float("nan"))
+            return mat_float.div(denom, axis=0).fillna(0.0)
+        if m in ("column", "columns", "col", "cols", "colwise", "columnwise"):
+            mat_float = mat.astype(float)
+            denom = mat_float.sum(axis=0).astype(float).replace(0.0, float("nan"))
+            return mat_float.div(denom, axis=1).fillna(0.0)
         if m in ("all", "global", "total"):
-            total = float(mat.values.sum())
-            return (mat / total) if total > 0 else mat * 0.0
-        raise ValueError(f"Unsupported normalize={normalize!r}. Use None/'count', 'row', or 'all'.")
+            mat_float = mat.astype(float)
+            total = float(mat_float.values.sum())
+            return (mat_float / total) if total > 0 else mat_float * 0.0
+        raise ValueError(
+            "Unsupported normalize="
+            f"{mode!r}. Use False/None/'count', True/'row', 'column', or 'all'."
+        )
 
     def _bokeh_heatmap(
         mat: pd.DataFrame,
@@ -1671,10 +2551,18 @@ def display_successive_pitch_transition_heatmaps(
         plot_width_: int,
         plot_height_: int,
         show_hover_: bool,
+        float_format_: Optional[str],
     ):
         from bokeh.plotting import figure, show
         from bokeh.io import output_notebook
-        from bokeh.models import ColumnDataSource, HoverTool, LinearColorMapper, ColorBar, BasicTicker
+        from bokeh.models import (
+            ColumnDataSource,
+            HoverTool,
+            LinearColorMapper,
+            ColorBar,
+            BasicTicker,
+            NumeralTickFormatter,
+        )
         from bokeh.palettes import Viridis256
 
         output_notebook()
@@ -1694,6 +2582,10 @@ def display_successive_pitch_transition_heatmaps(
         )
         df_long["prev"] = df_long["prev"].astype(str)
         df_long["next"] = df_long["next"].astype(str)
+        if _coerce_float_format(float_format_) is not None:
+            df_long["value_display"] = df_long["value"].map(
+                lambda v: _format_number_for_display(v, float_format_)
+            )
 
         vmin = float(df_long["value"].min()) if len(df_long) else 0.0
         vmax = float(df_long["value"].max()) if len(df_long) else 0.0
@@ -1730,7 +2622,12 @@ def display_successive_pitch_transition_heatmaps(
                     tooltips=[
                         ("prev", "@prev"),
                         ("next", "@next"),
-                        ("value", "@value{0.000}"),
+                        (
+                            "value",
+                            "@value_display"
+                            if _coerce_float_format(float_format_) is not None
+                            else "@value{0.000}",
+                        ),
                     ],
                 )
             )
@@ -1744,6 +2641,9 @@ def display_successive_pitch_transition_heatmaps(
             ticker=BasicTicker(desired_num_ticks=10),
             location=(0, 0),
         )
+        bokeh_tick_format = _bokeh_tick_format_from_float_format(float_format_)
+        if bokeh_tick_format is not None:
+            color_bar.formatter = NumeralTickFormatter(format=bokeh_tick_format)
         p.add_layout(color_bar, "right")
         show(p)
         return p
@@ -1756,9 +2656,11 @@ def display_successive_pitch_transition_heatmaps(
         y_label: str,
         plot_width_: int,
         plot_height_: int,
+        float_format_: Optional[str],
     ):
         import matplotlib.pyplot as plt
         import numpy as np
+        from matplotlib.ticker import FuncFormatter
 
         if mat is None or mat.empty:
             print(f"{title}: empty matrix -> nothing to plot.")
@@ -1777,14 +2679,29 @@ def display_successive_pitch_transition_heatmaps(
         ax.set_yticks(np.arange(len(mat.index)))
         ax.set_yticklabels([str(r) for r in mat.index])
 
-        fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+        cbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+        if _coerce_float_format(float_format_) is not None:
+            cbar.ax.yaxis.set_major_formatter(
+                FuncFormatter(lambda v, _pos: _format_number_for_display(v, float_format_))
+            )
         plt.tight_layout()
         plt.show()
         return fig
 
     dfs = _as_df_list(source)
-    labels = list(source_labels) if source_labels is not None else _guess_labels_for_dfs(dfs, default_prefix="Source")
+    if source_labels is not None:
+        labels = list(source_labels)[:len(dfs)]
+        if len(labels) < len(dfs):
+            labels.extend(_guess_labels_for_dfs(dfs[len(labels):], default_prefix="Source"))
+    else:
+        labels = _guess_labels_for_dfs(dfs, default_prefix="Source")
     backend_opt = (backend or "bokeh").strip().lower()
+    if normalize_rows is True:
+        normalize_mode: Union[bool, str, None] = "row"
+    elif normalize_rows is False:
+        normalize_mode = "count"
+    else:
+        normalize_mode = normalize
 
     outputs: list[dict[str, Any]] = []
 
@@ -1796,6 +2713,7 @@ def display_successive_pitch_transition_heatmaps(
             continue
 
         onset_col = _pick_first_existing(df, onset_candidates)
+        duration_col = _pick_first_existing(df, duration_candidates)
         midi_col = _pick_first_existing(df, midi_candidates)
         voice_col = _pick_first_existing(df, voice_candidates)
         if onset_col is None:
@@ -1812,6 +2730,39 @@ def display_successive_pitch_transition_heatmaps(
             print("No valid onset/MIDI rows after filtering -> nothing to analyze.")
             outputs.append({"label": lbl, "pitch_matrix": None, "pc_matrix": None})
             continue
+
+        if require_monophonic:
+            if duration_col is None:
+                raise ValueError(
+                    "Could not verify monophony safely because no duration column was found. "
+                    f"Tried: {list(duration_candidates)}"
+                )
+            monophony_check = check_monophonic_input(
+                work,
+                label=lbl,
+                onset_candidates=(onset_col,),
+                duration_candidates=(duration_col,),
+                voice_candidates=((voice_col,) if voice_col is not None else ()),
+                by_voice=bool(by_voice),
+                raise_on_polyphony=False,
+            )
+            if not bool(monophony_check["is_monophonic"]):
+                first_overlap = monophony_check.get("first_overlap") or {}
+                start = first_overlap.get("start")
+                end = first_overlap.get("end")
+                max_polyphony = monophony_check.get("max_polyphony")
+                overlap_group = first_overlap.get("group")
+                scope = (
+                    f"voice {overlap_group!r}"
+                    if bool(monophony_check.get("checked_by_voice"))
+                    else "the analyzed stream"
+                )
+                raise ValueError(
+                    "Successive pitch bigrams require monophonic input, but overlapping notes "
+                    f"were detected in {scope} for source {lbl!r}. "
+                    f"First overlap span: [{start}, {end}] with max polyphony {max_polyphony}. "
+                    "Set require_monophonic=False to bypass this safety check."
+                )
 
         # Collect successive pairs (prev -> next)
         pairs_midi: list[tuple[int, int]] = []
@@ -1859,7 +2810,7 @@ def display_successive_pitch_transition_heatmaps(
         mat_pitch_named = mat_pitch.copy()
         mat_pitch_named.index = idx_names
         mat_pitch_named.columns = col_names
-        mat_pitch_named = _normalize_matrix(mat_pitch_named.astype(float), normalize)
+        mat_pitch_named = _normalize_matrix(mat_pitch_named.astype(float), normalize_mode)
 
         # Pitch class matrix
         prev_pc = (prev_m % 12).astype(int)
@@ -1868,16 +2819,21 @@ def display_successive_pitch_transition_heatmaps(
         mat_pc_named = mat_pc.copy()
         mat_pc_named.index = [_PC_TO_NOTE[i] for i in range(12)]
         mat_pc_named.columns = [_PC_TO_NOTE[i] for i in range(12)]
-        mat_pc_named = _normalize_matrix(mat_pc_named.astype(float), normalize)
+        mat_pc_named = _normalize_matrix(mat_pc_named.astype(float), normalize_mode)
 
         print(f"=== Successive Pitch Transitions ({lbl}) ===")
         if show_table:
             print("Absolute pitch transition matrix (rows=prev, cols=next):")
-            ipy_display(mat_pitch_named)
+            ipy_display(_format_table_for_display(mat_pitch_named, float_format))
             print("Pitch-class transition matrix (rows=prev, cols=next):")
-            ipy_display(mat_pc_named)
+            ipy_display(_format_table_for_display(mat_pc_named, float_format))
 
-        norm_tag = (normalize or "count").strip().lower() if normalize is not None else "count"
+        if normalize_mode is True:
+            norm_tag = "row"
+        elif normalize_mode is False or normalize_mode is None:
+            norm_tag = "count"
+        else:
+            norm_tag = str(normalize_mode).strip().lower() or "count"
         pitch_title = f"Successive pitch transitions — {lbl} ({norm_tag})"
         pc_title = f"Successive pitch-class transitions — {lbl} ({norm_tag})"
 
@@ -1889,6 +2845,7 @@ def display_successive_pitch_transition_heatmaps(
                 y_label="Previous pitch",
                 plot_width_=plot_width,
                 plot_height_=plot_height_pitch,
+                float_format_=float_format,
             )
             _plt_heatmap(
                 mat_pc_named,
@@ -1897,6 +2854,7 @@ def display_successive_pitch_transition_heatmaps(
                 y_label="Previous pitch class",
                 plot_width_=plot_width,
                 plot_height_=plot_height_pc,
+                float_format_=float_format,
             )
         elif backend_opt == "bokeh":
             _bokeh_heatmap(
@@ -1907,6 +2865,7 @@ def display_successive_pitch_transition_heatmaps(
                 plot_width_=plot_width,
                 plot_height_=plot_height_pitch,
                 show_hover_=bool(show_hover),
+                float_format_=float_format,
             )
             _bokeh_heatmap(
                 mat_pc_named,
@@ -1916,6 +2875,7 @@ def display_successive_pitch_transition_heatmaps(
                 plot_width_=plot_width,
                 plot_height_=plot_height_pc,
                 show_hover_=bool(show_hover),
+                float_format_=float_format,
             )
         elif backend_opt == "none":
             pass
@@ -1942,5 +2902,8 @@ __all__ = [
     'plot_duration_distribution',
     'display_duration_distribution',
     'extract_selected_xml_ids',
+    'check_monophonic_input',
+    'melodic_interval_distribution',
+    'display_melodic_interval_distribution',
     'display_successive_pitch_transition_heatmaps',
 ]

@@ -1,4 +1,4 @@
-__version__ = "0.1.3"
+__version__ = "0.1.4"
 
 from .pattern_search import run_pattern_search
 from .parser_registry import get_parse_files, list_parsers, parse_files_quiet
@@ -50,6 +50,9 @@ from .analysis_utils import (
     display_pitch_class_distributions,
     display_filtered_piano_roll,
     extract_selected_xml_ids,
+    check_monophonic_input,
+    melodic_interval_distribution,
+    display_melodic_interval_distribution,
 )
 from .parser_utils import (
     expand_file_sources,
@@ -115,6 +118,9 @@ __all__ = [
     'display_pitch_class_distributions',
     'display_filtered_piano_roll',
     'extract_selected_xml_ids',
+    'check_monophonic_input',
+    'melodic_interval_distribution',
+    'display_melodic_interval_distribution',
     'expand_file_sources',
     'format_parsed_summary',
     'print_parsed_summary',
