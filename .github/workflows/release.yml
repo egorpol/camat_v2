@@ -96,7 +96,7 @@ jobs:
           version = os.environ["PACKAGE_VERSION"]
           changelog = pathlib.Path("CHANGELOG.md").read_text(encoding="utf-8")
           pattern = re.compile(
-              rf"^## \[{re.escape(version)}\] - .*$\n(?P<body>.*?)(?=^## \[|\Z)",
+              rf"^## \[{re.escape(version)}\] - [^\n]*\n(?P<body>.*?)(?=^## \[|\Z)",
               re.MULTILINE | re.DOTALL,
           )
           match = pattern.search(changelog)
