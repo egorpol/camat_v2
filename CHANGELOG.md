@@ -13,6 +13,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+## [0.1.6] - 2026-03-08
+
+### Added
+
+- Added `camat.verovio_guard.guarded_load_into_verovio_toolkit(...)` to probe Verovio loads in a subprocess before touching the in-process toolkit, so native Verovio crashes during MEI import surface as normal Python errors instead of killing the notebook kernel.
+- Added a dedicated `mensural` parser backend and public `parse_files_mensural(...)` wrapper so render-aligned mensural parsing no longer depends on the common `partitura` path.
+
+### Changed
+
+- Updated the mensural backend to load MEI timing data through the new Verovio guard path, including targeted recovery for files that crash Verovio when `<custos>` elements are present.
+- Updated Verovio score loading helpers (`vrv_load_data(...)`, `vrv_load_from_file(...)`, `vrv_load_from_url(...)`) to use the same guarded load path and emit explicit warnings when a sanitized retry is used.
+- Refreshed `testing_parser_mensural.ipynb` so follow-up cells resolve the active `dfs_by_name` pitch/event keys dynamically instead of relying on stale hard-coded dataframe names from an older example.
+- Split direct mensural parsing into `camat.mensural_backend`, while keeping `parse_files_partitura(..., use_verovio_mensural_timing=True)` as a backward-compatible delegation path instead of a second embedded implementation.
+- Registered the dedicated mensural backend in `parser_registry` (`parsing_backend='mensural'`, plus the `mens` synonym) and exported `parse_files_mensural(...)` at the package top level.
+- Added an explicit parser warning when the common `partitura` path detects mensural MEI, steering users toward the dedicated mensural commands for Verovio-render-aligned results.
+- Simplified the notebook entry cells so `testing_parser_mensural.ipynb` is mensural-only and `testing_events_parse.ipynb` no longer carries mensural-only parser knobs.
+
+### Fixed
+
+- Fixed a reproducible native Verovio segfault on certain mensural MEI files during `loadFile(...)` / `loadData(...)` by retrying after stripping `<custos>` elements when that specific crash signature is detected.
+- Prevented `testing_parser_mensural.ipynb` from failing after a successful parse due to outdated hard-coded dataframe names in the preview and filtered piano-roll cells.
+- Fixed mensural note/event alignment drift against the original Verovio render by keeping dedicated mensural parsing on the source-MEI timeline instead of mixing source barlines with CMN-converted note timing.
+- Fixed collapsing of distinct mensural barlines that lacked `xml:id` by using a stronger MEI event merge key with per-staff ordering and neighboring note anchors.
+- Filled inferred `Measure` / `Local Onset` values for parsed barline events when a usable measure grid exists, improving event dataframe consistency in the common parser path.
+
 ## [0.1.5] - 2026-03-04
 
 ### Fixed
@@ -121,7 +146,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-[Unreleased]: https://github.com/egorpol/camat_v2/compare/v0.1.5...HEAD
+[Unreleased]: https://github.com/egorpol/camat_v2/compare/v0.1.6...HEAD
+[0.1.6]: https://github.com/egorpol/camat_v2/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/egorpol/camat_v2/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/egorpol/camat_v2/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/egorpol/camat_v2/compare/v0.1.2...v0.1.3

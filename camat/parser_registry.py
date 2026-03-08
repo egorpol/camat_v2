@@ -16,6 +16,7 @@ __all__ = ["get_parse_files", "list_parsers", "normalize_backend_name", "parse_f
 _BACKEND_MAP: Dict[str, Tuple[str, str]] = {
     "music21": ("camat.music21_backend", "parse_files"),
     "partitura": ("camat.partitura_backend", "parse_files_partitura"),
+    "mensural": ("camat.mensural_backend", "parse_files_mensural"),
 }
 
 # Common synonyms for convenience
@@ -24,6 +25,7 @@ _SYNONYMS: Dict[str, str] = {
     "music-21": "music21",
     "pt": "partitura",
     "part": "partitura",
+    "mens": "mensural",
 }
 
 
@@ -68,6 +70,8 @@ def get_parse_files(backend: str | None = None) -> Callable:
         hint = ""
         if name == "partitura":
             hint = " Install 'partitura' via 'pip install partitura'."
+        elif name == "mensural":
+            hint = " Install 'verovio' via 'pip install verovio'."
         elif name == "music21":
             hint = " Install 'music21' via 'pip install music21'."
         raise ImportError(

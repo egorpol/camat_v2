@@ -861,6 +861,51 @@ def _empty_event_dataframe() -> pd.DataFrame:
     return pd.DataFrame(columns=list(_EVENT_DF_COLUMNS))
 
 
+def _mei_event_merge_key(event: Mapping[str, Any]) -> Tuple[str, ...]:
+    """
+    Build a stable merge key for source/converted MEI events.
+
+    Barline events often lack xml:id and measure markup in mensural sources, so
+    include their per-staff ordering and neighboring note anchors to avoid
+    collapsing distinct barlines into one row.
+    """
+
+    def _norm(value: Any) -> str:
+        cleaned = _clean_string(value)
+        return cleaned if cleaned is not None else ""
+
+    event_type = _norm(event.get("event")).lower()
+    parts = [
+        event_type,
+        _norm(event.get("subtype")),
+        _norm(event.get("xml_id")),
+        _norm(event.get("start_xml_id")),
+        _norm(event.get("end_xml_id")),
+        _norm(event.get("measure_index")),
+        _norm(event.get("measure")),
+        _norm(event.get("measure_xml_id")),
+        _norm(event.get("staff_n")),
+        _norm(event.get("layer_n")),
+        _norm(event.get("tstamp_raw")),
+        _norm(event.get("tstamp2_raw")),
+        _norm(event.get("text")),
+        _norm(event.get("verse_n")),
+        _norm(event.get("wordpos")),
+        _norm(event.get("con")),
+        _norm(event.get("form")),
+    ]
+    if event_type == "barline":
+        parts.extend(
+            [
+                _norm(event.get("barline_ordinal")),
+                _norm(event.get("prev_note_xml_id")),
+                _norm(event.get("next_note_xml_id")),
+                _norm(event.get("prev_note_ordinal_staff")),
+            ]
+        )
+    return tuple(parts)
+
+
 def _dedupe_mei_events_prefer_anchored(
     events: Sequence[Mapping[str, Any]],
 ) -> Tuple[List[Dict[str, Any]], int]:
@@ -1003,6 +1048,37 @@ def _measure_start_from_offsets(
     return None
 
 
+def _infer_measure_position_from_global_onset(
+    global_onset: Any,
+    measure_offsets: Sequence[float],
+) -> Tuple[Optional[int], float]:
+    offsets: List[float] = []
+    for value in measure_offsets:
+        try:
+            fval = float(value)
+        except Exception:
+            continue
+        if np.isfinite(fval):
+            offsets.append(fval)
+    if not offsets:
+        return None, np.nan
+
+    try:
+        onset = float(global_onset)
+    except Exception:
+        return None, np.nan
+    if not np.isfinite(onset):
+        return None, np.nan
+
+    idx = int(np.searchsorted(offsets, onset, side="right") - 1)
+    if idx < 0:
+        idx = 0
+    if idx >= len(offsets):
+        idx = len(offsets) - 1
+    measure_start = offsets[idx]
+    return idx + 1, float(onset - measure_start)
+
+
 def _resolve_measure_tstamp(
     measure_index: Any,
     tstamp_value: Any,
@@ -1065,6 +1141,43 @@ def _note_timing_maps(df_pitch: pd.DataFrame) -> Tuple[Dict[str, float], Dict[st
     work["end_onset"] = work["Global Onset"] + work["Duration"]
     end_map = work.groupby("xml_id", dropna=True)["end_onset"].max().to_dict()
     return onset_map, end_map
+
+
+def _count_event_anchor_xml_id_overlap(
+    events: Sequence[Mapping[str, Any]],
+    df_pitch: pd.DataFrame,
+    *,
+    anchor_keys: Sequence[str] = (
+        "prev_note_xml_id",
+        "next_note_xml_id",
+        "start_xml_id",
+        "end_xml_id",
+    ),
+) -> Tuple[int, int]:
+    if not events or "xml_id" not in df_pitch.columns:
+        return 0, 0
+
+    pitch_ids = {
+        value
+        for value in (
+            _normalize_xml_ref(raw)
+            for raw in df_pitch["xml_id"].dropna().astype(str)
+        )
+        if value
+    }
+    if not pitch_ids:
+        return 0, 0
+
+    event_anchor_ids = {
+        value
+        for event in events
+        for value in (_normalize_xml_ref(event.get(key)) for key in anchor_keys)
+        if value
+    }
+    if not event_anchor_ids:
+        return 0, 0
+
+    return len(event_anchor_ids & pitch_ids), len(event_anchor_ids)
 
 
 def _extract_mei_events(mei_path: str) -> List[Dict[str, Any]]:
@@ -1525,7 +1638,11 @@ def _attach_barline_event_onsets_from_pitch_df(
     return out
 
 
-def _barline_events_to_dataframe(barline_events: Sequence[Dict[str, Any]]) -> pd.DataFrame:
+def _barline_events_to_dataframe(
+    barline_events: Sequence[Dict[str, Any]],
+    *,
+    measure_offsets: Sequence[float],
+) -> pd.DataFrame:
     """
     Convert extracted barline events to a uniform event DataFrame schema.
     """
@@ -1533,13 +1650,21 @@ def _barline_events_to_dataframe(barline_events: Sequence[Dict[str, Any]]) -> pd
         return _empty_event_dataframe()
     rows: List[Dict[str, Any]] = []
     for event in barline_events:
+        enriched_event = dict(event)
+        global_onset = event.get("global_onset", np.nan)
+        inferred_measure, inferred_local_onset = _infer_measure_position_from_global_onset(
+            global_onset,
+            measure_offsets,
+        )
+        if inferred_measure is not None and pd.isna(enriched_event.get("measure")):
+            enriched_event["measure"] = inferred_measure
         rows.append(
             _event_row(
-                event=event,
+                event=enriched_event,
                 event_type="barline",
-                global_onset=event.get("global_onset", np.nan),
+                global_onset=global_onset,
                 duration=0.0,
-                local_onset=np.nan,
+                local_onset=inferred_local_onset,
             )
         )
 
@@ -1802,6 +1927,7 @@ def parse_files_partitura(
     verovio_mensural_to_cmn: bool = True,
     verovio_duration_equivalence: Optional[float] = None,
     verovio_mensural_score_up: bool = False,
+    use_verovio_mensural_timing: bool = False,
     allow_music21_fallback: bool = True,
     dedupe_weaker_text_events: bool = True,
     quiet_native_warnings: bool = False,
@@ -1822,6 +1948,8 @@ def parse_files_partitura(
       converting through Verovio and then parsing with partitura.
     - `verovio_duration_equivalence` forwards Verovio's duration scaling option.
     - `verovio_mensural_score_up` forwards Verovio's mensural score-up option.
+    - `use_verovio_mensural_timing=True` keeps mensural note timing on the
+      original source-MEI Verovio timeline instead of the converted partitura one.
     - `plot_parsed_barlines_with_voice_coloring=True` overlays parsed barline events
       (when available) in the piano roll using voice-based colors.
     - `dedupe_weaker_text_events=True` drops duplicate text-like MEI events when a
@@ -1831,6 +1959,52 @@ def parse_files_partitura(
       and partitura-emitted `UserWarning`s during loading/conversion while
       preserving CAMAT logs.
     """
+    if use_verovio_mensural_timing:
+        from .mensural_backend import parse_files_mensural
+
+        return parse_files_mensural(
+            file_sources,
+            filter_zero_duration=filter_zero_duration,
+            adjust_fractional_duration=adjust_fractional_duration,
+            parse_enharmonic=parse_enharmonic,
+            backend=backend,
+            show_measure_lines=show_measure_lines,
+            measure_line_color=measure_line_color,
+            plot_parsed_barlines_with_voice_coloring=plot_parsed_barlines_with_voice_coloring,
+            show_hover=show_hover,
+            hover_fields=hover_fields,
+            display_preview_df_pitch=display_preview_df_pitch,
+            display_preview_df_events=display_preview_df_events,
+            display_preview=display_preview,
+            preview_rows=preview_rows,
+            cleanup_remote=cleanup_remote,
+            return_plots=return_plots,
+            plot_width=plot_width,
+            plot_height=plot_height,
+            zoom_drag_dim=zoom_drag_dim,
+            zoom_wheel_dim=zoom_wheel_dim,
+            show_progress=show_progress,
+            progress_desc=progress_desc,
+            strip_ties=strip_ties,
+            align_accident_schema=align_accident_schema,
+            colorize_voices=colorize_voices,
+            palette=palette,
+            include_xml_ids=include_xml_ids,
+            normalize_mensural_durations=normalize_mensural_durations,
+            inject_missing_meter_signature=inject_missing_meter_signature,
+            default_meter_count=default_meter_count,
+            default_meter_unit=default_meter_unit,
+            try_verovio_mei_conversion=try_verovio_mei_conversion,
+            prefer_verovio_for_mensural=prefer_verovio_for_mensural,
+            verovio_mensural_to_cmn=verovio_mensural_to_cmn,
+            verovio_duration_equivalence=verovio_duration_equivalence,
+            verovio_mensural_score_up=verovio_mensural_score_up,
+            use_verovio_mensural_timing=True,
+            allow_music21_fallback=allow_music21_fallback,
+            dedupe_weaker_text_events=dedupe_weaker_text_events,
+            quiet_native_warnings=quiet_native_warnings,
+        )
+
     if display_preview is not None:
         # Backward compatibility: legacy flag controls both previews when provided.
         display_preview_df_pitch = bool(display_preview)
@@ -1882,6 +2056,13 @@ def parse_files_partitura(
                     log(
                         "Detected common-notation MEI. "
                         "Skipping mensural duration/meter preprocessing."
+                    )
+                if is_mensural_source:
+                    log(
+                        "Warning: mensural MEI detected. "
+                        "Use parse_files_mensural(...) or "
+                        "parse_files(..., parsing_backend='mensural') "
+                        "for render-aligned mensural parsing."
                     )
                 if (
                     try_verovio_mei_conversion
@@ -1938,7 +2119,11 @@ def parse_files_partitura(
                     default_meter_unit=default_meter_unit,
                     force_mensural_processing=is_mensural_source,
                 )
+                want_xml_ids = bool(include_xml_ids)
                 extracted_mei_events: List[Dict[str, Any]] = []
+                converted_barline_count = 0
+                staff_to_part: Dict[str, str] = {}
+                measure_offsets: List[float] = []
                 score_source_path = sanitized_path
                 try:
                     if mensural_replacements > 0:
@@ -2004,15 +2189,18 @@ def parse_files_partitura(
                             raise
                     if str(score_source_path).lower().endswith(".mei"):
                         extracted_mei_events = _extract_mei_events(score_source_path)
+                        converted_barline_count = sum(
+                            1
+                            for evt in extracted_mei_events
+                            if str(evt.get("event", "")).strip().lower() == "barline"
+                        )
                 finally:
                     if cleanup_fn:
                         cleanup_fn()
                     for _fn in conversion_cleanup_fns:
                         _fn()
 
-                # Only include xml_id when MEI source detected and option enabled
                 is_mei = str(sanitized_path).lower().endswith(".mei")
-                want_xml_ids = bool(include_xml_ids)
                 include_ids_this_score = want_xml_ids and is_mei
                 warning_ctx = _suppress_partitura_user_warnings(quiet_native_warnings)
                 output_ctx = _suppress_partitura_dependency_output(quiet_native_warnings)
@@ -2021,6 +2209,20 @@ def parse_files_partitura(
                         score,
                         parse_enharmonic=parse_enharmonic,
                         include_xml_ids=include_ids_this_score,
+                    )
+                warning_ctx = _suppress_partitura_user_warnings(quiet_native_warnings)
+                output_ctx = _suppress_partitura_dependency_output(quiet_native_warnings)
+                with warning_ctx, output_ctx:
+                    measure_offsets = _partitura_measure_offsets(score)
+                staff_to_part = _staff_index_to_part_label_map(score)
+                if is_mensural_source:
+                    _log_measure_grid_diagnostics(
+                        log,
+                        measure_offsets,
+                        default_meter_count=default_meter_count,
+                        default_meter_unit=default_meter_unit,
+                        meter_injections=meter_injections,
+                        used_verovio=used_verovio_conversion,
                     )
                 # Optionally align accidental schema prior to duration filtering (no extra rank column)
                 excess_clamped = 0
@@ -2055,39 +2257,15 @@ def parse_files_partitura(
                     adjust_fractional_duration=adjust_fractional_duration,
                 ).sort_values("Global Onset").reset_index(drop=True)
 
+                include_ids_this_score = (want_xml_ids and "xml_id" in df_processed.columns)
                 if want_xml_ids and not include_ids_this_score and "xml_id" not in df_processed.columns:
                     df_processed["xml_id"] = pd.NA
-
-                warning_ctx = _suppress_partitura_user_warnings(quiet_native_warnings)
-                output_ctx = _suppress_partitura_dependency_output(quiet_native_warnings)
-                with warning_ctx, output_ctx:
-                    measure_offsets = _partitura_measure_offsets(score)
-                if is_mensural_source:
-                    _log_measure_grid_diagnostics(
-                        log,
-                        measure_offsets,
-                        default_meter_count=default_meter_count,
-                        default_meter_unit=default_meter_unit,
-                        meter_injections=meter_injections,
-                        used_verovio=used_verovio_conversion,
-                    )
                 if source_mei_events:
                     merged_events: List[Dict[str, Any]] = []
-                    seen_event_keys: set[Tuple[str, str, str, str, str, str, str, str, str, str]] = set()
+                    seen_event_keys: set[Tuple[str, ...]] = set()
                     for raw_event in list(extracted_mei_events) + list(source_mei_events):
                         event = dict(raw_event)
-                        key = (
-                            str(event.get("event", "") or "").strip().lower(),
-                            str(event.get("subtype", "") or "").strip(),
-                            str(event.get("xml_id", "") or "").strip(),
-                            str(event.get("start_xml_id", "") or "").strip(),
-                            str(event.get("end_xml_id", "") or "").strip(),
-                            str(event.get("measure_index", "") or "").strip(),
-                            str(event.get("tstamp_raw", "") or "").strip(),
-                            str(event.get("tstamp2_raw", "") or "").strip(),
-                            str(event.get("text", "") or "").strip(),
-                            str(event.get("verse_n", "") or "").strip(),
-                        )
+                        key = _mei_event_merge_key(event)
                         if key in seen_event_keys:
                             continue
                         seen_event_keys.add(key)
@@ -2104,7 +2282,22 @@ def parse_files_partitura(
                         )
 
                 df_pitch = df_processed
-                staff_to_part = _staff_index_to_part_label_map(score)
+                source_barline_events = [
+                    dict(evt) for evt in source_mei_events
+                    if str(evt.get("event", "")).strip().lower() == "barline"
+                ]
+                if used_verovio_conversion and converted_barline_count == 0 and source_barline_events:
+                    shared_anchor_ids, total_anchor_ids = _count_event_anchor_xml_id_overlap(
+                        source_barline_events,
+                        df_pitch,
+                    )
+                    if total_anchor_ids > 0 and shared_anchor_ids == 0:
+                        log(
+                            "Warning: source MEI barlines have no xml:id anchor overlap with the "
+                            "Verovio-converted pitch timeline. Barlines will be placed via "
+                            "staff-order fallback and will not match vrv_render_page() on the "
+                            "original mensural MEI."
+                        )
                 barline_events = [
                     dict(evt) for evt in extracted_mei_events
                     if str(evt.get("event", "")).strip().lower() == "barline"
@@ -2131,7 +2324,10 @@ def parse_files_partitura(
                         "Extracted non-barline MEI events: "
                         f"{len(other_events)} event(s), types={types}."
                     )
-                df_barlines = _barline_events_to_dataframe(barline_events)
+                df_barlines = _barline_events_to_dataframe(
+                    barline_events,
+                    measure_offsets=measure_offsets,
+                )
                 df_other_events = _other_mei_events_to_dataframe(
                     other_events,
                     df_pitch,

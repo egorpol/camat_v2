@@ -10,6 +10,7 @@ from contextlib import contextmanager
 from typing import Any, Dict, List, Optional, Tuple
 
 from .quiet_utils import suppress_native_output
+from .verovio_guard import guarded_load_into_verovio_toolkit
 
 try:  # pragma: no cover - optional in some environments
     import verovio  # type: ignore
@@ -276,15 +277,26 @@ def vrv_guess_input_from(source_hint: Optional[str] = None, content: Optional[st
     return None
 
 
-def vrv_load_data(data: str, *, input_from: Optional[str] = None) -> int:
+def vrv_load_data(
+    data: str,
+    *,
+    input_from: Optional[str] = None,
+    source_hint: Optional[str] = None,
+) -> int:
     """
     Load a score string into Verovio. Returns page count.
     Set input_from to one of {'mei', 'musicxml', 'humdrum'}; if None, attempts to guess from content.
     """
     inferred = input_from or vrv_guess_input_from(None, data) or "musicxml"
     with _vrv_suppress_if_needed():
-        _VRV_TOOLKIT.setOptions({"inputFrom": inferred})
-        _VRV_TOOLKIT.loadData(data)
+        load_info = guarded_load_into_verovio_toolkit(
+            _VRV_TOOLKIT,
+            data,
+            input_from=inferred,
+            source_hint=source_hint,
+        )
+        if load_info.get("sanitized") and load_info.get("message"):
+            warnings.warn(str(load_info["message"]), RuntimeWarning, stacklevel=2)
         return _VRV_TOOLKIT.getPageCount()
 
 
@@ -292,7 +304,7 @@ def vrv_load_from_file(path: str, *, input_from: Optional[str] = None, encoding:
     with io.open(path, "r", encoding=encoding, errors="ignore") as f:
         data = f.read()
     inferred = input_from or vrv_guess_input_from(path, data)
-    return vrv_load_data(data, input_from=inferred)
+    return vrv_load_data(data, input_from=inferred, source_hint=path)
 
 
 def vrv_load_from_url(url: str, *, input_from: Optional[str] = None, timeout: int = 30) -> int:
@@ -311,7 +323,7 @@ def vrv_load_from_url(url: str, *, input_from: Optional[str] = None, timeout: in
     except Exception:
         data = resp.content.decode("utf-8", errors="ignore")
     inferred = input_from or vrv_guess_input_from(url, data)
-    return vrv_load_data(data, input_from=inferred)
+    return vrv_load_data(data, input_from=inferred, source_hint=url)
 
 
 def vrv_convert_to_mei(
