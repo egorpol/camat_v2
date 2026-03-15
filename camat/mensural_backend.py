@@ -78,6 +78,128 @@ def _mei_accid_to_suffix(raw: Any) -> str:
     return mapping.get(token, "")
 
 
+def _mensural_duration_signature(el: Any) -> Tuple[str, str, str, str]:
+    if el is None:
+        return ("", "", "", "")
+    attrib = getattr(el, "attrib", {}) or {}
+    return (
+        str(attrib.get("dur", "") or "").strip().lower(),
+        str(attrib.get("num", "") or "").strip(),
+        str(attrib.get("numbase", "") or "").strip(),
+        str(attrib.get("dur.quality", "") or "").strip().lower(),
+    )
+
+
+def _infer_missing_timed_rows(timed_rows: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    if not timed_rows:
+        return []
+
+    out = [dict(row) for row in timed_rows]
+
+    duration_prototypes: Dict[Tuple[str, str, Tuple[str, str, str, str]], float] = {}
+    global_duration_prototypes: Dict[Tuple[str, str, str, str], float] = {}
+    for row in out:
+        signature = row.get("duration_signature")
+        if not isinstance(signature, tuple) or len(signature) != 4:
+            continue
+        duration = row.get("Duration")
+        try:
+            dur_val = float(duration)
+        except Exception:
+            continue
+        if not np.isfinite(dur_val) or dur_val <= 0:
+            continue
+        staff_key = str(row.get("staff_n", "") or "").strip()
+        layer_key = str(row.get("layer_n", "") or "").strip()
+        scoped_key = (staff_key, layer_key, signature)
+        if scoped_key not in duration_prototypes:
+            duration_prototypes[scoped_key] = dur_val
+        global_duration_prototypes.setdefault(signature, dur_val)
+
+    for row in out:
+        duration = row.get("Duration")
+        try:
+            dur_val = float(duration)
+        except Exception:
+            dur_val = np.nan
+        if np.isfinite(dur_val) and dur_val > 0:
+            continue
+        signature = row.get("duration_signature")
+        if not isinstance(signature, tuple) or len(signature) != 4:
+            continue
+        staff_key = str(row.get("staff_n", "") or "").strip()
+        layer_key = str(row.get("layer_n", "") or "").strip()
+        scoped_key = (staff_key, layer_key, signature)
+        inferred_duration = duration_prototypes.get(scoped_key)
+        if inferred_duration is None:
+            inferred_duration = global_duration_prototypes.get(signature)
+        if inferred_duration is None or not np.isfinite(inferred_duration) or inferred_duration <= 0:
+            continue
+        row["Duration"] = float(inferred_duration)
+
+    changed = True
+    max_passes = max(2, len(out) * 2)
+    passes = 0
+    while changed and passes < max_passes:
+        passes += 1
+        changed = False
+
+        for idx, row in enumerate(out):
+            onset = row.get("Global Onset")
+            duration = row.get("Duration")
+            try:
+                onset_val = float(onset)
+            except Exception:
+                onset_val = np.nan
+            try:
+                dur_val = float(duration)
+            except Exception:
+                dur_val = np.nan
+            if np.isfinite(onset_val) or not (np.isfinite(dur_val) and dur_val > 0):
+                continue
+            if idx <= 0:
+                continue
+            prev = out[idx - 1]
+            try:
+                prev_onset = float(prev.get("Global Onset"))
+                prev_dur = float(prev.get("Duration"))
+            except Exception:
+                continue
+            if np.isfinite(prev_onset) and np.isfinite(prev_dur) and prev_dur >= 0:
+                row["Global Onset"] = float(prev_onset + prev_dur)
+                changed = True
+
+        for idx in range(len(out) - 1, -1, -1):
+            row = out[idx]
+            onset = row.get("Global Onset")
+            duration = row.get("Duration")
+            try:
+                onset_val = float(onset)
+            except Exception:
+                onset_val = np.nan
+            try:
+                dur_val = float(duration)
+            except Exception:
+                dur_val = np.nan
+            if np.isfinite(onset_val) or not (np.isfinite(dur_val) and dur_val > 0):
+                continue
+            if idx >= len(out) - 1:
+                continue
+            nxt = out[idx + 1]
+            try:
+                next_onset = float(nxt.get("Global Onset"))
+            except Exception:
+                continue
+            if np.isfinite(next_onset):
+                row["Global Onset"] = float(next_onset - dur_val)
+                changed = True
+
+    for row in out:
+        row.pop("duration_signature", None)
+
+    return out
+
+
 def _source_staff_index_to_part_label_map_from_mei(mei_path: str) -> Dict[str, str]:
     try:
         import xml.etree.ElementTree as ET
@@ -126,7 +248,7 @@ def _verovio_mensural_mei_note_dataframe(
     parse_enharmonic: bool = False,
     include_xml_ids: bool = True,
     quiet_native_warnings: bool = False,
-) -> Tuple[pd.DataFrame, Dict[str, str], Dict[str, Any]]:
+) -> Tuple[pd.DataFrame, pd.DataFrame, Dict[str, str], Dict[str, Any]]:
     try:
         import xml.etree.ElementTree as ET
         import verovio  # type: ignore
@@ -169,6 +291,7 @@ def _verovio_mensural_mei_note_dataframe(
         return tokens[0] if tokens else None
 
     rows: List[Dict[str, Any]] = []
+    timed_rows: List[Dict[str, Any]] = []
     for staff_idx, staff_el in enumerate(
         [el for el in root.iter() if _local_name(el.tag) == "staff"],
         start=1,
@@ -183,8 +306,10 @@ def _verovio_mensural_mei_note_dataframe(
             layer_n = _first_token(getattr(layer_el, "attrib", {}).get("n")) or str(layer_idx)
             voice_label = _format_voice_label(part_label, layer_n)
 
+            layer_timed_rows: List[Dict[str, Any]] = []
             for note_el in layer_el.iter():
-                if _local_name(note_el.tag) != "note":
+                element_type = _local_name(note_el.tag)
+                if element_type not in {"note", "rest", "chord"}:
                     continue
                 xml_id = _get_xml_id(note_el)
                 if not xml_id:
@@ -194,17 +319,38 @@ def _verovio_mensural_mei_note_dataframe(
                     times = tk.getTimesForElement(xml_id)
                 except Exception:
                     times = {}
-                try:
-                    midi_values = tk.getMIDIValuesForElement(xml_id)
-                except Exception:
-                    midi_values = {}
-                if not isinstance(times, dict) or not isinstance(midi_values, dict):
+                if not isinstance(times, dict):
                     continue
 
                 onset_q = _qfrac_payload_to_float(times.get("qfracOn"))
                 duration_q = _qfrac_payload_to_float(times.get("qfracDuration"))
+
+                timed_row: Dict[str, Any] = {
+                    "Measure": pd.NA,
+                    "Local Onset": np.nan,
+                    "Global Onset": float(onset_q) if onset_q is not None else np.nan,
+                    "Duration": float(duration_q) if duration_q is not None else np.nan,
+                    "Voice": voice_label,
+                    "staff_n": staff_n,
+                    "layer_n": layer_n,
+                    "element_type": element_type,
+                    "duration_signature": _mensural_duration_signature(note_el),
+                }
+                if include_xml_ids:
+                    timed_row["xml_id"] = xml_id
+                layer_timed_rows.append(timed_row)
+
+                if onset_q is None or duration_q is None or element_type != "note":
+                    continue
+
+                try:
+                    midi_values = tk.getMIDIValuesForElement(xml_id)
+                except Exception:
+                    midi_values = {}
+                if not isinstance(midi_values, dict):
+                    continue
                 midi_pitch = midi_values.get("pitch")
-                if onset_q is None or duration_q is None or midi_pitch is None:
+                if midi_pitch is None:
                     continue
                 try:
                     midi_int = int(midi_pitch)
@@ -231,8 +377,10 @@ def _verovio_mensural_mei_note_dataframe(
                         )
                         row["Pitch Enharmonic"] = f"{str(pname).upper()}{suffix}{octave}"
                 rows.append(row)
+            timed_rows.extend(_infer_missing_timed_rows(layer_timed_rows))
 
     df = pd.DataFrame(rows)
+    df_timed = pd.DataFrame(timed_rows)
     expected = [
         "Measure",
         "Local Onset",
@@ -246,11 +394,85 @@ def _verovio_mensural_mei_note_dataframe(
         expected.insert(expected.index("Voice") + 1, "xml_id")
     if parse_enharmonic and "Pitch Enharmonic" in df.columns:
         expected.insert(5, "Pitch Enharmonic")
+    for col in expected:
+        if col not in df.columns:
+            df[col] = pd.NA
     if len(df):
         df = df.sort_values(["Global Onset", "MIDI"]).reset_index(drop=True)
-        if set(expected).issubset(df.columns):
-            df = df[expected]
-    return df, staff_to_part, load_info
+    df = df[expected]
+    timed_expected = [
+        "Measure",
+        "Local Onset",
+        "Global Onset",
+        "Duration",
+        "Voice",
+        "xml_id",
+        "staff_n",
+        "layer_n",
+        "element_type",
+    ]
+    for col in timed_expected:
+        if col not in df_timed.columns:
+            df_timed[col] = pd.NA
+    if len(df_timed):
+        sort_columns = [col for col in ("Global Onset", "Duration") if col in df_timed.columns]
+        if sort_columns:
+            df_timed = df_timed.sort_values(sort_columns).reset_index(drop=True)
+    df_timed = df_timed[timed_expected]
+    return df, df_timed, staff_to_part, load_info
+
+
+def _mensural_rest_events_to_dataframe(df_timed: pd.DataFrame) -> pd.DataFrame:
+    if df_timed.empty or "element_type" not in df_timed.columns:
+        return _empty_event_dataframe()
+
+    rest_rows = df_timed[df_timed["element_type"].astype(str).str.lower() == "rest"].copy()
+    if rest_rows.empty:
+        return _empty_event_dataframe()
+
+    rows: List[Dict[str, Any]] = []
+    for _, row in rest_rows.iterrows():
+        rows.append(
+            {
+                "type": "rest",
+                "subtype": "rest",
+                "Measure": row.get("Measure", pd.NA),
+                "Local Onset": row.get("Local Onset", np.nan),
+                "Global Onset": row.get("Global Onset", np.nan),
+                "Duration": row.get("Duration", 0.0),
+                "Voice": row.get("Voice", pd.NA),
+                "xml_id": row.get("xml_id", pd.NA),
+                "start_xml_id": pd.NA,
+                "end_xml_id": pd.NA,
+                "staff_n": row.get("staff_n", pd.NA),
+                "staff_raw": pd.NA,
+                "layer_n": row.get("layer_n", pd.NA),
+                "layer_raw": pd.NA,
+                "scope": "timeline",
+                "text": pd.NA,
+                "text_role": pd.NA,
+                "form": pd.NA,
+                "place": pd.NA,
+                "func": pd.NA,
+                "plist": pd.NA,
+                "tstamp_raw": pd.NA,
+                "tstamp2_raw": pd.NA,
+                "verse_n": pd.NA,
+                "wordpos": pd.NA,
+                "con": pd.NA,
+                "mm": pd.NA,
+                "mm_unit": pd.NA,
+                "mm_dots": pd.NA,
+                "extra": pd.NA,
+            }
+        )
+
+    df_events = pd.DataFrame(rows)
+    for col in _EVENT_DF_COLUMNS:
+        if col not in df_events.columns:
+            df_events[col] = pd.NA
+    df_events = df_events[_EVENT_DF_COLUMNS]
+    return df_events.sort_values("Global Onset", na_position="last").reset_index(drop=True)
 
 
 def parse_files_mensural(
@@ -267,7 +489,6 @@ def parse_files_mensural(
     hover_fields: Optional[List[str]] = None,
     display_preview_df_pitch: bool = True,
     display_preview_df_events: bool = True,
-    display_preview: Optional[bool] = None,
     preview_rows: int = 20,
     cleanup_remote: bool = True,
     return_plots: bool = False,
@@ -318,10 +539,6 @@ def parse_files_mensural(
         allow_music21_fallback,
     )
 
-    if display_preview is not None:
-        display_preview_df_pitch = bool(display_preview)
-        display_preview_df_events = bool(display_preview)
-
     results: List[Dict[str, Any]] = []
     dfs_by_name: Dict[str, pd.DataFrame] = {}
     last_df: Optional[pd.DataFrame] = None
@@ -359,7 +576,7 @@ def parse_files_mensural(
                 if not _file_looks_mensural_mei(file_path):
                     log("Warning: no explicit mensural markers detected; continuing on original Verovio timing.")
 
-                df_raw, staff_to_part, verovio_load_info = _verovio_mensural_mei_note_dataframe(
+                df_raw, df_timed_raw, staff_to_part, verovio_load_info = _verovio_mensural_mei_note_dataframe(
                     file_path,
                     parse_enharmonic=parse_enharmonic,
                     include_xml_ids=True,
@@ -401,8 +618,15 @@ def parse_files_mensural(
                     filter_zero_duration=filter_zero_duration,
                     adjust_fractional_duration=adjust_fractional_duration,
                 ).sort_values("Global Onset").reset_index(drop=True)
+                df_timed = filter_and_adjust_durations(
+                    df_timed_raw,
+                    filter_zero_duration=filter_zero_duration,
+                    adjust_fractional_duration=adjust_fractional_duration,
+                ).sort_values("Global Onset").reset_index(drop=True)
                 if bool(include_xml_ids) and "xml_id" not in df_processed.columns:
                     df_processed["xml_id"] = pd.NA
+                if bool(include_xml_ids) and "xml_id" not in df_timed.columns:
+                    df_timed["xml_id"] = pd.NA
 
                 merged_events: List[Dict[str, Any]] = []
                 seen_event_keys: set[Tuple[str, ...]] = set()
@@ -436,7 +660,7 @@ def parse_files_mensural(
                 ]
                 barline_events = _attach_barline_event_onsets_from_pitch_df(
                     barline_events,
-                    df_pitch,
+                    df_timed,
                     staff_to_part_label=staff_to_part,
                 )
                 barline_events = _attach_barline_event_offsets(barline_events, measure_offsets)
@@ -453,17 +677,23 @@ def parse_files_mensural(
                         "Extracted non-barline MEI events: "
                         f"{len(other_events)} event(s), types={types}."
                     )
+                rest_count = int(
+                    df_timed["element_type"].astype(str).str.lower().eq("rest").sum()
+                ) if ("element_type" in df_timed.columns and not df_timed.empty) else 0
+                if rest_count > 0:
+                    log(f"Extracted rest timing events: {rest_count} event(s).")
 
                 df_barlines = _barline_events_to_dataframe(
                     barline_events,
                     measure_offsets=measure_offsets,
                 )
+                df_rests = _mensural_rest_events_to_dataframe(df_timed)
                 df_other_events = _other_mei_events_to_dataframe(
                     other_events,
                     df_pitch,
                     measure_offsets=measure_offsets,
                 )
-                event_frames = [frame for frame in (df_barlines, df_other_events) if not frame.empty]
+                event_frames = [frame for frame in (df_barlines, df_rests, df_other_events) if not frame.empty]
                 if not event_frames:
                     df_events = _empty_event_dataframe()
                 elif len(event_frames) == 1:

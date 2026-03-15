@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 import os
 import tempfile
 import warnings
@@ -30,7 +31,19 @@ __all__ = [
     "parse_files",
     "create_binary_matrix",
     "plot_binary_matrix",
+    "prepare_binary_hover_fields",
+    "describe_binary_matrix",
+    "print_binary_matrix_summary",
+    "BinaryMatrixBundle",
+    "BinaryMatrixSliceBundle",
+    "create_binary_matrix_bundle",
+    "create_binary_matrix_slice_bundle",
     "orient_binary_matrix",
+    "get_binary_row_info",
+    "get_binary_col_info",
+    "get_binary_cell_provenance",
+    "get_binary_window_provenance",
+    "binary_slice_to_df",
     "binary_matrix_to_df",
     "binary_matrix_to_df_from_meta",
     "binary_matrix_to_df_from_bounds",
@@ -1180,6 +1193,527 @@ def _determine_resolution(
     return resolution
 
 
+def _serialize_binary_meta_value(value: Any) -> Any:
+    """
+    Convert values stored in binary metadata/provenance to plain Python scalars when possible.
+    """
+    if isinstance(value, np.generic):
+        return value.item()
+    if pd.isna(value):
+        return None
+    return value
+
+
+def _format_binary_hover_value(value: Any) -> str:
+    """
+    Compact hover formatting without forced fixed precision.
+    """
+    plain = _serialize_binary_meta_value(value)
+    if plain is None:
+        return ""
+    if isinstance(plain, bool):
+        return str(plain)
+    if isinstance(plain, int):
+        return str(plain)
+    if isinstance(plain, float):
+        if np.isfinite(plain) and float(plain).is_integer():
+            return str(int(plain))
+        return f"{plain:.12g}"
+    return str(plain)
+
+
+def _normalize_binary_hover_field_name(name: Any) -> str:
+    text = str(name or "").strip().lower()
+    normalized = []
+    last_was_sep = False
+    for ch in text:
+        if ch.isalnum():
+            normalized.append(ch)
+            last_was_sep = False
+        elif not last_was_sep:
+            normalized.append("_")
+            last_was_sep = True
+    return "".join(normalized).strip("_")
+
+
+def _binary_cell_key(row: int, col: int) -> str:
+    return f"{int(row)},{int(col)}"
+
+
+def _binary_row_axis_value_from_meta(meta: Dict[str, Any], row: int) -> Any:
+    y_mode = str(meta.get("y_mode", "minmax")).lower()
+    row_order = str(meta.get("row_order", "low_to_high")).lower()
+    y_min = int(meta.get("y_min", 0))
+    y_max = int(meta.get("y_max", max(y_min, row)))
+    row_idx = int(row)
+    if y_mode == "chroma":
+        labels = list(meta.get("pitch_class_labels", []))
+        if labels and 0 <= row_idx < len(labels):
+            return labels[row_idx]
+        if row_order == "high_to_low":
+            return int(11 - row_idx)
+        return int(row_idx)
+    if row_order == "high_to_low":
+        return int(y_max - row_idx)
+    return int(y_min + row_idx)
+
+
+def _binary_row_axis_label_from_meta(meta: Dict[str, Any], row: int) -> str:
+    axis_value = _binary_row_axis_value_from_meta(meta, row)
+    y_mode = str(meta.get("y_mode", "minmax")).lower()
+    if y_mode == "chroma":
+        return _format_binary_hover_value(axis_value)
+    try:
+        return str(pitch_module.Pitch(int(axis_value)).nameWithOctave)
+    except Exception:
+        return _format_binary_hover_value(axis_value)
+
+
+def _binary_meta_source_rows(meta: Dict[str, Any], source_positions: Sequence[int]) -> List[Dict[str, Any]]:
+    provenance = meta.get("provenance")
+    if not isinstance(provenance, dict):
+        return []
+    source_records = list(provenance.get("source_records", []))
+    source_index_values = list(provenance.get("source_index_values", []))
+    source_rows: List[Dict[str, Any]] = []
+    for pos in source_positions:
+        source_pos = int(pos)
+        if not (0 <= source_pos < len(source_records)):
+            continue
+        record = dict(source_records[source_pos])
+        record["source_row_position"] = source_pos
+        record["source_df_index"] = (
+            source_index_values[source_pos]
+            if source_pos < len(source_index_values)
+            else source_pos
+        )
+        source_rows.append(record)
+    return source_rows
+
+
+def prepare_binary_hover_fields(
+    hover_fields: Optional[Sequence[str]] = None,
+    *,
+    provenance_columns: Optional[Sequence[str]] = None,
+    default_fields: Optional[Sequence[str]] = None,
+) -> List[str]:
+    """
+    Normalize requested binary hover fields and append safe defaults.
+
+    Parameters
+    ----------
+    hover_fields : sequence of str, optional
+        Requested hover fields, using either canonical binary names or source DataFrame
+        column names.
+    provenance_columns : sequence of str, optional
+        Source DataFrame columns available through provenance metadata. Their normalized
+        snake_case aliases are accepted as hover fields.
+    default_fields : sequence of str, optional
+        Extra fields appended after ``hover_fields`` when supported. Defaults to
+        ``["row", "col"]``.
+    """
+    hover_field_aliases = {
+        "pitch_row": "row",
+        "time_col": "col",
+    }
+    supported = {
+        "row",
+        "col",
+        "time",
+        "midi",
+        "selected_area",
+        "source_count",
+        "source_rows",
+        "source_df",
+    }
+    for source_col in provenance_columns or []:
+        alias = _normalize_binary_hover_field_name(source_col)
+        if alias:
+            supported.add(alias)
+
+    merged_fields = list(hover_fields or [])
+    merged_fields.extend(list(default_fields or ["row", "col"]))
+
+    normalized_hover_fields: List[str] = []
+    for field_name in merged_fields:
+        normalized = hover_field_aliases.get(
+            _normalize_binary_hover_field_name(field_name),
+            _normalize_binary_hover_field_name(field_name),
+        )
+        if normalized in supported and normalized not in normalized_hover_fields:
+            normalized_hover_fields.append(normalized)
+
+    if normalized_hover_fields:
+        return normalized_hover_fields
+
+    fallback = ["row", "col"]
+    if provenance_columns:
+        fallback.extend(["source_count", "source_rows"])
+    return [field_name for field_name in fallback if field_name in supported]
+
+
+def describe_binary_matrix(matrix: np.ndarray, meta: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Return compact binary matrix statistics suitable for notebook summaries.
+    """
+    mat = np.asarray(matrix)
+    active_cell_count = int(np.count_nonzero(mat))
+    total_cells = int(mat.size)
+    provenance = meta.get("provenance") if isinstance(meta.get("provenance"), dict) else {}
+    return {
+        "shape": tuple(int(dim) for dim in mat.shape),
+        "dtype": str(mat.dtype),
+        "cell_count": total_cells,
+        "active_cell_count": active_cell_count,
+        "active_cell_ratio": (
+            float(active_cell_count / total_cells)
+            if total_cells > 0
+            else 0.0
+        ),
+        "source_row_count": provenance.get("source_row_count"),
+    }
+
+
+def print_binary_matrix_summary(matrix: np.ndarray, meta: Dict[str, Any]) -> None:
+    """
+    Print the binary metadata block and a compact activity summary.
+    """
+    stats = describe_binary_matrix(matrix, meta)
+    print("--- Metadata (create_binary_matrix) ---")
+    for key, value in sorted(meta.items()):
+        if key == "provenance" and isinstance(value, dict):
+            print("  provenance:")
+            print(f"    source_row_count: {value.get('source_row_count')}")
+            print(f"    active_cell_count: {value.get('active_cell_count')}")
+            print(f"    source_columns: {value.get('source_columns')}")
+            continue
+        print(f"  {key}: {value}")
+    print("\n--- Raw binary stats ---")
+    print(f"  shape (rows=pitch bins, cols=time steps): {stats['shape']}")
+    print(f"  dtype: {stats['dtype']}")
+    print(
+        "  active cells (1s): "
+        f"{stats['active_cell_count']} / {stats['cell_count']} "
+        f"({100 * stats['active_cell_ratio']:.2f}%)"
+    )
+
+
+@dataclass
+class BinaryMatrixSliceBundle:
+    """
+    Notebook-friendly view over a selected raw binary matrix window.
+    """
+    matrix: np.ndarray = field(repr=False)
+    meta: Dict[str, Any] = field(repr=False)
+    row_start: int
+    row_end: int
+    col_start: int
+    col_end: int
+    matrix_slice: np.ndarray = field(repr=False)
+    row_coord_df: pd.DataFrame = field(default_factory=pd.DataFrame, repr=False)
+    col_coord_df: pd.DataFrame = field(default_factory=pd.DataFrame, repr=False)
+    active_spans_df: pd.DataFrame = field(default_factory=pd.DataFrame, repr=False)
+    selection_name: str = ""
+    highlight_windows: List[Dict[str, Any]] = field(default_factory=list)
+    measure_offsets: Optional[List[float]] = None
+    hover_fields: List[str] = field(default_factory=list)
+
+    def print_summary(self) -> None:
+        """
+        Print the compact slice summary used in notebook showcase cells.
+        """
+        stats = describe_binary_matrix(self.matrix, self.meta)
+        print("Shape (rows=pitch bins, cols=time steps):", stats["shape"])
+        print("dtype:", stats["dtype"])
+        print(
+            "Sparsity: "
+            f"{stats['active_cell_count']}/{stats['cell_count']} = "
+            f"{100 * stats['active_cell_ratio']:.2f}% active"
+        )
+        print(
+            f"\nSlice [rows {self.row_start}:{self.row_end}, cols {self.col_start}:{self.col_end}] as 0/1:"
+        )
+        print(self.matrix_slice)
+
+    def display_tables(
+        self,
+        *,
+        row_preview_rows: int = 10,
+        col_preview_rows: int = 10,
+        active_preview_rows: int = 20,
+        display_fn: Optional[Any] = None,
+    ) -> None:
+        """
+        Display the helper tables for this slice in notebooks or plain Python.
+        """
+        resolved_display = display_fn
+        if resolved_display is None:
+            try:
+                from IPython.display import display as ipy_display  # type: ignore
+            except Exception:
+                ipy_display = None
+            resolved_display = ipy_display
+
+        def _show(df: pd.DataFrame, preview_rows: int) -> None:
+            preview = df.head(preview_rows)
+            if resolved_display is not None:
+                resolved_display(preview)
+            else:
+                print(preview)
+
+        print("\nRow coordinate mapping for this slice (top -> bottom raw matrix rows):")
+        _show(self.row_coord_df, row_preview_rows)
+        print("\nColumn coordinate mapping for this slice (left -> right raw matrix cols):")
+        _show(self.col_coord_df, col_preview_rows)
+        print("\nDecoded active spans in that slice (first 20):")
+        _show(self.active_spans_df, active_preview_rows)
+
+    def plot(self, **kwargs: Any) -> Any:
+        """
+        Plot the full matrix while highlighting this slice selection.
+        """
+        plot_kwargs = dict(kwargs)
+        plot_kwargs.setdefault("measure_offsets", self.measure_offsets)
+        plot_kwargs.setdefault(
+            "hover_fields",
+            list(self.hover_fields) if self.hover_fields else None,
+        )
+        plot_kwargs.setdefault("highlight_windows", list(self.highlight_windows))
+        return plot_binary_matrix(self.matrix, self.meta, **plot_kwargs)
+
+
+def create_binary_matrix_slice_bundle(
+    matrix: np.ndarray,
+    meta: Dict[str, Any],
+    *,
+    row_start: int = 0,
+    col_start: int = 0,
+    n_rows: int = 12,
+    n_cols: int = 24,
+    selection_name: Optional[str] = None,
+    selection_color: str = "#ff4fc3",
+    selection_alpha: float = 0.22,
+    selection_line_color: str = "#b0007a",
+    selection_line_width: float = 2.0,
+    measure_offsets: Optional[List[float]] = None,
+    hover_fields: Optional[Sequence[str]] = None,
+) -> BinaryMatrixSliceBundle:
+    """
+    Build a notebook-friendly summary of one raw binary matrix slice.
+    """
+    total_rows, total_cols = np.asarray(matrix).shape
+    row_start_idx = max(0, int(row_start))
+    col_start_idx = max(0, int(col_start))
+    row_end_idx = max(row_start_idx, min(row_start_idx + int(n_rows), total_rows))
+    col_end_idx = max(col_start_idx, min(col_start_idx + int(n_cols), total_cols))
+
+    matrix_slice = matrix[row_start_idx:row_end_idx, col_start_idx:col_end_idx]
+    row_coord_df = pd.DataFrame(
+        [get_binary_row_info(meta, row_idx) for row_idx in range(row_start_idx, row_end_idx)]
+    )
+    col_coord_df = pd.DataFrame(
+        [get_binary_col_info(meta, col_idx) for col_idx in range(col_start_idx, col_end_idx)]
+    )
+    active_spans_df = binary_slice_to_df(
+        matrix_slice,
+        meta,
+        row_start=row_start_idx,
+        col_start=col_start_idx,
+    )
+
+    resolved_selection_name = str(selection_name or "selection")
+    highlight_windows = [
+        {
+            "name": resolved_selection_name,
+            "row_start": row_start_idx,
+            "row_stop": row_end_idx,
+            "col_start": col_start_idx,
+            "col_stop": col_end_idx,
+            "color": str(selection_color),
+            "alpha": float(selection_alpha),
+            "line_color": str(selection_line_color),
+            "line_width": float(selection_line_width),
+        }
+    ]
+
+    return BinaryMatrixSliceBundle(
+        matrix=matrix,
+        meta=meta,
+        row_start=row_start_idx,
+        row_end=row_end_idx,
+        col_start=col_start_idx,
+        col_end=col_end_idx,
+        matrix_slice=matrix_slice,
+        row_coord_df=row_coord_df,
+        col_coord_df=col_coord_df,
+        active_spans_df=active_spans_df,
+        selection_name=resolved_selection_name,
+        highlight_windows=highlight_windows,
+        measure_offsets=measure_offsets,
+        hover_fields=list(hover_fields or []),
+    )
+
+
+@dataclass
+class BinaryMatrixBundle:
+    """
+    Notebook-friendly container for a binary matrix plus the helper data around it.
+    """
+    source_name: str
+    source_df: pd.DataFrame = field(repr=False)
+    matrix: np.ndarray = field(repr=False)
+    meta: Dict[str, Any] = field(repr=False)
+    measure_offsets: Optional[List[float]] = None
+    hover_fields: List[str] = field(default_factory=list)
+    decoded_df: pd.DataFrame = field(default_factory=pd.DataFrame, repr=False)
+    reconstructed_df: Optional[pd.DataFrame] = field(default=None, repr=False)
+
+    def describe(self) -> Dict[str, Any]:
+        return describe_binary_matrix(self.matrix, self.meta)
+
+    def print_summary(self) -> None:
+        print_binary_matrix_summary(self.matrix, self.meta)
+
+    def slice(
+        self,
+        *,
+        row_start: int = 0,
+        col_start: int = 0,
+        n_rows: int = 12,
+        n_cols: int = 24,
+        selection_name: Optional[str] = None,
+        selection_color: str = "#ff4fc3",
+        selection_alpha: float = 0.22,
+        selection_line_color: str = "#b0007a",
+        selection_line_width: float = 2.0,
+    ) -> BinaryMatrixSliceBundle:
+        """
+        Build a highlighted slice/showcase view from this binary matrix bundle.
+        """
+        return create_binary_matrix_slice_bundle(
+            self.matrix,
+            self.meta,
+            row_start=row_start,
+            col_start=col_start,
+            n_rows=n_rows,
+            n_cols=n_cols,
+            selection_name=selection_name,
+            selection_color=selection_color,
+            selection_alpha=selection_alpha,
+            selection_line_color=selection_line_color,
+            selection_line_width=selection_line_width,
+            measure_offsets=self.measure_offsets,
+            hover_fields=self.hover_fields,
+        )
+
+    def plot(self, **kwargs: Any) -> Any:
+        """
+        Plot the bundle's matrix while reusing stored measure offsets and hover fields.
+        """
+        plot_kwargs = dict(kwargs)
+        plot_kwargs.setdefault("measure_offsets", self.measure_offsets)
+        plot_kwargs.setdefault(
+            "hover_fields",
+            list(self.hover_fields) if self.hover_fields else None,
+        )
+        return plot_binary_matrix(self.matrix, self.meta, **plot_kwargs)
+
+
+def create_binary_matrix_bundle(
+    source: Union[str, pd.DataFrame],
+    *,
+    dfs_by_name: Optional[Dict[str, pd.DataFrame]] = None,
+    results: Optional[Sequence[Dict[str, Any]]] = None,
+    source_name: Optional[str] = None,
+    resolution_method: str = "auto",
+    manual_resolution: Optional[float] = None,
+    y_mode: str = "minmax",
+    midi_low: Optional[int] = None,
+    midi_high: Optional[int] = None,
+    row_order: str = "low_to_high",
+    include_provenance: bool = True,
+    provenance_columns: Optional[Sequence[str]] = None,
+    hover_fields: Optional[Sequence[str]] = None,
+    default_hover_fields: Optional[Sequence[str]] = None,
+) -> BinaryMatrixBundle:
+    """
+    Build a binary matrix together with decoded helper DataFrames and plotting context.
+
+    Parameters
+    ----------
+    source : str or pandas.DataFrame
+        Either a source name present in ``dfs_by_name`` or a processed note DataFrame.
+    dfs_by_name : dict, optional
+        Mapping returned by ``parse_files`` when ``source`` is a source name.
+    results : sequence of dict, optional
+        Parsed results returned by ``parse_files``. Used to recover measure offsets.
+    source_name : str, optional
+        Explicit display name when ``source`` is a DataFrame.
+    default_hover_fields : sequence of str, optional
+        Safe fields appended after ``hover_fields``. Defaults to
+        ``["row", "col", "selected_area", "source_rows"]``.
+    """
+    if isinstance(source, pd.DataFrame):
+        source_df = source
+        resolved_source_name = str(source_name or getattr(source, "name", None) or "binary_source")
+    else:
+        resolved_source_name = str(source)
+        if dfs_by_name is None:
+            raise ValueError("dfs_by_name is required when source is given as a source name.")
+        if resolved_source_name not in dfs_by_name:
+            available_sources = sorted(dfs_by_name.keys())
+            raise KeyError(
+                f"Unknown source name {resolved_source_name!r}. "
+                f"Available sources: {available_sources}"
+            )
+        source_df = dfs_by_name[resolved_source_name]
+
+    measure_offsets: Optional[List[float]] = None
+    if results is not None:
+        for item in results:
+            if item.get("name") != resolved_source_name:
+                continue
+            offsets = item.get("measure_offsets")
+            if offsets is not None:
+                measure_offsets = [float(offset) for offset in offsets]
+            break
+
+    matrix, meta = create_binary_matrix(
+        source_df,
+        resolution_method=resolution_method,
+        manual_resolution=manual_resolution,
+        y_mode=y_mode,
+        midi_low=midi_low,
+        midi_high=midi_high,
+        row_order=row_order,
+        include_provenance=include_provenance,
+        provenance_columns=provenance_columns,
+    )
+
+    provenance = meta.get("provenance") if isinstance(meta.get("provenance"), dict) else {}
+    normalized_hover_fields = prepare_binary_hover_fields(
+        hover_fields,
+        provenance_columns=provenance.get("source_columns"),
+        default_fields=default_hover_fields or ["row", "col", "selected_area", "source_rows"],
+    )
+
+    decoded_df = binary_slice_to_df(matrix, meta)
+    reconstructed_df = None
+    if str(meta.get("y_mode", "minmax")).lower() != "chroma":
+        reconstructed_df = binary_matrix_to_df_from_meta(matrix, meta)
+
+    return BinaryMatrixBundle(
+        source_name=resolved_source_name,
+        source_df=source_df,
+        matrix=matrix,
+        meta=meta,
+        measure_offsets=measure_offsets,
+        hover_fields=normalized_hover_fields,
+        decoded_df=decoded_df,
+        reconstructed_df=reconstructed_df,
+    )
+
+
 def create_binary_matrix(
     df: pd.DataFrame,
     *,
@@ -1189,6 +1723,8 @@ def create_binary_matrix(
     midi_low: Optional[int] = None,
     midi_high: Optional[int] = None,
     row_order: str = "low_to_high",
+    include_provenance: bool = False,
+    provenance_columns: Optional[Sequence[str]] = None,
 ) -> Tuple[np.ndarray, Dict[str, Any]]:
     """
     Convert a processed DataFrame to a binary piano-roll-like matrix.
@@ -1214,13 +1750,21 @@ def create_binary_matrix(
         Controls how MIDI rows are ordered in the matrix. "low_to_high" stores the
         lowest MIDI pitch at row 0 (matrix origin at the bottom). "high_to_low" stores
         the highest MIDI pitch at row 0 (matrix origin at the top).
+    include_provenance : bool, optional
+        If True, include a cell-to-source-row provenance map and serialized source rows
+        in the returned metadata. This enables linking binary cells back to the original
+        DataFrame and richer hover tooltips.
+    provenance_columns : sequence of str, optional
+        Subset of DataFrame columns to store in provenance. Defaults to all columns when
+        include_provenance is True.
 
     Returns
     -------
     (matrix, meta)
         matrix : np.ndarray of shape (num_pitches, num_cols), dtype=int
         meta : dict with keys: resolution, num_cols, time_end, y_mode, y_min, y_max,
-               midi_low, midi_high, row_order, origin, pitch_class_labels (when chroma)
+               midi_low, midi_high, row_order, origin, pitch_class_labels (when chroma),
+               and optional provenance metadata when include_provenance is True
     """
     required_columns = {"MIDI", "Global Onset", "Duration"}
     missing = required_columns.difference(df.columns)
@@ -1297,8 +1841,39 @@ def create_binary_matrix(
 
     matrix = np.zeros((num_rows, num_cols), dtype=int)
 
+    provenance: Optional[Dict[str, Any]] = None
+    if include_provenance:
+        selected_columns = (
+            [str(col) for col in provenance_columns]
+            if provenance_columns is not None
+            else [str(col) for col in df.columns]
+        )
+        missing_provenance = [col for col in selected_columns if col not in df.columns]
+        if missing_provenance:
+            raise ValueError(
+                f"provenance_columns are missing from DataFrame: {sorted(missing_provenance)}"
+            )
+        selected_df = df[selected_columns]
+        provenance = {
+            "source_columns": selected_columns,
+            "source_index_name": (
+                str(df.index.name) if df.index.name is not None else None
+            ),
+            "source_index_values": [
+                _serialize_binary_meta_value(idx) for idx in selected_df.index.tolist()
+            ],
+            "source_records": [
+                {
+                    str(col): _serialize_binary_meta_value(val)
+                    for col, val in row.items()
+                }
+                for row in selected_df.to_dict(orient="records")
+            ],
+            "active_cell_map": {},
+        }
+
     # Fill matrix
-    for _, row in df.iterrows():
+    for source_pos, (_, row) in enumerate(df.iterrows()):
         midi_value = int(row["MIDI"])
         if mode != "chroma" and not (y_min <= midi_value <= y_max):
             # Ignore notes outside requested range
@@ -1311,9 +1886,36 @@ def create_binary_matrix(
         end_col = min(end_col, num_cols)
         if 0 <= r < num_rows:
             matrix[r, start_col:end_col] = 1
+            if provenance is not None:
+                active_cell_map = provenance["active_cell_map"]
+                for c in range(start_col, end_col):
+                    key = _binary_cell_key(r, c)
+                    active_cell_map.setdefault(key, []).append(int(source_pos))
+
+    row_axis_values = [_binary_row_axis_value_from_meta(
+        {
+            "y_mode": mode,
+            "row_order": row_order_normalized,
+            "y_min": y_min,
+            "y_max": y_max,
+            **({"pitch_class_labels": pitch_class_labels} if pitch_class_labels is not None else {}),
+        },
+        row_idx,
+    ) for row_idx in range(num_rows)]
+    row_axis_labels = [_binary_row_axis_label_from_meta(
+        {
+            "y_mode": mode,
+            "row_order": row_order_normalized,
+            "y_min": y_min,
+            "y_max": y_max,
+            **({"pitch_class_labels": pitch_class_labels} if pitch_class_labels is not None else {}),
+        },
+        row_idx,
+    ) for row_idx in range(num_rows)]
 
     meta: Dict[str, Any] = {
         "resolution": resolution,
+        "num_rows": num_rows,
         "num_cols": num_cols,
         "time_end": time_end,
         "total_duration": total_duration,
@@ -1325,7 +1927,23 @@ def create_binary_matrix(
         "midi_high": midi_high_final,
         "row_order": row_order_normalized,
         "origin": origin,
+        "binary_coordinate_system": "raw_matrix_indices",
+        "binary_row_index_direction": "top_to_bottom",
+        "binary_col_index_direction": "left_to_right",
+        "row_axis_values": row_axis_values,
+        "row_axis_labels": row_axis_labels,
         **({"pitch_class_labels": pitch_class_labels} if pitch_class_labels is not None else {}),
+        **(
+            {
+                "provenance": {
+                    **provenance,
+                    "active_cell_count": len(provenance["active_cell_map"]),
+                    "source_row_count": len(provenance["source_records"]),
+                }
+            }
+            if provenance is not None
+            else {}
+        ),
     }
 
     return matrix, meta
@@ -1338,6 +1956,9 @@ def plot_binary_matrix(
     backend: str = "plt",
     measure_offsets: Optional[List[float]] = None,
     show_measure_lines: bool = True,
+    measure_line_color: str = "red",
+    show_hover: bool = True,
+    hover_fields: Optional[Sequence[str]] = None,
     cmap: str = "gray_r",
     show: bool = True,
     plot_width: Optional[int] = None,
@@ -1346,6 +1967,8 @@ def plot_binary_matrix(
     zoom_drag_dim: Optional[str] = None,
     zoom_wheel_dim: Optional[str] = None,
     pitch_labels: bool = True,
+    hover_cell_scope: str = "active",
+    highlight_windows: Optional[Sequence[Dict[str, Any]]] = None,
     save_html: Optional[bool] = None,
     save_html_path: Optional[str] = None,
     save_png_path: Optional[str] = None,
@@ -1360,12 +1983,14 @@ def plot_binary_matrix(
         Binary matrix (rows=pitches, cols=time steps).
     meta : dict
         Metadata returned by create_binary_matrix.
-    backend : {"plt", "bokeh"}
-        Plotting backend to use.
+    backend : {"plt", "bokeh", "none"}
+        Plotting backend to use. Use "none" to skip plotting.
     measure_offsets : list[float], optional
         Global onset times where measures start. Drawn as vertical lines when provided.
     show_measure_lines : bool
         Whether to draw measure lines when offsets are provided.
+    measure_line_color : str
+        Color for the vertical measure lines when show_measure_lines is True.
     cmap : str
         Matplotlib colormap for imshow.
     show : bool
@@ -1380,8 +2005,27 @@ def plot_binary_matrix(
         Dimension for box zoom drag tool (Bokeh only). None defaults to "both".
     zoom_wheel_dim : {"width", "height", "both"}, optional
         Dimension for wheel zoom tool (Bokeh only). None defaults to "both".
+    show_hover : bool, optional
+        When backend is 'bokeh', add a HoverTool showing binary-axis and optional
+        provenance information. Default True.
+    hover_fields : sequence of str, optional
+        Fields to show in hover (Bokeh only). Core fields: "row", "col",
+        "time", "midi", "source_count", "source_rows", "source_df". When
+        provenance metadata is present, lower_snake_case versions of source DataFrame
+        column names are also supported (e.g. "measure", "voice", "xml_id").
+        Legacy aliases "pitch_row" -> "row" and "time_col" -> "col" are accepted.
+        If None, defaults to raw matrix coordinates plus provenance counts when available.
     pitch_labels : bool, optional
         For Bokeh: whether to use pitch names or indices on the y-axis when supported.
+    hover_cell_scope : {"active", "active_or_highlighted", "all"}, optional
+        Controls which binary cells get a hover target in the Bokeh backend.
+        - "active": only cells with value 1 (fastest)
+        - "active_or_highlighted": active cells plus cells covered by highlight_windows
+        - "all": every raw matrix cell, including empty cells (slowest)
+    highlight_windows : sequence of dict, optional
+        Optional highlight overlays defined in raw binary matrix coordinates. Each item may
+        contain: row_start, row_stop, col_start, col_stop (half-open indices), optional
+        name, and optional styling keys color, alpha, line_color, line_width.
     save_html : bool, optional
         If None (default), behaves like legacy mode: saves HTML when save_html_path is provided.
         If True, saves HTML to save_html_path if provided, otherwise to "binary_matrix.html".
@@ -1396,9 +2040,12 @@ def plot_binary_matrix(
     Returns
     -------
     Any
-        Backend-specific figure object.
+        A backend-specific figure object when show=False; None when show=True or backend="none".
     """
     backend = (backend or "plt").lower()
+
+    if backend == "none":
+        return None
 
     # Set default dimensions if not provided
     width_pixels = plot_width or 900
@@ -1411,6 +2058,11 @@ def plot_binary_matrix(
     origin = str(meta.get("origin", "lower")).lower()
     if origin not in {"lower", "upper"}:
         origin = "lower"
+    hover_scope = str(hover_cell_scope or "active").strip().lower()
+    if hover_scope in {"active_or_selected", "active_or_highlighted_area"}:
+        hover_scope = "active_or_highlighted"
+    if hover_scope not in {"active", "active_or_highlighted", "all"}:
+        hover_scope = "active"
 
     matrix_for_display = matrix if origin == "lower" else np.flipud(matrix)
     labels_display = meta.get("pitch_class_labels", [])
@@ -1418,6 +2070,49 @@ def plot_binary_matrix(
         labels_display = list(labels_display)
         if origin == "upper":
             labels_display.reverse()
+
+    def _normalized_highlight_windows() -> List[Dict[str, Any]]:
+        if not highlight_windows:
+            return []
+        normalized: List[Dict[str, Any]] = []
+        total_rows, total_cols = matrix.shape
+        for item in highlight_windows:
+            if item is None:
+                continue
+            row_start = int(item.get("row_start", 0))
+            row_stop = int(item.get("row_stop", row_start + 1))
+            col_start = int(item.get("col_start", 0))
+            col_stop = int(item.get("col_stop", col_start + 1))
+            row_start = max(0, min(row_start, total_rows))
+            row_stop = max(0, min(row_stop, total_rows))
+            col_start = max(0, min(col_start, total_cols))
+            col_stop = max(0, min(col_stop, total_cols))
+            if row_stop <= row_start or col_stop <= col_start:
+                continue
+            if origin == "upper":
+                display_row_start = total_rows - row_stop
+            else:
+                display_row_start = row_start
+            normalized.append(
+                {
+                    "row_start": row_start,
+                    "row_stop": row_stop,
+                    "col_start": col_start,
+                    "col_stop": col_stop,
+                    "x_start": float(col_start * float(meta.get("resolution", 1.0))),
+                    "x_end": float(col_stop * float(meta.get("resolution", 1.0))),
+                    "y_start": float(y_min + display_row_start),
+                    "y_end": float(y_min + display_row_start + (row_stop - row_start)),
+                    "name": str(item.get("name", "")).strip(),
+                    "color": str(item.get("color", "#ff00ff")),
+                    "alpha": float(item.get("alpha", 0.2)),
+                    "line_color": str(item.get("line_color", item.get("color", "#ff00ff"))),
+                    "line_width": float(item.get("line_width", 1.5)),
+                }
+            )
+        return normalized
+
+    highlight_specs = _normalized_highlight_windows()
 
     if backend == "plt":
         # Convert pixels to inches for matplotlib
@@ -1444,19 +2139,43 @@ def plot_binary_matrix(
 
         if show_measure_lines and measure_offsets is not None:
             for m_offset in measure_offsets:
-                ax.axvline(x=m_offset, color="red", linestyle="--", linewidth=0.8)
+                ax.axvline(x=m_offset, color=str(measure_line_color), linestyle="--", linewidth=0.8)
 
-        cbar = fig.colorbar(plt.cm.ScalarMappable(cmap=cmap), ax=ax, ticks=[0, 1])
-        cbar.set_label("Note On/Off")
+        if highlight_specs:
+            from matplotlib.patches import Rectangle
+            for spec in highlight_specs:
+                ax.add_patch(
+                    Rectangle(
+                        (spec["x_start"], spec["y_start"]),
+                        spec["x_end"] - spec["x_start"],
+                        spec["y_end"] - spec["y_start"],
+                        facecolor=spec["color"],
+                        edgecolor=spec["line_color"],
+                        linewidth=spec["line_width"],
+                        alpha=spec["alpha"],
+                    )
+                )
+
         fig.tight_layout()
         if show:
             plt.show()
+            plt.close(fig)
+            return None
         return fig
 
     if backend == "bokeh":
         try:
             from bokeh.plotting import figure, show as bokeh_show
-            from bokeh.models import Span, LinearColorMapper, ColorBar, BasicTicker, BoxZoomTool, WheelZoomTool, PanTool
+            from bokeh.models import (
+                Span,
+                LinearColorMapper,
+                BasicTicker,
+                BoxZoomTool,
+                WheelZoomTool,
+                PanTool,
+                ColumnDataSource,
+                HoverTool,
+            )
             # Initialize inline output in notebooks once
             global BOKEH_NOTEBOOK_INITIALIZED
             if not BOKEH_NOTEBOOK_INITIALIZED:
@@ -1481,6 +2200,179 @@ def plot_binary_matrix(
             raise ImportError("Bokeh is not installed. Install bokeh to use the 'bokeh' backend.") from exc
 
         matrix_for_bokeh = np.ascontiguousarray(matrix_for_display)
+        resolution = float(meta.get("resolution", 1.0))
+        provenance = meta.get("provenance") if isinstance(meta.get("provenance"), dict) else None
+        provenance_columns = list(provenance.get("source_columns", [])) if provenance else []
+        hover_field_aliases = {
+            "pitch_row": "row",
+            "time_col": "col",
+        }
+        supported_hover_labels: Dict[str, str] = {
+            "row": "Row",
+            "col": "Col",
+            "time": "Time",
+            "midi": "MIDI",
+            "selected_area": "Name",
+            "source_count": "Source row count",
+            "source_rows": "Source df rows",
+            "source_df": "Source df info",
+        }
+        provenance_field_map: Dict[str, str] = {}
+        for source_col in provenance_columns:
+            alias = _normalize_binary_hover_field_name(source_col)
+            if alias and alias not in supported_hover_labels:
+                provenance_field_map[alias] = str(source_col)
+        for alias, source_col in provenance_field_map.items():
+            supported_hover_labels.setdefault(alias, source_col)
+        default_hover_fields = ["row", "col"]
+        if provenance is not None:
+            default_hover_fields.extend(["source_count", "source_rows"])
+        requested_hover_fields = (
+            list(hover_fields) if hover_fields is not None else list(default_hover_fields)
+        )
+        normalized_hover_fields = []
+        for field in requested_hover_fields:
+            normalized = hover_field_aliases.get(
+                _normalize_binary_hover_field_name(field),
+                _normalize_binary_hover_field_name(field),
+            )
+            if normalized in supported_hover_labels and normalized not in normalized_hover_fields:
+                normalized_hover_fields.append(normalized)
+        if not normalized_hover_fields:
+            normalized_hover_fields = list(default_hover_fields)
+        binary_section_fields = [
+            field_name for field_name in normalized_hover_fields
+            if field_name in {"row", "col", "time", "midi"}
+        ]
+        selected_area_fields = [
+            field_name for field_name in normalized_hover_fields
+            if field_name in {"selected_area"}
+        ]
+        df_section_fields = [
+            field_name for field_name in normalized_hover_fields
+            if field_name not in {"row", "col", "time", "midi", "selected_area"}
+        ]
+        requested_provenance_aliases = [
+            field_name for field_name in df_section_fields if field_name in provenance_field_map
+        ]
+
+        hover_source_data: Optional[Dict[str, List[Any]]] = None
+        total_rows, total_cols = matrix.shape
+        if total_rows and total_cols:
+            hover_source_data = {
+                "x": [],
+                "y": [],
+                "w": [],
+                "h": [],
+                "row": [],
+                "col": [],
+                "time": [],
+                "midi": [],
+                **({"selected_area": [], "selected_area_display": []} if selected_area_fields else {}),
+                **({"source_df_display": []} if df_section_fields else {}),
+                **({"source_count": []} if "source_count" in df_section_fields else {}),
+                **({"source_rows": []} if "source_rows" in df_section_fields else {}),
+                **({"source_df": []} if "source_df" in df_section_fields else {}),
+            }
+            for field_name in requested_provenance_aliases:
+                hover_source_data[field_name] = []
+
+            def _join_unique(values: Sequence[Any]) -> str:
+                seen: set[str] = set()
+                joined: List[str] = []
+                for value in values:
+                    text = _format_binary_hover_value(value)
+                    if not text or text in seen:
+                        continue
+                    seen.add(text)
+                    joined.append(text)
+                return " | ".join(joined)
+
+            active_cell_map = provenance.get("active_cell_map", {}) if provenance is not None else {}
+            if hover_scope == "all":
+                hover_cells = (
+                    (raw_row, col)
+                    for raw_row in range(total_rows)
+                    for col in range(total_cols)
+                )
+            elif hover_scope == "active_or_highlighted":
+                hover_cell_set = {
+                    (int(raw_row), int(col))
+                    for raw_row, col in zip(*np.nonzero(np.asarray(matrix)))
+                }
+                for spec in highlight_specs:
+                    for raw_row in range(int(spec["row_start"]), int(spec["row_stop"])):
+                        for col in range(int(spec["col_start"]), int(spec["col_stop"])):
+                            hover_cell_set.add((raw_row, col))
+                hover_cells = iter(sorted(hover_cell_set))
+            else:
+                hover_cells = (
+                    (int(raw_row), int(col))
+                    for raw_row, col in zip(*np.nonzero(np.asarray(matrix)))
+                )
+
+            for raw_row, col in hover_cells:
+                display_row = raw_row if origin == "lower" else (total_rows - 1 - raw_row)
+                axis_value = _binary_row_axis_value_from_meta(meta, raw_row)
+                time_start = col * resolution
+                time_end_cell = (col + 1) * resolution
+                source_positions = list(active_cell_map.get(_binary_cell_key(raw_row, col), []))
+                source_rows = _binary_meta_source_rows(meta, source_positions) if source_positions else []
+                selected_area_names = [
+                    spec["name"]
+                    for spec in highlight_specs
+                    if spec.get("name")
+                    and spec["row_start"] <= raw_row < spec["row_stop"]
+                    and spec["col_start"] <= col < spec["col_stop"]
+                ]
+
+                hover_source_data["x"].append(float(time_start + (resolution / 2.0)))
+                hover_source_data["y"].append(float(y_min + display_row + 0.5))
+                hover_source_data["w"].append(float(resolution))
+                hover_source_data["h"].append(1.0)
+                hover_source_data["row"].append(str(int(raw_row)))
+                hover_source_data["col"].append(str(int(col)))
+                hover_source_data["time"].append(
+                    f"[{_format_binary_hover_value(time_start)}, {_format_binary_hover_value(time_end_cell)})"
+                )
+                hover_source_data["midi"].append(_format_binary_hover_value(axis_value))
+
+                if selected_area_fields:
+                    hover_source_data["selected_area"].append(" | ".join(selected_area_names))
+                    hover_source_data["selected_area_display"].append(
+                        "block" if selected_area_names else "none"
+                    )
+
+                if df_section_fields:
+                    hover_source_data["source_df_display"].append(
+                        "block" if source_positions else "none"
+                    )
+                if "source_count" in df_section_fields:
+                    hover_source_data["source_count"].append(str(len(source_positions)))
+                if "source_rows" in df_section_fields:
+                    hover_source_data["source_rows"].append(
+                        ", ".join(_format_binary_hover_value(item.get("source_df_index")) for item in source_rows)
+                    )
+                if "source_df" in df_section_fields:
+                    if source_rows:
+                        hover_source_data["source_df"].append(
+                            " || ".join(
+                                f"[{_format_binary_hover_value(item.get('source_df_index'))}] "
+                                + "; ".join(
+                                    f"{col_name}={_format_binary_hover_value(item.get(col_name))}"
+                                    for col_name in provenance_columns
+                                    if _format_binary_hover_value(item.get(col_name))
+                                )
+                                for item in source_rows
+                            )
+                        )
+                    else:
+                        hover_source_data["source_df"].append("")
+
+                for alias in requested_provenance_aliases:
+                    source_col = provenance_field_map[alias]
+                    values_here = [row_info.get(source_col) for row_info in source_rows]
+                    hover_source_data[alias].append(_join_unique(values_here))
 
         # Normalize zoom dimension options
         def _norm_dim(val: Optional[str]) -> str:
@@ -1528,10 +2420,30 @@ def plot_binary_matrix(
                 color_mapper=color_mapper,
             )
 
+            if highlight_specs:
+                plot.quad(
+                    left=[spec["x_start"] for spec in highlight_specs],
+                    right=[spec["x_end"] for spec in highlight_specs],
+                    bottom=[spec["y_start"] for spec in highlight_specs],
+                    top=[spec["y_end"] for spec in highlight_specs],
+                    fill_color=[spec["color"] for spec in highlight_specs],
+                    fill_alpha=[spec["alpha"] for spec in highlight_specs],
+                    line_color=[spec["line_color"] for spec in highlight_specs],
+                    line_width=[spec["line_width"] for spec in highlight_specs],
+                )
+
             # Measure lines
             if show_measure_lines and measure_offsets is not None:
                 for m_offset in measure_offsets:
-                    plot.add_layout(Span(location=m_offset, dimension="height", line_color="red", line_dash="dashed", line_width=1))
+                    plot.add_layout(
+                        Span(
+                            location=m_offset,
+                            dimension="height",
+                            line_color=str(measure_line_color),
+                            line_dash="dashed",
+                            line_width=1,
+                        )
+                    )
 
             # Y-axis labels
             if y_mode == "chroma":
@@ -1542,10 +2454,6 @@ def plot_binary_matrix(
                 if pitch_labels and labels_display:
                     plot.yaxis.ticker = BasicTicker()
                     plot.yaxis.major_label_overrides = {i + y_min: lbl for i, lbl in enumerate(labels_display)}
-
-            # Color bar
-            color_bar = ColorBar(color_mapper=color_mapper, label_standoff=8, location=(0, 0))
-            plot.add_layout(color_bar, "right")
 
             # Tools configuration (mirror draw_piano_roll)
             try:
@@ -1560,6 +2468,53 @@ def plot_binary_matrix(
                 plot.toolbar.active_scroll = wheel_tool
             except Exception:
                 pass
+
+            # Optional hover (Bokeh only): time, pitch row index, and/or MIDI (from row via meta)
+            if show_hover:
+                if hover_source_data is not None:
+                    hover_src = ColumnDataSource(data=hover_source_data)
+                    hover_renderer = plot.rect(
+                        x="x",
+                        y="y",
+                        width="w",
+                        height="h",
+                        source=hover_src,
+                        fill_alpha=0.0,
+                        line_alpha=0.0,
+                    )
+                    tooltip_parts: List[str] = []
+                    if binary_section_fields:
+                        tooltip_parts.append(
+                            "<div style='margin-bottom:6px;'><span style='font-weight:600;'>Binary</span></div>"
+                        )
+                        for field_name in binary_section_fields:
+                            tooltip_parts.append(
+                                f"<div><span style='font-weight:600;'>{supported_hover_labels[field_name]}:</span> @{field_name}</div>"
+                            )
+                    if selected_area_fields:
+                        tooltip_parts.append(
+                            "<div style='display:@selected_area_display; margin-top:8px;'>"
+                            "<div style='margin-bottom:6px;'><span style='font-weight:600;'>Selected Area</span></div>"
+                        )
+                        for field_name in selected_area_fields:
+                            tooltip_parts.append(
+                                f"<div><span style='font-weight:600;'>{supported_hover_labels[field_name]}:</span> @{field_name}</div>"
+                            )
+                        tooltip_parts.append("</div>")
+                    if df_section_fields:
+                        tooltip_parts.append(
+                            "<div style='display:@source_df_display; margin-top:8px;'>"
+                            "<div style='margin-bottom:6px;'><span style='font-weight:600;'>Source DF</span></div>"
+                        )
+                        for field_name in df_section_fields:
+                            tooltip_parts.append(
+                                f"<div><span style='font-weight:600;'>{supported_hover_labels[field_name]}:</span> @{field_name}</div>"
+                            )
+                        tooltip_parts.append("</div>")
+                    tooltip_html = "<div>" + "".join(tooltip_parts) + "</div>"
+                    if tooltip_parts:
+                        hover_tool = HoverTool(tooltips=tooltip_html, renderers=[hover_renderer])
+                        plot.add_tools(hover_tool)
 
             return plot
 
@@ -1605,9 +2560,210 @@ def plot_binary_matrix(
 
         if show:
             bokeh_show(p)
+            return None
         return p
 
-    raise ValueError("Unsupported backend. Choose from 'plt' or 'bokeh'.")
+    raise ValueError("Unsupported backend. Choose from 'plt', 'bokeh', or 'none'.")
+
+
+def get_binary_cell_provenance(
+    meta: Dict[str, Any],
+    row: int,
+    col: int,
+    *,
+    as_dataframe: bool = False,
+) -> Dict[str, Any]:
+    """
+    Return axis coordinates and source DataFrame rows linked to one binary cell.
+
+    Parameters
+    ----------
+    meta : dict
+        Metadata returned by create_binary_matrix with include_provenance=True.
+    row, col : int
+        Raw matrix coordinates (same orientation as the matrix returned by create_binary_matrix).
+    as_dataframe : bool, optional
+        If True, include a pandas DataFrame under 'source_df'.
+    """
+    row_idx = int(row)
+    col_idx = int(col)
+    resolution = float(meta.get("resolution", 1.0))
+    source_rows = _binary_meta_source_rows(
+        meta,
+        list(
+            (
+                meta.get("provenance", {})
+                if isinstance(meta.get("provenance"), dict)
+                else {}
+            ).get("active_cell_map", {}).get(_binary_cell_key(row_idx, col_idx), [])
+        ),
+    )
+    out: Dict[str, Any] = {
+        "row": row_idx,
+        "col": col_idx,
+        "time_start": float(col_idx * resolution),
+        "time_end": float((col_idx + 1) * resolution),
+        "axis_value": _binary_row_axis_value_from_meta(meta, row_idx),
+        "axis_label": _binary_row_axis_label_from_meta(meta, row_idx),
+        "source_rows": source_rows,
+        "source_count": len(source_rows),
+    }
+    if as_dataframe:
+        out["source_df"] = pd.DataFrame(source_rows)
+    return out
+
+
+def get_binary_row_info(meta: Dict[str, Any], row: int) -> Dict[str, Any]:
+    """
+    Return raw binary row coordinates plus the corresponding axis value/label.
+    """
+    row_idx = int(row)
+    axis_value = _binary_row_axis_value_from_meta(meta, row_idx)
+    out: Dict[str, Any] = {
+        "row": row_idx,
+        "axis_value": axis_value,
+        "axis_label": _binary_row_axis_label_from_meta(meta, row_idx),
+    }
+    if str(meta.get("y_mode", "minmax")).lower() != "chroma":
+        try:
+            out["midi"] = int(axis_value)
+        except Exception:
+            pass
+    return out
+
+
+def get_binary_col_info(meta: Dict[str, Any], col: int) -> Dict[str, Any]:
+    """
+    Return raw binary column coordinates plus the corresponding time bounds.
+    """
+    col_idx = int(col)
+    resolution = float(meta.get("resolution", 1.0))
+    return {
+        "col": col_idx,
+        "time_start": float(col_idx * resolution),
+        "time_end": float((col_idx + 1) * resolution),
+    }
+
+
+def get_binary_window_provenance(
+    meta: Dict[str, Any],
+    row_start: int,
+    row_stop: int,
+    col_start: int,
+    col_stop: int,
+    *,
+    unique: bool = True,
+    as_dataframe: bool = False,
+) -> Dict[str, Any]:
+    """
+    Collect source DataFrame rows linked to a binary window.
+
+    Parameters
+    ----------
+    meta : dict
+        Metadata returned by create_binary_matrix with include_provenance=True.
+    row_start, row_stop, col_start, col_stop : int
+        Half-open raw matrix window bounds.
+    unique : bool, optional
+        If True, de-duplicate source rows across all cells in the window.
+    as_dataframe : bool, optional
+        If True, include a pandas DataFrame under 'source_df'.
+    """
+    provenance = meta.get("provenance")
+    active_cell_map = provenance.get("active_cell_map", {}) if isinstance(provenance, dict) else {}
+    collected_positions: List[int] = []
+    for row_idx in range(int(row_start), int(row_stop)):
+        for col_idx in range(int(col_start), int(col_stop)):
+            collected_positions.extend(active_cell_map.get(_binary_cell_key(row_idx, col_idx), []))
+    if unique:
+        seen_positions: set[int] = set()
+        ordered_positions: List[int] = []
+        for pos in collected_positions:
+            source_pos = int(pos)
+            if source_pos in seen_positions:
+                continue
+            seen_positions.add(source_pos)
+            ordered_positions.append(source_pos)
+        collected_positions = ordered_positions
+    source_rows = _binary_meta_source_rows(meta, collected_positions)
+    out: Dict[str, Any] = {
+        "row_window": (int(row_start), int(row_stop)),
+        "col_window": (int(col_start), int(col_stop)),
+        "source_rows": source_rows,
+        "source_count": len(source_rows),
+    }
+    if as_dataframe:
+        out["source_df"] = pd.DataFrame(source_rows)
+    return out
+
+
+def binary_slice_to_df(
+    matrix: np.ndarray,
+    meta: Dict[str, Any],
+    *,
+    row_start: int = 0,
+    col_start: int = 0,
+) -> pd.DataFrame:
+    """
+    Decode a raw binary matrix slice while preserving its original matrix coordinates.
+
+    Parameters
+    ----------
+    matrix : np.ndarray
+        A raw binary matrix or submatrix using the same orientation as the output of
+        create_binary_matrix.
+    meta : dict
+        Metadata returned by create_binary_matrix.
+    row_start, col_start : int, optional
+        Raw matrix offsets of the provided slice inside the full matrix.
+
+    Returns
+    -------
+    pandas.DataFrame
+        One row per contiguous active span with raw matrix coordinates and decoded
+        time/axis information.
+    """
+    mat = np.asarray(matrix)
+    if mat.ndim != 2:
+        raise ValueError("matrix must be 2D (rows, cols)")
+    resolution = float(meta.get("resolution", 1.0))
+    rows, cols = mat.shape
+    mat_bin = (mat > 0).astype(int)
+    records: List[Dict[str, Any]] = []
+    for local_row in range(rows):
+        raw_row = int(row_start) + local_row
+        row_info = get_binary_row_info(meta, raw_row)
+        row_data = mat_bin[local_row]
+        c = 0
+        while c < cols:
+            if row_data[c] != 1:
+                c += 1
+                continue
+            start_local = c
+            while c < cols and row_data[c] == 1:
+                c += 1
+            end_local = c
+            raw_col_start = int(col_start) + start_local
+            raw_col_end = int(col_start) + end_local
+            record: Dict[str, Any] = {
+                "Binary Row": raw_row,
+                "Binary Col Start": raw_col_start,
+                "Binary Col End": raw_col_end,
+                "Global Onset": float(raw_col_start * resolution),
+                "Time End": float(raw_col_end * resolution),
+                "Duration": float((raw_col_end - raw_col_start) * resolution),
+                "Axis Value": row_info["axis_value"],
+                "Axis Label": row_info["axis_label"],
+            }
+            if "midi" in row_info:
+                record["MIDI"] = row_info["midi"]
+            records.append(record)
+    out = pd.DataFrame(records)
+    if len(out):
+        sort_cols = ["Global Onset", "Binary Row"]
+        out = out.sort_values(sort_cols).reset_index(drop=True)
+    return out
+
 
 def orient_binary_matrix(
     matrix: np.ndarray,
@@ -1727,13 +2883,21 @@ def _normalize_df(df: pd.DataFrame) -> pd.DataFrame:
     return out.sort_values(["Global Onset", "MIDI"]).reset_index(drop=True)
 
 
-def binary_matrix_to_df_from_meta(matrix: np.ndarray, meta: dict, *, flipped: bool = False) -> pd.DataFrame:
+def binary_matrix_to_df_from_meta(
+    matrix: np.ndarray,
+    meta: dict,
+    *,
+    flipped: Optional[bool] = None,
+) -> pd.DataFrame:
     """
     Convenience wrapper to convert a matrix back to DataFrame using meta from create_binary_matrix.
-    - flipped=False for raw data matrices (row 0 is lowest MIDI at the top)
-    - flipped=True for views like np.flipud(matrix) where bottom is lowest MIDI
+    - flipped=None (default) auto-detects the raw matrix orientation from ``meta["origin"]``
+    - flipped=False for matrices whose top row maps to the lowest MIDI
+    - flipped=True for matrices whose top row maps to the highest MIDI, or for flipped views
     """
     resolution = float(meta["resolution"])
+    if flipped is None:
+        flipped = str(meta.get("origin", "lower")).lower() == "upper"
     if flipped:
         return binary_matrix_to_df(
             matrix,

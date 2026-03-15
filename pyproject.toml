@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "camat"
-version = "0.1.6"
+version = "0.1.7"
 description = "CAMAT: tools for symbolic music parsing, analysis, and rendering."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -33,7 +33,7 @@ Homepage = "https://github.com/egorpol/camat_v2"
 Repository = "https://github.com/egorpol/camat_v2"
 Issues = "https://github.com/egorpol/camat_v2/issues"
 Changelog = "https://github.com/egorpol/camat_v2/blob/main/CHANGELOG.md"
-Documentation = "https://github.com/egorpol/camat_v2/tree/main/docs"
+Documentation = "https://camat.readthedocs.io/"
 
 [tool.setuptools]
 include-package-data = false

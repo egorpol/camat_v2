@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, Iterable, List, Optional, Tuple, Sequence, Union
+from pathlib import Path
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, Union
 
 import pandas as pd
 
 from .music_utils import (  # type: ignore
     draw_piano_roll,
-    extract_voice_data,
     filter_and_adjust_durations,
     get_file_path,
     get_measure_offsets,
@@ -37,6 +37,39 @@ _PITCH_CLASS_NAMES = (
     "B",
 )
 
+_EVENT_DF_COLUMNS = [
+    "type",
+    "subtype",
+    "Measure",
+    "Local Onset",
+    "Global Onset",
+    "Duration",
+    "Voice",
+    "xml_id",
+    "start_xml_id",
+    "end_xml_id",
+    "staff_n",
+    "staff_raw",
+    "layer_n",
+    "layer_raw",
+    "scope",
+    "text",
+    "text_role",
+    "form",
+    "place",
+    "func",
+    "plist",
+    "tstamp_raw",
+    "tstamp2_raw",
+    "verse_n",
+    "wordpos",
+    "con",
+    "mm",
+    "mm_unit",
+    "mm_dots",
+    "extra",
+]
+
 
 def _midi_to_pitch_name(midi: int) -> str:
     octave = (int(midi) // 12) - 1
@@ -55,10 +88,247 @@ def _source_to_name(file_source: str, index: int) -> str:
     if "/" in file_source or "\\" in file_source:
         base = base.split("?")[0].split("#")[0]
     stem, _ = os.path.splitext(base)
-    # simple slugify: lowercase, alnum+underscore
     slug = re.sub(r"[^a-z0-9]+", "_", stem.strip().lower())
     slug = re.sub(r"_+", "_", slug).strip("_")
     return f"{index:02d}_" + slug
+
+
+def _empty_event_dataframe() -> pd.DataFrame:
+    return pd.DataFrame(columns=list(_EVENT_DF_COLUMNS))
+
+
+def _clean_xml_id(raw: Any) -> Optional[str]:
+    if raw is None:
+        return None
+    try:
+        value = str(raw).strip()
+    except Exception:
+        return None
+    if not value:
+        return None
+    return value[1:] if value.startswith("#") else value
+
+
+def _music21_part_label(part: Any, index: int) -> str:
+    for candidate in (
+        getattr(part, "partName", None),
+        getattr(part, "partAbbreviation", None),
+        getattr(part, "bestName", lambda: None)() if hasattr(part, "bestName") else None,
+    ):
+        if candidate is None:
+            continue
+        label = str(candidate).strip()
+        if label:
+            return label
+
+    raw_id = getattr(part, "id", None)
+    if isinstance(raw_id, str):
+        label = raw_id.strip()
+        if label:
+            return label
+
+    return f"P{index}"
+
+
+def _music21_voice_label(element: Any, part_label: str) -> str:
+    voice_ctx = element.getContextByClass("Voice")
+    if voice_ctx is None:
+        return f"{part_label} - Voice 1"
+
+    raw_voice = getattr(voice_ctx, "id", None) or getattr(voice_ctx, "name", None)
+    if raw_voice is None:
+        raw_voice = getattr(voice_ctx, "index", None)
+    if raw_voice is None:
+        return f"{part_label} - Voice 1"
+
+    voice_label = str(raw_voice).strip()
+    if not voice_label:
+        return f"{part_label} - Voice 1"
+    if voice_label.isdigit():
+        voice_label = f"Voice {voice_label}"
+    elif not voice_label.lower().startswith("voice"):
+        voice_label = f"Voice {voice_label}"
+    return f"{part_label} - {voice_label}"
+
+
+def _music21_score_to_rows(
+    score: Any,
+    *,
+    include_xml_ids: bool = False,
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], Dict[str, str]]:
+    note_rows: List[Dict[str, Any]] = []
+    rest_rows: List[Dict[str, Any]] = []
+    staff_to_part: Dict[str, str] = {}
+
+    from music21 import chord as chord_module  # local import
+    from music21 import note as note_module  # local import
+
+    parts = list(getattr(score, "parts", []) or [])
+    for part_index, part in enumerate(parts, start=1):
+        part_label = _music21_part_label(part, part_index)
+        staff_n = str(part_index)
+        staff_to_part[staff_n] = part_label
+
+        try:
+            elements = part.flatten().notesAndRests.stream()
+        except Exception:
+            elements = []
+
+        for element in elements:
+            if not isinstance(element, (note_module.Note, chord_module.Chord, note_module.Rest)):
+                continue
+
+            measure = element.getContextByClass("Measure")
+            if measure is not None:
+                try:
+                    measure_num = int(measure.number)
+                except Exception:
+                    measure_num = 0
+                try:
+                    measure_offset = float(measure.offset)
+                except Exception:
+                    measure_offset = 0.0
+            else:
+                measure_num = 0
+                measure_offset = 0.0
+
+            try:
+                global_onset = float(element.offset)
+            except Exception:
+                continue
+            try:
+                duration = float(element.duration.quarterLength)
+            except Exception:
+                duration = 0.0
+
+            local_onset = float(global_onset - measure_offset)
+            voice_label = _music21_voice_label(element, part_label)
+            xml_id_value = _clean_xml_id(getattr(element, "id", None)) if include_xml_ids else None
+
+            base_row: Dict[str, Any] = {
+                "Measure": measure_num,
+                "Local Onset": local_onset,
+                "Global Onset": global_onset,
+                "Duration": duration,
+                "Voice": voice_label,
+                "staff_n": staff_n,
+            }
+            if include_xml_ids:
+                base_row["xml_id"] = xml_id_value
+
+            if isinstance(element, note_module.Rest):
+                rest_rows.append(dict(base_row))
+                continue
+
+            if isinstance(element, note_module.Note):
+                pitches = [str(element.pitch)]
+            else:
+                pitches = [str(pitch) for pitch in element.pitches]
+
+            for pitch_name in pitches:
+                row = dict(base_row)
+                row["Pitch"] = pitch_name
+                note_rows.append(row)
+
+    return note_rows, rest_rows, staff_to_part
+
+
+def _music21_rest_events_to_dataframe(df_rests: pd.DataFrame) -> pd.DataFrame:
+    if df_rests.empty:
+        return _empty_event_dataframe()
+
+    rows: List[Dict[str, Any]] = []
+    for _, row in df_rests.iterrows():
+        rows.append(
+            {
+                "type": "rest",
+                "subtype": "rest",
+                "Measure": row.get("Measure", pd.NA),
+                "Local Onset": row.get("Local Onset", pd.NA),
+                "Global Onset": row.get("Global Onset", pd.NA),
+                "Duration": row.get("Duration", 0.0),
+                "Voice": row.get("Voice", pd.NA),
+                "xml_id": row.get("xml_id", pd.NA),
+                "start_xml_id": pd.NA,
+                "end_xml_id": pd.NA,
+                "staff_n": row.get("staff_n", pd.NA),
+                "staff_raw": pd.NA,
+                "layer_n": pd.NA,
+                "layer_raw": pd.NA,
+                "scope": "timeline",
+                "text": pd.NA,
+                "text_role": pd.NA,
+                "form": pd.NA,
+                "place": pd.NA,
+                "func": pd.NA,
+                "plist": pd.NA,
+                "tstamp_raw": pd.NA,
+                "tstamp2_raw": pd.NA,
+                "verse_n": pd.NA,
+                "wordpos": pd.NA,
+                "con": pd.NA,
+                "mm": pd.NA,
+                "mm_unit": pd.NA,
+                "mm_dots": pd.NA,
+                "extra": pd.NA,
+            }
+        )
+
+    df_events = pd.DataFrame(rows)
+    for col in _EVENT_DF_COLUMNS:
+        if col not in df_events.columns:
+            df_events[col] = pd.NA
+    return df_events[_EVENT_DF_COLUMNS].sort_values("Global Onset", na_position="last").reset_index(drop=True)
+
+
+def _music21_anchor_timeline(df_pitch: pd.DataFrame, df_rests: pd.DataFrame) -> pd.DataFrame:
+    frames: List[pd.DataFrame] = []
+
+    if not df_pitch.empty:
+        pitch_cols = [col for col in ("xml_id", "Global Onset", "Duration", "Voice", "MIDI") if col in df_pitch.columns]
+        if pitch_cols:
+            frames.append(df_pitch[pitch_cols].copy())
+
+    if not df_rests.empty:
+        rest_anchor = df_rests.copy()
+        if "MIDI" not in rest_anchor.columns:
+            rest_anchor["MIDI"] = pd.NA
+        rest_cols = [col for col in ("xml_id", "Global Onset", "Duration", "Voice", "MIDI") if col in rest_anchor.columns]
+        if rest_cols:
+            frames.append(rest_anchor[rest_cols].copy())
+
+    if not frames:
+        return pd.DataFrame(columns=["xml_id", "Global Onset", "Duration", "Voice", "MIDI"])
+
+    return pd.concat(frames, ignore_index=True, sort=False).sort_values(
+        ["Global Onset", "Duration"],
+        na_position="last",
+    ).reset_index(drop=True)
+
+
+def _load_mei_event_helpers() -> Optional[Mapping[str, Any]]:
+    try:
+        from .partitura_backend import (  # type: ignore
+            _align_event_voices_to_pitch_df,
+            _attach_barline_event_offsets,
+            _attach_barline_event_onsets_from_pitch_df,
+            _barline_events_to_dataframe,
+            _dedupe_mei_events_prefer_anchored,
+            _extract_mei_events,
+            _other_mei_events_to_dataframe,
+        )
+    except Exception:
+        return None
+
+    return {
+        "align_event_voices_to_pitch_df": _align_event_voices_to_pitch_df,
+        "attach_barline_event_offsets": _attach_barline_event_offsets,
+        "attach_barline_event_onsets_from_pitch_df": _attach_barline_event_onsets_from_pitch_df,
+        "barline_events_to_dataframe": _barline_events_to_dataframe,
+        "dedupe_mei_events_prefer_anchored": _dedupe_mei_events_prefer_anchored,
+        "extract_mei_events": _extract_mei_events,
+        "other_mei_events_to_dataframe": _other_mei_events_to_dataframe,
+    }
 
 
 def parse_files(
@@ -75,7 +345,6 @@ def parse_files(
     hover_fields: Optional[List[str]] = None,
     display_preview_df_pitch: bool = True,
     display_preview_df_events: bool = True,
-    display_preview: Optional[bool] = None,
     preview_rows: int = 20,
     cleanup_remote: bool = True,
     return_plots: bool = False,
@@ -90,20 +359,27 @@ def parse_files(
     colorize_voices: bool = False,
     palette: Optional[Union[str, Sequence[str]]] = None,
     include_xml_ids: bool = True,
+    try_verovio_mei_conversion: bool = True,
+    allow_music21_fallback: bool = True,
+    dedupe_weaker_text_events: bool = True,
+    quiet_native_warnings: bool = False,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, pd.DataFrame], Optional[pd.DataFrame]]:
     """
-    Parse multiple symbolic music files using music21, with optional tie merging.
+    Parse multiple symbolic music files using music21.
 
-    Parameters mirror camat.music_utils.parse_files with an extra:
-    - strip_ties: if True (default), merge tied notes via music21's Stream.stripTies
-      before extracting note rows, so tied notes become single longer notes.
-    - align_accident_schema: if True, normalize enharmonic spellings to a canonical
-      accidentals schema (clamped to ±5 as a failsafe) and warn if any notes exceed
-      that limit. No extra rank column is added.
+    This backend remains a legacy parser, but it now mirrors the partitura
+    result schema more closely:
+    - extracts note xml ids from music21 element ids when available
+    - emits rest rows in df_events
+    - exposes df_pitch/df_events and matching dfs_by_name entries
+    - reuses the MEI XML event extraction helpers when partitura is installed
+
+    Parameters accepted for backend parity but not used directly here:
+    - try_verovio_mei_conversion
+    - allow_music21_fallback
+    - quiet_native_warnings
     """
-    if display_preview is not None:
-        display_preview_df_pitch = bool(display_preview)
-        display_preview_df_events = bool(display_preview)
+    del try_verovio_mei_conversion, allow_music21_fallback, quiet_native_warnings
 
     results: List[Dict[str, Any]] = []
     dfs_by_name: Dict[str, pd.DataFrame] = {}
@@ -112,15 +388,16 @@ def parse_files(
     try:
         from IPython.display import display as ipy_display  # type: ignore
     except Exception:
-        ipy_display = None  # not in a notebook
+        ipy_display = None
 
     sources: List[str] = list(file_sources)
     use_progress = bool(show_progress) and (_tqdm is not None) and (len(sources) > 1)
     pbar = _tqdm(total=len(sources), desc=(progress_desc or "Parsing files"), unit="file") if use_progress else None
-    log = (_tqdm.write if use_progress else print)
+    log = _tqdm.write if use_progress else print
 
     try:
         for idx, file_source in enumerate(sources):
+            file_path: Optional[str] = None
             try:
                 name = _source_to_name(file_source, idx)
                 short_name = os.path.basename(file_source).split("?")[0].split("#")[0]
@@ -131,124 +408,237 @@ def parse_files(
                 file_path = get_file_path(file_source)
 
                 from music21 import converter as _converter  # lazy import
-                score = _converter.parse(file_path)
+                from music21 import pitch as pitch_module  # lazy import
 
+                score = _converter.parse(file_path)
                 if strip_ties:
                     try:
                         score = score.stripTies(inPlace=False)
                     except Exception:
-                        # If stripTies fails for any reason, continue with original score
                         pass
 
-                voice_data = extract_voice_data(score)
-                df = pd.DataFrame(
-                    voice_data,
-                    columns=["Measure", "Local Onset", "Global Onset", "Duration", "Pitch", "Voice"],
+                note_rows, rest_rows, staff_to_part = _music21_score_to_rows(
+                    score,
+                    include_xml_ids=include_xml_ids,
                 )
-                
-                from music21 import pitch as pitch_module  # localize import
-                df["MIDI"] = df["Pitch"].apply(lambda p: pitch_module.Pitch(p).midi)
-                # Preserve original score spelling in Pitch Enharmonic when requested
-                if parse_enharmonic:
-                    df["Pitch Enharmonic"] = df["Pitch"]
-                # Normalize Pitch strictly from MIDI (simple sharps, no double accidentals)
-                df["Pitch"] = df["MIDI"].apply(_midi_to_pitch_name)
-                # Optionally align accidental schema and compute rank
+
+                df_raw = pd.DataFrame(note_rows)
+                if df_raw.empty:
+                    df_raw = pd.DataFrame(columns=["Measure", "Local Onset", "Global Onset", "Duration", "Pitch", "Voice"])
+                if include_xml_ids and "xml_id" not in df_raw.columns:
+                    df_raw["xml_id"] = pd.NA
+
+                if not df_raw.empty and "Pitch" in df_raw.columns:
+                    df_raw["MIDI"] = df_raw["Pitch"].apply(lambda value: pitch_module.Pitch(value).midi)
+                    if parse_enharmonic:
+                        df_raw["Pitch Enharmonic"] = df_raw["Pitch"]
+                    df_raw["Pitch"] = df_raw["MIDI"].apply(_midi_to_pitch_name)
+                else:
+                    df_raw["MIDI"] = pd.Series(dtype="Int64")
+                    if parse_enharmonic and "Pitch Enharmonic" not in df_raw.columns:
+                        df_raw["Pitch Enharmonic"] = pd.Series(dtype="object")
+
                 excess_clamped = 0
                 if align_accident_schema:
-                    # Prefer enharmonic column when present; otherwise use real pitch
                     source_col = "Pitch Enharmonic" if parse_enharmonic else "Pitch"
-                    if source_col in df.columns:
+                    if source_col in df_raw.columns:
                         if parse_enharmonic:
-                            # Canonicalize enharmonic spellings and clamp to ±5 accidentals
-                            def _canon(v: Any) -> Tuple[str, bool]:
+                            def _canon(value: Any) -> Tuple[str, bool]:
                                 try:
-                                    s = str(v)
+                                    text = str(value)
                                 except Exception:
-                                    return str(v), False
-                                # Only canonicalize plausible pitches that start with A-G
-                                if not s or s[0].upper() not in "ABCDEFG":
-                                    return s, False
-                                return canonicalize_pitch_name(s, max_accidentals=5)
-                            canon_series = df[source_col].apply(_canon)
-                            df[source_col] = canon_series.map(lambda t: t[0])
+                                    return str(value), False
+                                if not text or text[0].upper() not in "ABCDEFG":
+                                    return text, False
+                                return canonicalize_pitch_name(text, max_accidentals=5)
+
+                            canon_series = df_raw[source_col].apply(_canon)
+                            df_raw[source_col] = canon_series.map(lambda item: item[0])
                             try:
-                                excess_clamped = int(canon_series.map(lambda t: 1 if t[1] else 0).sum())
+                                excess_clamped = int(canon_series.map(lambda item: 1 if item[1] else 0).sum())
                             except Exception:
                                 excess_clamped = 0
                         if excess_clamped > 0:
                             log(f"Warning: {excess_clamped} note(s) exceeded ±5 accidentals; clamped to 5.")
-                base_cols = ["Measure", "Local Onset", "Global Onset", "Duration", "Pitch"]
-                if parse_enharmonic:
-                    base_cols.append("Pitch Enharmonic")
-                base_cols += ["MIDI", "Voice"]
-                df = df[base_cols]
-                df = df.sort_values("Global Onset").reset_index(drop=True)
 
-                df_processed = filter_and_adjust_durations(
-                    df,
+                pitch_cols = ["Measure", "Local Onset", "Global Onset", "Duration", "Pitch"]
+                if parse_enharmonic:
+                    pitch_cols.append("Pitch Enharmonic")
+                pitch_cols += ["MIDI", "Voice"]
+                if include_xml_ids:
+                    pitch_cols.append("xml_id")
+                for col in pitch_cols:
+                    if col not in df_raw.columns:
+                        df_raw[col] = pd.NA
+                df_raw = df_raw[pitch_cols].sort_values(["Global Onset", "MIDI"], na_position="last").reset_index(drop=True)
+
+                df_pitch = filter_and_adjust_durations(
+                    df_raw,
                     filter_zero_duration=filter_zero_duration,
                     adjust_fractional_duration=adjust_fractional_duration,
-                ).sort_values("Global Onset").reset_index(drop=True)
+                ).sort_values(["Global Onset", "MIDI"], na_position="last").reset_index(drop=True)
 
-                # Preserve schema expectations even if music21 cannot expose xml:id details
-                if include_xml_ids and "xml_id" not in df_processed.columns:
-                    df_processed["xml_id"] = pd.NA
+                if include_xml_ids and "xml_id" not in df_pitch.columns:
+                    df_pitch["xml_id"] = pd.NA
 
-                # Ensure 'xml_id' column is positioned immediately after 'Voice' when present
-                if "xml_id" in df_processed.columns and "Voice" in df_processed.columns:
-                    cols = list(df_processed.columns)
-                    # Remove existing position
-                    cols.remove("xml_id")
-                    # Insert after 'Voice'
-                    try:
-                        voice_idx = cols.index("Voice")
-                        cols.insert(voice_idx + 1, "xml_id")
-                        df_processed = df_processed[cols]
-                    except Exception:
-                        # Fallback: append at end if any issue
-                        cols.append("xml_id")
-                        df_processed = df_processed[cols]
+                df_rests_raw = pd.DataFrame(rest_rows)
+                if df_rests_raw.empty:
+                    df_rests_timed = pd.DataFrame(columns=["Measure", "Local Onset", "Global Onset", "Duration", "Voice", "xml_id", "staff_n"])
+                else:
+                    if include_xml_ids and "xml_id" not in df_rests_raw.columns:
+                        df_rests_raw["xml_id"] = pd.NA
+                    if "staff_n" not in df_rests_raw.columns:
+                        df_rests_raw["staff_n"] = pd.NA
+                    rest_cols = ["Measure", "Local Onset", "Global Onset", "Duration", "Voice", "xml_id", "staff_n"]
+                    for col in rest_cols:
+                        if col not in df_rests_raw.columns:
+                            df_rests_raw[col] = pd.NA
+                    df_rests_raw = df_rests_raw[rest_cols]
+                    df_rests_timed = filter_and_adjust_durations(
+                        df_rests_raw,
+                        filter_zero_duration=filter_zero_duration,
+                        adjust_fractional_duration=adjust_fractional_duration,
+                    ).sort_values("Global Onset", na_position="last").reset_index(drop=True)
 
                 measure_offsets = get_measure_offsets(score)
+                df_anchor = _music21_anchor_timeline(df_pitch, df_rests_timed)
+                df_rests = _music21_rest_events_to_dataframe(df_rests_timed)
+                if not df_rests.empty:
+                    log(f"Extracted rest timing events: {len(df_rests)} event(s).")
+
+                barline_events: List[Dict[str, Any]] = []
+                df_barlines = _empty_event_dataframe()
+                df_other_events = _empty_event_dataframe()
+                mei_helpers = _load_mei_event_helpers() if Path(file_path).suffix.lower() == ".mei" else None
+
+                if Path(file_path).suffix.lower() == ".mei":
+                    if mei_helpers is None:
+                        log("Warning: MEI event extraction helpers unavailable; skipping non-rest MEI events.")
+                    else:
+                        extracted_mei_events = list(mei_helpers["extract_mei_events"](file_path))
+                        if dedupe_weaker_text_events:
+                            extracted_mei_events, weak_dupe_count = mei_helpers["dedupe_mei_events_prefer_anchored"](
+                                extracted_mei_events
+                            )
+                            if weak_dupe_count > 0:
+                                log(
+                                    "Dropped weaker duplicate MEI text events: "
+                                    f"{weak_dupe_count} row(s) without usable anchors."
+                                )
+
+                        barline_events = [
+                            dict(event) for event in extracted_mei_events
+                            if str(event.get("event", "")).strip().lower() == "barline"
+                        ]
+                        other_events = [
+                            dict(event) for event in extracted_mei_events
+                            if str(event.get("event", "")).strip().lower() != "barline"
+                        ]
+
+                        barline_events = mei_helpers["attach_barline_event_onsets_from_pitch_df"](
+                            barline_events,
+                            df_anchor,
+                            staff_to_part_label=staff_to_part,
+                        )
+                        barline_events = mei_helpers["attach_barline_event_offsets"](
+                            barline_events,
+                            measure_offsets,
+                        )
+
+                        if barline_events:
+                            forms = sorted({str(event.get("form", "single")) for event in barline_events})
+                            log(
+                                "Extracted MEI barline events: "
+                                f"{len(barline_events)} event(s), forms={forms}."
+                            )
+                        if other_events:
+                            types = sorted({str(event.get("event", "")).strip().lower() for event in other_events})
+                            log(
+                                "Extracted non-barline MEI events: "
+                                f"{len(other_events)} event(s), types={types}."
+                            )
+
+                        df_barlines = mei_helpers["barline_events_to_dataframe"](
+                            barline_events,
+                            measure_offsets=measure_offsets,
+                        )
+                        df_other_events = mei_helpers["other_mei_events_to_dataframe"](
+                            other_events,
+                            df_anchor,
+                            measure_offsets=measure_offsets,
+                        )
+
+                event_frames = [frame for frame in (df_barlines, df_rests, df_other_events) if not frame.empty]
+                if not event_frames:
+                    df_events = _empty_event_dataframe()
+                elif len(event_frames) == 1:
+                    df_events = event_frames[0].copy()
+                else:
+                    df_events = pd.concat(event_frames, ignore_index=True, sort=False)
+                    for col in _EVENT_DF_COLUMNS:
+                        if col not in df_events.columns:
+                            df_events[col] = pd.NA
+                    df_events = df_events[_EVENT_DF_COLUMNS]
+                    df_events = df_events.sort_values("Global Onset", na_position="last").reset_index(drop=True)
+
+                if mei_helpers is not None:
+                    df_events = mei_helpers["align_event_voices_to_pitch_df"](
+                        df_events,
+                        df_pitch,
+                        staff_to_part_label=staff_to_part,
+                    )
+
+                pitch_name = f"{name}_pitch"
+                events_name = f"{name}_events"
 
                 plot_obj = None
                 if return_plots or backend != "none":
                     plot_obj = draw_piano_roll(
-                        df_processed,
+                        df_pitch,
                         measure_offsets=measure_offsets,
                         backend=backend,
-                        plot_parsed_barlines_with_voice_coloring=False,
+                        barline_events=df_events,
+                        plot_parsed_barlines_with_voice_coloring=plot_parsed_barlines_with_voice_coloring,
                         show_measure_lines=show_measure_lines,
-                    measure_line_color=measure_line_color,
-                    show_hover=show_hover,
-                    hover_fields=hover_fields,
+                        measure_line_color=measure_line_color,
+                        show_hover=show_hover,
+                        hover_fields=hover_fields,
                         show=True,
                         plot_width=plot_width,
                         plot_height=plot_height,
                         zoom_drag_dim=zoom_drag_dim,
-                    zoom_wheel_dim=zoom_wheel_dim,
-                    colorize_voices=colorize_voices,
-                    palette=palette,
+                        zoom_wheel_dim=zoom_wheel_dim,
+                        colorize_voices=colorize_voices,
+                        palette=palette,
                     )
 
                 if display_preview_df_pitch and ipy_display is not None:
-                    ipy_display(df_processed.head(preview_rows))
-                    log(f"Rows: {len(df_processed)}, unique pitches: {df_processed['MIDI'].nunique()}")
+                    ipy_display(df_pitch.head(preview_rows))
+                    log(f"Rows: {len(df_pitch)}, unique pitches: {df_pitch['MIDI'].nunique() if 'MIDI' in df_pitch.columns else 0}")
+                if display_preview_df_events and ipy_display is not None:
+                    ipy_display(df_events.head(preview_rows))
+                    log(f"Event rows: {len(df_events)}")
 
                 result_entry: Dict[str, Any] = {
                     "name": name,
                     "source": file_source,
-                    "df": df_processed,
+                    "df": df_pitch,
+                    "df_pitch": df_pitch,
+                    "df_events": df_events,
+                    "df_name_pitch": pitch_name,
+                    "df_name_events": events_name,
                     "measure_offsets": measure_offsets,
+                    "barline_events": barline_events,
                 }
                 if return_plots:
                     result_entry["plot"] = plot_obj
-                results.append(result_entry)
-                dfs_by_name[name] = df_processed
-                last_df = df_processed
 
-                if cleanup_remote and file_source.startswith(("http://", "https://")):
+                results.append(result_entry)
+                dfs_by_name[pitch_name] = df_pitch
+                dfs_by_name[events_name] = df_events
+                last_df = df_pitch
+
+                if cleanup_remote and file_source.startswith(("http://", "https://")) and file_path:
                     try:
                         os.remove(file_path)
                     except OSError:
@@ -264,5 +654,3 @@ def parse_files(
             pbar.close()
 
     return results, dfs_by_name, last_df
-
-

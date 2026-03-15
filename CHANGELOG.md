@@ -7,11 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.7] - 2026-03-15
+
 ### Added
+
+- Added mensural rest timing extraction as `rest` rows in `df_events`, with a staff/layer-local symbolic-duration fallback for cases where Verovio does not expose rest timings directly.
+- Added a repository-level `mkdocs.yml` plus Markdown-based docs pages so the project docs now build through MkDocs Material with `mkdocstrings`.
+- Added common-notation parser guidance to the docs, making `partitura` the recommended primary backend and documenting `music21` as the legacy-compatible alternative.
+- Added binary-matrix provenance and coordinate helpers in `camat.music_utils`, including per-cell / per-window source-row lookup, raw row/column mapping helpers, and slice decoding that preserves original matrix coordinates.
+- Added notebook-facing binary refactor helpers in `camat.music_utils`, including `create_binary_matrix_bundle(...)`, `BinaryMatrixBundle.slice(...)`, and `BinaryMatrixSliceBundle`, so binary exploration cells can stay declarative while reusing shared summary, slice-table, highlight, and plotting logic.
 
 ### Changed
 
+- Migrated the documentation toolchain away from Sphinx to MkDocs, updated `docs/requirements.txt` to the verified MkDocs package versions, and pointed `.readthedocs.yaml` at the MkDocs build on Python 3.10.
+- Removed the legacy Sphinx config and generated `.rst` API pages from `docs/`, and refreshed the README / project metadata so MkDocs + Read the Docs is the documented default.
+- Updated the `music21` backend to expose `df_pitch` / `df_events`, parse note ids into `xml_id`, emit rest events, and reuse the MEI event extraction path for common-notation files when available.
+- Removed the legacy `display_preview` alias from the parser backends in favor of the explicit `display_preview_df_pitch` and `display_preview_df_events` controls.
+- Expanded `plot_binary_matrix(...)` with shared parser-style plotting controls, optional highlight overlays, sectioned binary/selected-area/source-data hover tooltips, configurable hover cell scope (`active`, `active_or_highlighted`, `all`), and matching `plt`/`bokeh` show-return behavior.
+- Refreshed `testing_binary_representations.ipynb` so the binary showcase uses raw matrix row/column semantics explicitly, provenance-aware slice decoding, and the same binary plotting backend configuration as the main parse/plot workflow.
+- Further simplified `testing_binary_representations.ipynb` so its binary setup and showcase cells are now mostly parameter blocks plus high-level bundle calls, with repetitive summary printing, hover normalization, slice bookkeeping, and highlight-window assembly moved into shared `camat.music_utils` helpers.
+
 ### Fixed
+
+- Fixed mensural barline anchoring after nested containers such as `<ligature>` and after trailing rest sequences, so direct mensural parsing now stays aligned with the corresponding Verovio score render.
+- Fixed the `partitura` fallback-to-`music21` path so it preserves the fallback backend's `df_events` output instead of replacing it with an empty event dataframe.
+- Fixed binary slice reconstruction for row-sliced matrix windows so decoded pitch/time spans stay aligned with the original raw matrix coordinates instead of being reinterpreted as if the slice started at row 0.
 
 ## [0.1.6] - 2026-03-08
 
@@ -48,7 +68,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Added a repository-level `.readthedocs.yaml` so Read the Docs can build the bundled Sphinx docs without extra project-specific setup.
+- Added a repository-level `.readthedocs.yaml` so Read the Docs can build the bundled project docs without extra project-specific setup.
 - Added `check_monophonic_input(...)` in `camat.analysis_utils` for reusable monophony validation, including per-voice checks when a voice column is available.
 - Added `melodic_interval_distribution(...)` in `camat.analysis_utils` for successive melodic interval analysis, with optional per-voice pooling and the same monophony safety checks used by the successive pitch bigram utilities.
 - Added `display_melodic_interval_distribution(...)` in `camat.analysis_utils` as a notebook-facing wrapper for interval distribution tables and bar plots, with multi-source support, optional normalization, and display-only float formatting.
@@ -146,7 +166,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-[Unreleased]: https://github.com/egorpol/camat_v2/compare/v0.1.6...HEAD
+[Unreleased]: https://github.com/egorpol/camat_v2/compare/v0.1.7...HEAD
+[0.1.7]: https://github.com/egorpol/camat_v2/compare/v0.1.6...v0.1.7
 [0.1.6]: https://github.com/egorpol/camat_v2/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/egorpol/camat_v2/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/egorpol/camat_v2/compare/v0.1.3...v0.1.4

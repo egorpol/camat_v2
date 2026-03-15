@@ -740,6 +740,126 @@ def _part_to_rows(part, *, parse_enharmonic: bool = False, include_xml_ids: bool
     return rows
 
 
+def _partitura_rest_events_to_dataframe(score, *, include_xml_ids: bool = False) -> pd.DataFrame:
+    """
+    Extract rest timing rows from a partitura score into the standard event schema.
+    """
+    rows: List[Dict[str, Any]] = []
+
+    for part_index, part in enumerate(getattr(score, "parts", []) or [], start=1):
+        try:
+            rest_array = part.rest_array(include_metrical_position=True)
+        except Exception:
+            continue
+        if getattr(rest_array, "size", 0) == 0:
+            continue
+
+        measure_map = part.measure_map
+        quarter_map = part.quarter_map
+        measure_number_map = part.measure_number_map
+        part_label = (
+            getattr(part, "part_name", None)
+            or getattr(part, "name", None)
+            or getattr(part, "id", None)
+            or ""
+        )
+        staff_n = str(part_index)
+        fields = set(rest_array.dtype.names or ())
+        has_voice = "voice" in fields
+
+        for rest_row in rest_array:
+            onset_q = float(rest_row["onset_quarter"])
+            duration_q = float(rest_row["duration_quarter"])
+            if not np.isfinite(onset_q) or not np.isfinite(duration_q):
+                continue
+
+            try:
+                measure_bounds = measure_map(onset_q)
+                measure_start_t = measure_bounds[0]
+                measure_start_q = quarter_map(measure_start_t)
+                if isinstance(measure_start_q, np.ndarray):
+                    measure_start_q = measure_start_q.item()
+                measure_start_q = float(measure_start_q)
+                if not np.isfinite(measure_start_q):
+                    raise ValueError
+            except Exception:
+                measure_start_q = onset_q
+
+            local_onset = onset_q - measure_start_q
+            try:
+                measure_num_raw = measure_number_map(onset_q)
+                if isinstance(measure_num_raw, np.ndarray):
+                    measure_num_raw = measure_num_raw.item()
+                measure_num = int(measure_num_raw)
+            except Exception:
+                measure_num = 0
+
+            voice_value = rest_row["voice"] if has_voice else None
+            voice_label = _format_voice_label(part_label, voice_value)
+
+            xml_id_value: Optional[str] = None
+            if include_xml_ids:
+                for fid in ("xml_id", "xmlid", "id", "note_id", "noteid", "xml:id"):
+                    try:
+                        candidate = rest_row[fid]  # type: ignore[index]
+                    except Exception:
+                        candidate = None
+                    if candidate is None:
+                        continue
+                    try:
+                        value = str(candidate).strip()
+                    except Exception:
+                        value = ""
+                    if value:
+                        xml_id_value = value[1:] if value.startswith("#") else value
+                        break
+
+            rows.append(
+                {
+                    "type": "rest",
+                    "subtype": "rest",
+                    "Measure": measure_num,
+                    "Local Onset": float(local_onset),
+                    "Global Onset": onset_q,
+                    "Duration": duration_q,
+                    "Voice": voice_label,
+                    "xml_id": xml_id_value if include_xml_ids else pd.NA,
+                    "start_xml_id": pd.NA,
+                    "end_xml_id": pd.NA,
+                    "staff_n": staff_n,
+                    "staff_raw": pd.NA,
+                    "layer_n": pd.NA,
+                    "layer_raw": pd.NA,
+                    "scope": "timeline",
+                    "text": pd.NA,
+                    "text_role": pd.NA,
+                    "form": pd.NA,
+                    "place": pd.NA,
+                    "func": pd.NA,
+                    "plist": pd.NA,
+                    "tstamp_raw": pd.NA,
+                    "tstamp2_raw": pd.NA,
+                    "verse_n": pd.NA,
+                    "wordpos": pd.NA,
+                    "con": pd.NA,
+                    "mm": pd.NA,
+                    "mm_unit": pd.NA,
+                    "mm_dots": pd.NA,
+                    "extra": pd.NA,
+                }
+            )
+
+    if not rows:
+        return _empty_event_dataframe()
+
+    df_events = pd.DataFrame(rows)
+    for col in _EVENT_DF_COLUMNS:
+        if col not in df_events.columns:
+            df_events[col] = pd.NA
+    df_events = df_events[_EVENT_DF_COLUMNS]
+    return df_events.sort_values("Global Onset", na_position="last").reset_index(drop=True)
+
+
 def partitura_score_to_dataframe(score, *, parse_enharmonic: bool = False, include_xml_ids: bool = False) -> pd.DataFrame:
     """
     Convert a partitura Score into a CAMAT-compatible dataframe.
@@ -1227,6 +1347,58 @@ def _extract_mei_events(mei_path: str) -> List[Dict[str, Any]]:
             cur = parent_map.get(cur)
         return None
 
+    def _first_note_or_chord_in_subtree(el: Any) -> Any:
+        if el is None:
+            return None
+        for child in el.iter():
+            if _local_name(child.tag) in {"note", "chord"}:
+                return child
+        return None
+
+    def _last_note_or_chord_in_subtree(el: Any) -> Any:
+        if el is None:
+            return None
+        last = None
+        for child in el.iter():
+            if _local_name(child.tag) in {"note", "chord"}:
+                last = child
+        return last
+
+    def _count_note_or_chord_in_subtree(el: Any) -> int:
+        if el is None:
+            return 0
+        count = 0
+        for child in el.iter():
+            if _local_name(child.tag) in {"note", "chord"}:
+                count += 1
+        return count
+
+    def _first_timed_anchor_in_subtree(el: Any) -> Any:
+        if el is None:
+            return None
+        for child in el.iter():
+            if _local_name(child.tag) in {"note", "chord", "rest"}:
+                return child
+        return None
+
+    def _last_timed_anchor_in_subtree(el: Any) -> Any:
+        if el is None:
+            return None
+        last = None
+        for child in el.iter():
+            if _local_name(child.tag) in {"note", "chord", "rest"}:
+                last = child
+        return last
+
+    def _count_timed_anchor_in_subtree(el: Any) -> int:
+        if el is None:
+            return 0
+        count = 0
+        for child in el.iter():
+            if _local_name(child.tag) in {"note", "chord", "rest"}:
+                count += 1
+        return count
+
     def _clean_text(el: Any) -> Optional[str]:
         try:
             text = " ".join(" ".join(el.itertext()).split())
@@ -1399,33 +1571,59 @@ def _extract_mei_events(mei_path: str) -> List[Dict[str, Any]]:
                     prev_note_id: Optional[str] = None
                     next_note_id: Optional[str] = None
                     prev_note_ordinal: Optional[int] = None
+                    prev_timed_id: Optional[str] = None
+                    next_timed_id: Optional[str] = None
+                    prev_timed_ordinal: Optional[int] = None
                     for j in range(int(bar_idx) - 1, -1, -1):
-                        local = _local_name(children[j].tag)
-                        if local in {"note", "chord"}:
-                            prev_note_id = _get_xml_id(children[j])
-                            if prev_note_id:
-                                break
+                        prev_note_el = _last_note_or_chord_in_subtree(children[j])
+                        prev_note_id = _get_xml_id(prev_note_el)
+                        if prev_note_id:
+                            break
                     try:
                         count_before = sum(
-                            1 for ch in children[:int(bar_idx)]
-                            if _local_name(ch.tag) in {"note", "chord"}
+                            _count_note_or_chord_in_subtree(ch)
+                            for ch in children[:int(bar_idx)]
                         )
                         if count_before > 0:
                             prev_note_ordinal = int(count_before)
                     except Exception:
                         prev_note_ordinal = None
+                    for j in range(int(bar_idx) - 1, -1, -1):
+                        prev_timed_el = _last_timed_anchor_in_subtree(children[j])
+                        prev_timed_id = _get_xml_id(prev_timed_el)
+                        if prev_timed_id:
+                            break
+                    try:
+                        timed_count_before = sum(
+                            _count_timed_anchor_in_subtree(ch)
+                            for ch in children[:int(bar_idx)]
+                        )
+                        if timed_count_before > 0:
+                            prev_timed_ordinal = int(timed_count_before)
+                    except Exception:
+                        prev_timed_ordinal = None
                     for j in range(int(bar_idx) + 1, len(children)):
-                        local = _local_name(children[j].tag)
-                        if local in {"note", "chord"}:
-                            next_note_id = _get_xml_id(children[j])
-                            if next_note_id:
-                                break
+                        next_note_el = _first_note_or_chord_in_subtree(children[j])
+                        next_note_id = _get_xml_id(next_note_el)
+                        if next_note_id:
+                            break
+                    for j in range(int(bar_idx) + 1, len(children)):
+                        next_timed_el = _first_timed_anchor_in_subtree(children[j])
+                        next_timed_id = _get_xml_id(next_timed_el)
+                        if next_timed_id:
+                            break
                     if prev_note_id:
                         event["prev_note_xml_id"] = prev_note_id
                     if next_note_id:
                         event["next_note_xml_id"] = next_note_id
                     if prev_note_ordinal is not None:
                         event["prev_note_ordinal_staff"] = prev_note_ordinal
+                    if prev_timed_id:
+                        event["prev_timed_xml_id"] = prev_timed_id
+                    if next_timed_id:
+                        event["next_timed_xml_id"] = next_timed_id
+                    if prev_timed_ordinal is not None:
+                        event["prev_timed_ordinal_staff"] = prev_timed_ordinal
         elif tag_name in {"slur", "tie", "hairpin", "phrase", "gliss"}:
             event["scope"] = "span"
             if tag_name == "hairpin" and "form" in event and "subtype" not in event:
@@ -1542,7 +1740,7 @@ def _attach_barline_event_onsets_from_pitch_df(
     staff_to_part_label: Optional[Mapping[str, str]] = None,
 ) -> List[Dict[str, Any]]:
     """
-    Anchor barline onsets using neighboring note/chord xml:ids in df_pitch timeline.
+    Anchor barline onsets using neighboring timed xml:ids in the provided timeline.
     """
     if not barline_events:
         return []
@@ -1578,7 +1776,11 @@ def _attach_barline_event_onsets_from_pitch_df(
                 subset = df_pitch.loc[voice_mask].copy()
         if subset.empty:
             subset = df_pitch.copy()
-        subset = subset.sort_values(["Global Onset", "Duration", "MIDI"]).reset_index(drop=True)
+        sort_columns = [col for col in ("Global Onset", "Duration", "MIDI") if col in subset.columns]
+        if sort_columns:
+            subset = subset.sort_values(sort_columns).reset_index(drop=True)
+        else:
+            subset = subset.reset_index(drop=True)
         if "xml_id" in subset.columns:
             ids = subset["xml_id"].astype(str).str.strip()
             has_ids = ids.replace("", np.nan).notna().any()
@@ -1598,7 +1800,12 @@ def _attach_barline_event_onsets_from_pitch_df(
     for event in barline_events:
         enriched = dict(event)
         assigned = False
-        for key, use_end in (("prev_note_xml_id", True), ("next_note_xml_id", False)):
+        for key, use_end in (
+            ("prev_timed_xml_id", True),
+            ("next_timed_xml_id", False),
+            ("prev_note_xml_id", True),
+            ("next_note_xml_id", False),
+        ):
             raw = event.get(key)
             if raw is None:
                 continue
@@ -1614,10 +1821,14 @@ def _attach_barline_event_onsets_from_pitch_df(
                 assigned = True
                 break
         if not assigned:
-            try:
-                prev_ord = int(event.get("prev_note_ordinal_staff", 0))
-            except Exception:
-                prev_ord = 0
+            prev_ord = 0
+            for ordinal_key in ("prev_timed_ordinal_staff", "prev_note_ordinal_staff"):
+                try:
+                    prev_ord = int(event.get(ordinal_key, 0))
+                except Exception:
+                    prev_ord = 0
+                if prev_ord > 0:
+                    break
             staff_key = str(event.get("staff_n", "") or "").strip()
             if prev_ord > 0 and staff_key:
                 voice_events = _voice_events_for_staff(staff_key)
@@ -1903,7 +2114,6 @@ def parse_files_partitura(
     hover_fields: Optional[List[str]] = None,
     display_preview_df_pitch: bool = True,
     display_preview_df_events: bool = True,
-    display_preview: Optional[bool] = None,
     preview_rows: int = 20,
     cleanup_remote: bool = True,
     return_plots: bool = False,
@@ -1975,7 +2185,6 @@ def parse_files_partitura(
             hover_fields=hover_fields,
             display_preview_df_pitch=display_preview_df_pitch,
             display_preview_df_events=display_preview_df_events,
-            display_preview=display_preview,
             preview_rows=preview_rows,
             cleanup_remote=cleanup_remote,
             return_plots=return_plots,
@@ -2004,11 +2213,6 @@ def parse_files_partitura(
             dedupe_weaker_text_events=dedupe_weaker_text_events,
             quiet_native_warnings=quiet_native_warnings,
         )
-
-    if display_preview is not None:
-        # Backward compatibility: legacy flag controls both previews when provided.
-        display_preview_df_pitch = bool(display_preview)
-        display_preview_df_events = bool(display_preview)
 
     results: List[Dict[str, Any]] = []
     dfs_by_name: Dict[str, pd.DataFrame] = {}
@@ -2324,6 +2528,12 @@ def parse_files_partitura(
                         "Extracted non-barline MEI events: "
                         f"{len(other_events)} event(s), types={types}."
                     )
+                df_rests = _partitura_rest_events_to_dataframe(
+                    score,
+                    include_xml_ids=include_ids_this_score,
+                )
+                if not df_rests.empty:
+                    log(f"Extracted rest timing events: {len(df_rests)} event(s).")
                 df_barlines = _barline_events_to_dataframe(
                     barline_events,
                     measure_offsets=measure_offsets,
@@ -2333,7 +2543,7 @@ def parse_files_partitura(
                     df_pitch,
                     measure_offsets=measure_offsets,
                 )
-                event_frames = [frame for frame in (df_barlines, df_other_events) if not frame.empty]
+                event_frames = [frame for frame in (df_barlines, df_rests, df_other_events) if not frame.empty]
                 if not event_frames:
                     df_events = _empty_event_dataframe()
                 elif len(event_frames) == 1:
@@ -2459,7 +2669,6 @@ def parse_files_partitura(
                             hover_fields=hover_fields,
                             display_preview_df_pitch=False,
                             display_preview_df_events=False,
-                            display_preview=False,
                             preview_rows=preview_rows,
                             cleanup_remote=cleanup_remote,
                             return_plots=return_plots,
@@ -2477,24 +2686,30 @@ def parse_files_partitura(
                         )
                         if fallback_results:
                             fb_entry = fallback_results[0]
-                            fb_df = fb_entry.get("df")
+                            fb_df = fb_entry.get("df_pitch", fb_entry.get("df"))
+                            fb_events = fb_entry.get("df_events")
                             if isinstance(fb_df, pd.DataFrame):
                                 fb_entry["name"] = name
                                 fb_entry["source"] = file_source
                                 fb_entry["df_pitch"] = fb_df
-                                fb_entry["df_events"] = _empty_event_dataframe()
+                                if not isinstance(fb_events, pd.DataFrame):
+                                    fb_events = _empty_event_dataframe()
+                                fb_entry["df_events"] = fb_events
                                 fb_entry["df_name_pitch"] = f"{name}_pitch"
                                 fb_entry["df_name_events"] = f"{name}_events"
-                                fb_entry["barline_events"] = []
+                                fb_entry["barline_events"] = fb_entry.get("barline_events", [])
                                 results.append(fb_entry)
                                 dfs_by_name[f"{name}_pitch"] = fb_df
-                                dfs_by_name[f"{name}_events"] = fb_entry["df_events"]
+                                dfs_by_name[f"{name}_events"] = fb_events
                                 last_df = fb_df
                                 if display_preview_df_pitch and ipy_display is not None:
                                     ipy_display(fb_df.head(preview_rows))
                                     log(
                                         f"Rows: {len(fb_df)}, unique pitches: {fb_df['MIDI'].nunique()}"
                                     )
+                                if display_preview_df_events and ipy_display is not None:
+                                    ipy_display(fb_events.head(preview_rows))
+                                    log(f"Event rows: {len(fb_events)}")
                                 continue
                         log(
                             "Fallback to music21 returned no parsed data for "

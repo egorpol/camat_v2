@@ -1,0 +1,51 @@
+site_name: CAMAT
+site_description: "CAMAT documentation"
+site_url: https://camat.readthedocs.io
+strict: true
+
+repo_url: https://github.com/egorpol/camat_v2
+repo_name: camat_v2
+
+docs_dir: docs
+
+theme:
+  name: material
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths:
+            - .
+          options:
+            docstring_style: numpy
+            show_source: true
+
+markdown_extensions:
+  - admonition
+  - toc:
+      permalink: true
+  - tables
+  - fenced_code
+  - footnotes
+
+nav:
+  - Home: index.md
+  - Tutorial: tutorial.md
+  - Reference:
+      - Overview: reference.md
+      - API:
+          - Top-level API: api/camat.md
+          - Analysis utils: api/analysis_utils.md
+          - Binary matrix designer: api/binary_matrix_designer.md
+          - Mensural utils: api/mensural_utils.md
+          - Music21 backend: api/music21_backend.md
+          - Music21 render: api/music21_render.md
+          - Music utils: api/music_utils.md
+          - Overlay: api/overlay.md
+          - Parser registry: api/parser_registry.md
+          - Parser utils: api/parser_utils.md
+          - Partitura backend: api/partitura_backend.md
+          - Pattern search: api/pattern_search.md
+          - Verovio render: api/verovio_render.md
