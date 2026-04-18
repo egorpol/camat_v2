@@ -12,6 +12,7 @@ from .music_utils import (
     draw_piano_roll,
     filter_and_adjust_durations,
     get_file_path,
+    is_cached_download,
 )
 from .partitura_backend import (
     _EVENT_DF_COLUMNS,
@@ -516,6 +517,9 @@ def parse_files_mensural(
     allow_music21_fallback: bool = True,
     dedupe_weaker_text_events: bool = True,
     quiet_native_warnings: bool = False,
+    use_remote_cache: bool = True,
+    remote_cache_dir: Optional[str] = None,
+    n_jobs: int = 1,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, pd.DataFrame], Optional[pd.DataFrame]]:
     """
     Parse mensural MEI directly on the original Verovio/source timeline.
@@ -537,6 +541,7 @@ def parse_files_mensural(
         verovio_mensural_score_up,
         use_verovio_mensural_timing,
         allow_music21_fallback,
+        n_jobs,
     )
 
     results: List[Dict[str, Any]] = []
@@ -569,7 +574,11 @@ def parse_files_mensural(
                 if pbar is not None:
                     pbar.set_postfix_str(short_name)
 
-                file_path = get_file_path(file_source)
+                file_path = get_file_path(
+                    file_source,
+                    use_cache=bool(use_remote_cache),
+                    cache_dir=remote_cache_dir,
+                )
                 is_mei_source = Path(file_path).suffix.lower() == ".mei"
                 if not is_mei_source:
                     raise ValueError("parse_files_mensural currently supports MEI sources only")
@@ -768,6 +777,7 @@ def parse_files_mensural(
                     and file_path is not None
                     and str(file_source).startswith(("http://", "https://"))
                     and os.path.exists(file_path)
+                    and not is_cached_download(file_path, remote_cache_dir)
                 ):
                     try:
                         os.remove(file_path)

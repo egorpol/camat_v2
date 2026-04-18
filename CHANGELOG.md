@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.8] - 2026-04-17
+
+### Added
+
+- Added `n_jobs`, `use_remote_cache`, and `remote_cache_dir` parameters to `parse_files_partitura` / `parse_files_mensural` so multi-file runs can parse in a thread pool and reuse downloaded URL sources from `~/.cache/camat/downloads` (overridable via `CAMAT_DOWNLOAD_CACHE_DIR`). Plot and DataFrame display remain serialized to keep notebook output deterministic.
+- Added `get_download_cache_dir(...)` and `is_cached_download(...)` helpers plus a `use_cache=True` option on `camat.music_utils.get_file_path`.
+- Added a `PARALLEL_N_JOBS` / `USE_REMOTE_CACHE` / `REMOTE_CACHE_DIR` parameter block to `testing_annot_stats.ipynb` so the demo cell exposes the new options directly.
+- Extended the partitura backend's MEI event extractor to cover ornaments (`trill`, `mordent`, `turn`, `ornam`, `bTrem`, `fTrem`), articulations / fingering / bend (`artic`, `fing`, `bend`), continuous markings (`pedal`, `octave`, `ending`, `beamSpan`, `tupletSpan`), mid-piece definition changes (`clef`, `keySig`, `meterSig` — tagged as `scope="setup"` vs `scope="change"` depending on whether they sit inside `scoreDef`/`staffDef`), whole-measure and invisible rests (`mRest`, `multiRest`, `space`), `custos`, and standalone `accid`. Note-internal `<accid>` children are explicitly suppressed since the pitch row already carries the accidental.
+- Added `include_note_attachments` (default `True`) to `parse_files_partitura` / `partitura_score_to_dataframe`. When enabled on MEI sources, `df_pitch` gains `grace`, `tied`, `slurred`, `tuplet`, `fermata`, `articulations`, `ornaments`, and `technical` columns joined on `xml_id`. The attachments are sourced by walking the MEI XML directly (via the new `_extract_mei_note_attachments` helper) because partitura 1.8's MEI importer does not currently hydrate `slur_starts` / `fermata` / `articulations` onto its `Note` objects.
+- Added `scripts/test_mei_coverage.py`, an autotest that parses the 3 MEI examples now active in `testing_annot_stats.ipynb` and cross-checks every music-relevant MEI element against `df_events.type` counts and every note-attachment column against the raw XML. The test fails loudly if any music-relevant element is silently dropped.
+- Added the Beethoven Op.31 No.3 MEI (trompa HenleUrtext) to `FILE_SOURCES` in `testing_annot_stats.ipynb` so the common-notation notebook exercises all 3 MEI test examples end-to-end.
+
+### Changed
+
+- Vectorized the partitura note-array → DataFrame conversion (`_part_to_dataframe`) using NumPy column extraction, a MIDI→pitch-name LUT, and unique-onset measure anchoring, removing the per-note Python hot path inside `partitura_score_to_dataframe`.
+- Switched enharmonic spelling to partitura's `include_pitch_spelling=True` note-array output when available, keeping the legacy `part.notes` traversal as a fallback.
+- Cached MEI event extraction by `(path, mtime, size)` and precomputed per-layer subtree indexes so repeated `_extract_mei_events` calls on the same file reuse the result and barline anchoring no longer re-walks sibling subtrees per barline.
+- Simplified `filter_and_adjust_durations` to avoid the unconditional deep-copy and to round the three onset/duration columns in a single operation; dropped the redundant second sort after filtering in `parse_files_partitura`.
+
+### Fixed
+
+- Fixed `n_jobs > 1` parsing failing with "Bravura font could not be loaded" / "Document is empty" for every MEI source. Verovio loads its font resources at `verovio.toolkit(...)` construction time via code that is not thread-safe; constructing a toolkit from any non-main thread permanently breaks the global C++ font tables for the whole process, and serialising construction with a mutex is not enough. partitura's own MEI importer unconditionally creates a fresh toolkit on every `load_score(...)`, which is the call that was breaking under the thread pool. The partitura backend now builds a single Verovio toolkit on the main thread at import time and monkey-patches `verovio.toolkit` to hand that singleton out instead, so partitura (and our own `_convert_mei_with_verovio_for_partitura`) reuse the healthy main-thread instance from every worker. `_VEROVIO_LOCK` serializes actual `setOptions`/`loadData`/`getMEI` use of that shared toolkit, and `_load_partitura_score` additionally acquires it for `.mei` inputs so partitura's internal Verovio transaction is held as a single critical section. `suppress_native_output` and `_suppress_partitura_dependency_output` serialize fd-level and `sys.stdout` / `sys.stderr` redirection through a shared `threading.RLock` so the Verovio C++ logs no longer clobber each other.
+- Added `scripts/test_parallel_parse.py` as a runnable autotest that exercises the parser at `n_jobs=1` and `n_jobs=2` against a fixed set of remote MEI sources, records per-thread timings for `partitura.load_score`, and asserts that no two threads are simultaneously inside the partitura/Verovio critical sections.
+- Separated `testing_annot_stats.ipynb` from the mensural code paths: added a scope comment, removed the commented-out Dufay mensural URL from `FILE_SOURCES`, and explicitly passes `normalize_mensural_durations=False`, `inject_missing_meter_signature=False`, `prefer_verovio_for_mensural=False`, and `use_verovio_mensural_timing=False` to `parse_files(...)` so the partitura backend stays on the common-notation fast path regardless of its defaults. Added `scripts/test_common_notation_only.py` as a matching autotest that runs the same kwargs and asserts the parser log contains no mensural lines.
+
 ## [0.1.7] - 2026-03-15
 
 ### Added

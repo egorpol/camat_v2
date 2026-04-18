@@ -2,8 +2,17 @@ from __future__ import annotations
 
 import os
 import ctypes
+import threading
 from contextlib import contextmanager
 from typing import Iterator
+
+
+# File-descriptor redirection is process-global: if two threads enter
+# `suppress_native_output` simultaneously, the saved fds clobber each other and
+# stdout/stderr can end up pointing at /dev/null (or at a closed fd) after the
+# inner context exits. Using an RLock lets us serialize the redirect window
+# without breaking nested calls inside a single thread.
+_NATIVE_FD_LOCK = threading.RLock()
 
 
 def _flush_c_stdio() -> None:
@@ -46,6 +55,7 @@ def suppress_native_output(
 
     saved: list[tuple[int, int]] = []
     null_fds: list[int] = []
+    acquired = _NATIVE_FD_LOCK.acquire()
     try:
         _flush_c_stdio()
         for target in targets:
@@ -74,3 +84,5 @@ def suppress_native_output(
                 os.close(null_fd)
             except OSError:
                 pass
+        if acquired:
+            _NATIVE_FD_LOCK.release()

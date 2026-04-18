@@ -4,16 +4,80 @@ import io
 import os
 import sys
 import tempfile
+import threading
 import types
 import warnings
 from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Tuple, Union, Sequence
+from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Set, Tuple, Union, Sequence
 
 import numpy as np
 import pandas as pd
 
-from .quiet_utils import suppress_native_output
+from .quiet_utils import _NATIVE_FD_LOCK, suppress_native_output
+
+
+# -- Verovio main-thread singleton + monkey-patch ---------------------------
+#
+# Verovio's Python toolkit loads its font resources (Bravura, Leipzig, text
+# fonts) at construction time via native code that is NOT thread-safe: every
+# `verovio.toolkit()` call constructed on a non-main thread leaves the global
+# C++ font tables in a permanently broken state, after which every subsequent
+# `loadData` returns empty MEI ("Document is empty" / "Bravura font could not
+# be loaded"). Serializing construction with a mutex is *not* sufficient -
+# the failure mode is per-thread, not per-concurrent-call. The only reliable
+# fix is to construct a toolkit on the main thread exactly once and reuse it
+# from every worker thread under a lock.
+#
+# partitura's own MEI importer (`partitura.io.importmei`) unconditionally does
+# `tk = verovio.toolkit(True)` on every `load_score(...)` for an .mei file,
+# so we cannot just "be careful" in our own Verovio callsites - we have to
+# make `verovio.toolkit(...)` itself return the main-thread singleton so any
+# third party that constructs a toolkit from a worker thread still ends up
+# sharing the healthy one.
+#
+# The `_VEROVIO_LOCK` then serializes actual method calls on the shared
+# toolkit so concurrent workers don't stomp on each other's `setOptions` /
+# `loadData` / `getMEI` state mid-transaction.
+_VEROVIO_LOCK = threading.RLock()
+_SHARED_VRV_TOOLKIT: Any = None
+_VEROVIO_ORIGINAL_FACTORY: Any = None
+
+
+def _install_verovio_main_thread_shim() -> None:
+    """Construct a Verovio toolkit on the main thread and replace
+    `verovio.toolkit` with a factory that hands out that singleton. Must be
+    called exactly once, from the main thread, at module import time."""
+    global _SHARED_VRV_TOOLKIT, _VEROVIO_ORIGINAL_FACTORY
+    if _SHARED_VRV_TOOLKIT is not None:
+        return
+    try:
+        import verovio  # type: ignore
+    except Exception:  # pragma: no cover - verovio is optional
+        return
+    _VEROVIO_ORIGINAL_FACTORY = verovio.toolkit
+    try:
+        _SHARED_VRV_TOOLKIT = verovio.toolkit()
+    except Exception:  # pragma: no cover
+        _SHARED_VRV_TOOLKIT = None
+        return
+
+    def _shared_toolkit_factory(*_args: Any, **_kwargs: Any) -> Any:
+        return _SHARED_VRV_TOOLKIT
+
+    verovio.toolkit = _shared_toolkit_factory  # type: ignore[assignment]
+
+
+_install_verovio_main_thread_shim()
+
+
+# partitura's MEI/MusicXML importers use lxml with some module-level state
+# (e.g. namespace tables) and also surface UserWarnings via the global warnings
+# filter machinery. Running many imports concurrently is not a supported mode,
+# so we serialize score loading too. Downloads, sanitization, DataFrame assembly
+# and MEI event extraction still run in parallel, which is where most of the
+# wallclock savings come from.
+_PARTITURA_LOAD_LOCK = threading.Lock()
 
 
 @contextmanager
@@ -43,9 +107,15 @@ def _suppress_partitura_dependency_output(enabled: bool):
         yield
         return
 
+    # `redirect_stdout`/`redirect_stderr` mutate the process-global `sys.stdout`/
+    # `sys.stderr` references; two parallel workers entering this context would
+    # clobber each other's save/restore pair. Hold the same RLock used by
+    # `suppress_native_output` so fd-level and Python-level redirection both
+    # behave as a single critical section.
     sink = io.StringIO()
-    with redirect_stdout(sink), redirect_stderr(sink), suppress_native_output(enabled=True):
-        yield
+    with _NATIVE_FD_LOCK:
+        with redirect_stdout(sink), redirect_stderr(sink), suppress_native_output(enabled=True):
+            yield
 
 
 def _ensure_pkg_resources_shim() -> None:
@@ -102,6 +172,8 @@ from .music_utils import (  # type: ignore
     draw_piano_roll,
     filter_and_adjust_durations,
     get_file_path,
+    get_download_cache_dir,
+    is_cached_download,
     canonicalize_pitch_name,
     accidental_rank_from_name,
 )
@@ -123,6 +195,7 @@ _PITCH_CLASS_NAMES = ("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#"
 _TEXTUAL_EXTENSIONS = {".xml", ".musicxml", ".mei", ".krn", ".kern", ".hum"}
 _MENSURAL_DURATION_TOKENS = set(DEFAULT_MENSURAL_DURATION_MAP.keys())
 _MEI_EVENT_TYPE_MAP = {
+    # Already-handled core control / text / span elements.
     "annot": "annot",
     "arpeg": "arpeg",
     "barLine": "barline",
@@ -142,7 +215,47 @@ _MEI_EVENT_TYPE_MAP = {
     "slur": "slur",
     "tempo": "tempo",
     "tie": "tie",
+    # Ornaments.
+    "trill": "trill",
+    "mordent": "mordent",
+    "turn": "turn",
+    "ornam": "ornament",
+    "bTrem": "btrem",
+    "fTrem": "ftrem",
+    # Articulation / fingering / bend (usually note-attached).
+    "artic": "artic",
+    "fing": "fingering",
+    "bend": "bend",
+    # Continuous / ranged markings.
+    "pedal": "pedal",
+    "octave": "octave",
+    "ending": "ending",
+    "beamSpan": "beam_span",
+    "tupletSpan": "tuplet_span",
+    # Mid-piece definition changes (also captured for setup in scoreDef/staffDef).
+    "clef": "clef",
+    "keySig": "key_sig",
+    "meterSig": "meter_sig",
+    # Whole-measure / invisible rests.
+    "mRest": "mrest",
+    "multiRest": "multirest",
+    "space": "space",
+    # Standalone notational markers.
+    "custos": "custos",
+    "accid": "accid",
 }
+# Tags that should be suppressed when they appear as children of a note/chord —
+# the information is already represented on the pitch row, so emitting another
+# event row would be redundant. When NOT inside a note/chord they become
+# standalone events (e.g. editorial accidentals hanging off a layer).
+_MEI_NOTE_INTERNAL_TAGS: Set[str] = {"accid"}
+# Tags that are typically *attached* to a note/chord but still warrant an event
+# row — we mark these with scope="note_attached" and mirror the parent's xml_id
+# into start_xml_id so downstream joins stay simple.
+_MEI_NOTE_ATTACHED_TAGS: Set[str] = {"artic", "fing", "bend"}
+# Ancestors that turn clef/keySig/meterSig into *setup* rather than a mid-piece
+# change event.
+_MEI_DEFINITION_ANCESTORS: Set[str] = {"scoreDef", "staffDef"}
 _EVENT_DF_COLUMNS = [
     "type",
     "subtype",
@@ -184,6 +297,26 @@ def _midi_to_pitch_name(midi: int) -> str:
     octave = (midi // 12) - 1
     pc = _PITCH_CLASS_NAMES[midi % 12]
     return f"{pc}{octave}"
+
+
+# Precomputed MIDI (0..127) -> pitch name lookup used to vectorize per-note naming.
+_MIDI_PITCH_LUT: Tuple[str, ...] = tuple(_midi_to_pitch_name(i) for i in range(128))
+
+
+def _midi_to_pitch_name_array(midi_values: np.ndarray) -> np.ndarray:
+    """
+    Vectorized MIDI -> pitch name resolution. Values outside 0..127 fall back to the
+    scalar helper so unusual inputs still produce a usable label.
+    """
+    midi_int = np.asarray(midi_values, dtype=np.int64)
+    in_range = (midi_int >= 0) & (midi_int < 128)
+    out = np.empty(midi_int.shape, dtype=object)
+    if in_range.any():
+        lut = np.asarray(_MIDI_PITCH_LUT, dtype=object)
+        out[in_range] = lut[midi_int[in_range]]
+    if (~in_range).any():
+        out[~in_range] = [_midi_to_pitch_name(int(v)) for v in midi_int[~in_range]]
+    return out
 
 
 def _exception_chain_text(exc: BaseException) -> str:
@@ -257,11 +390,14 @@ def _convert_mei_with_verovio_for_partitura(
     if mensural_score_up:
         options["mensuralScoreUp"] = True
 
-    tk = verovio.toolkit()
-    with suppress_native_output(enabled=quiet_native_warnings):
-        tk.setOptions(options)
-        tk.loadData(mei_text)
-        converted_mei = tk.getMEI()
+    # Verovio's font/glyph tables are shared C++ state; serialize the entire
+    # toolkit lifecycle so concurrent workers cannot race during font loading.
+    with _VEROVIO_LOCK:
+        tk = verovio.toolkit()
+        with suppress_native_output(enabled=quiet_native_warnings):
+            tk.setOptions(options)
+            tk.loadData(mei_text)
+            converted_mei = tk.getMEI()
     if not isinstance(converted_mei, str) or not converted_mei.strip():
         raise RuntimeError("Verovio conversion returned empty MEI data")
 
@@ -540,29 +676,548 @@ def _sanitize_source_for_partitura(
     return tmp.name, _cleanup, mensural_replacement_count, meter_injection_count
 
 
+@contextmanager
+def _null_ctx():
+    yield
+
+
 def _load_partitura_score(file_path: str):
     suffix = Path(file_path).suffix.lower()
-    if suffix in {".krn", ".kern"}:
-        return importkern.load_kern(file_path, force_same_part=True)
-    if suffix == ".xml":
-        try:
-            return importmusicxml.load_musicxml(file_path)
-        except Exception:
-            # Fallback to the generic loader if load_musicxml fails.
-            return pt.load_score(file_path)
-    return pt.load_score(file_path)
+    # Serialize partitura's importers; they share lxml parser state and surface
+    # warnings via the global `warnings` filter stack, neither of which is safe
+    # to run concurrently across our thread pool. For MEI files we additionally
+    # hold `_VEROVIO_LOCK` because partitura's importmei internally uses the
+    # (shimmed) main-thread Verovio singleton and multiple workers must not
+    # stomp on its setOptions/loadData/getMEI transaction.
+    is_mei = suffix == ".mei"
+    vrv_ctx = _VEROVIO_LOCK if is_mei else _null_ctx()
+    with _PARTITURA_LOAD_LOCK, vrv_ctx:
+        if suffix in {".krn", ".kern"}:
+            return importkern.load_kern(file_path, force_same_part=True)
+        if suffix == ".xml":
+            try:
+                return importmusicxml.load_musicxml(file_path)
+            except Exception:
+                # Fallback to the generic loader if load_musicxml fails.
+                return pt.load_score(file_path)
+        return pt.load_score(file_path)
 
 
-def _part_to_rows(part, *, parse_enharmonic: bool = False, include_xml_ids: bool = False) -> List[Dict[str, Any]]:
+def _clean_xml_id_value(raw: Any) -> Optional[str]:
+    if raw is None:
+        return None
+    try:
+        s = str(raw).strip()
+    except Exception:
+        return None
+    if not s:
+        return None
+    if s.startswith("#"):
+        s = s[1:]
+    return s or None
+
+
+def _resolve_xml_id_field(fields: Iterable[str]) -> Optional[str]:
+    field_set = set(fields)
+    for candidate in ("xml_id", "xmlid", "id", "note_id", "noteid", "xml:id"):
+        if candidate in field_set:
+            return candidate
+    return None
+
+
+def _spelling_from_note_array(
+    note_array: np.ndarray,
+    fields: Iterable[str],
+) -> Optional[np.ndarray]:
     """
-    Convert a single partitura Part into a list of row dictionaries compatible with CAMAT dataframes.
+    Vectorized enharmonic spelling using note_array fields when available.
+    Returns None if required fields are missing.
     """
-    rows: List[Dict[str, Any]] = []
-    note_array = part.note_array(
-        include_metrical_position=True, include_divs_per_quarter=True
+    field_set = set(fields)
+    if not {"step", "octave"}.issubset(field_set):
+        return None
+
+    steps = np.asarray(note_array["step"]).astype(str)
+    steps = np.char.upper(steps)
+    octaves = np.asarray(note_array["octave"], dtype=np.int64)
+    alters = (
+        np.asarray(note_array["alter"], dtype=float)
+        if "alter" in field_set
+        else np.zeros(octaves.shape, dtype=float)
     )
-    if note_array.size == 0:
-        return rows
+    alters = np.nan_to_num(alters, nan=0.0, posinf=0.0, neginf=0.0).astype(np.int64)
+
+    out = np.empty(steps.shape, dtype=object)
+    for idx in range(steps.size):
+        a = int(alters[idx])
+        if a > 0:
+            acc = "#" * a
+        elif a < 0:
+            acc = "b" * (-a)
+        else:
+            acc = ""
+        out[idx] = f"{steps[idx]}{acc}{int(octaves[idx])}"
+    return out
+
+
+def _spelling_from_part_notes(part: Any) -> Tuple[Dict[Any, str], List[Tuple[float, int, str]]]:
+    """
+    Legacy spelling lookup: derive from part.notes when note_array lacks spelling fields.
+    Returns (id_to_spelling, ordered_spellings_with_sort_key).
+    """
+    id_to_spelling: Dict[Any, str] = {}
+    sort_info: List[Tuple[float, int, str]] = []
+    try:
+        notes = list(getattr(part, "notes", []) or [])
+    except Exception:
+        return id_to_spelling, sort_info
+
+    for n in notes:
+        step = getattr(n, "step", None)
+        octave = getattr(n, "octave", None)
+        alter = getattr(n, "alter", None)
+        if alter is None:
+            acc_name = str(getattr(n, "accidental", "") or "").lower()
+            if acc_name in {"sharp", "sharp1"}:
+                alter = 1
+            elif acc_name in {"flat", "flat1"}:
+                alter = -1
+            elif acc_name in {"double-sharp", "sharp2"}:
+                alter = 2
+            elif acc_name in {"double-flat", "flat2"}:
+                alter = -2
+            else:
+                alter = 0
+        try:
+            a = int(round(float(alter))) if alter is not None else 0
+        except Exception:
+            a = 0
+        if a > 0:
+            acc = "#" * a
+        elif a < 0:
+            acc = "b" * (-a)
+        else:
+            acc = ""
+        if step is None or octave is None:
+            continue
+        spelled = f"{str(step).upper()}{acc}{int(octave)}"
+        nid = getattr(n, "id", None) or getattr(n, "xml_id", None)
+        if nid is not None:
+            id_to_spelling[nid] = spelled
+        start_t = getattr(getattr(n, "start", None), "t", 0) or 0
+        midi_p = getattr(n, "midi_pitch", 0) or 0
+        try:
+            sort_info.append((float(start_t), int(midi_p), spelled))
+        except Exception:
+            sort_info.append((0.0, 0, spelled))
+    sort_info.sort(key=lambda x: (x[0], x[1]))
+    return id_to_spelling, sort_info
+
+
+def _measure_anchors_for_unique_onsets(
+    unique_onsets: np.ndarray,
+    measure_map: Any,
+    quarter_map: Any,
+    measure_number_map: Any,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Compute (measure_start_q, measure_num) per unique onset. NaN measure_start marks
+    lookup failures so callers can substitute a fallback from rel_onset_div.
+    """
+    n = unique_onsets.shape[0]
+    starts = np.full(n, np.nan, dtype=float)
+    nums = np.zeros(n, dtype=np.int64)
+    if n == 0:
+        return starts, nums
+
+    def _scalar(value: Any) -> Any:
+        if isinstance(value, np.ndarray):
+            try:
+                return value.item()
+            except Exception:
+                return value[()] if value.shape == () else value.flat[0]
+        return value
+
+    for i in range(n):
+        onset = float(unique_onsets[i])
+        try:
+            bounds = measure_map(onset)
+            start_t = bounds[0] if hasattr(bounds, "__getitem__") else bounds
+            sq = _scalar(quarter_map(start_t))
+            sq_f = float(sq)
+            if np.isfinite(sq_f):
+                starts[i] = sq_f
+        except Exception:
+            pass
+        try:
+            mn = _scalar(measure_number_map(onset))
+            nums[i] = int(mn)
+        except Exception:
+            nums[i] = 0
+    return starts, nums
+
+
+def _part_note_attachments_by_xml_id(part: Any) -> Dict[str, Dict[str, Any]]:
+    """
+    Collect per-note attachment metadata from a partitura Part.
+
+    Used as the fallback source for non-MEI scores. Partitura's MEI importer
+    (as of v1.8) does not populate ``slur_starts`` / ``fermata`` /
+    ``articulations`` on Note objects, so the MEI-backed pipeline relies on
+    :func:`_extract_mei_note_attachments` instead.
+    """
+    out: Dict[str, Dict[str, Any]] = {}
+    try:
+        from partitura.score import GraceNote as _GraceNote  # type: ignore
+    except Exception:  # pragma: no cover - very old partitura versions
+        _GraceNote = None  # type: ignore
+
+    for note in getattr(part, "notes_tied", None) or getattr(part, "notes", []) or []:
+        try:
+            nid = _clean_xml_id_value(getattr(note, "id", None))
+        except Exception:
+            nid = None
+        if not nid:
+            continue
+        info: Dict[str, Any] = {}
+        if _GraceNote is not None and isinstance(note, _GraceNote):
+            info["grace"] = True
+        artic = getattr(note, "articulations", None) or []
+        if artic:
+            info["articulations"] = " ".join(sorted({str(a) for a in artic}))
+        orn = getattr(note, "ornaments", None) or []
+        if orn:
+            info["ornaments"] = " ".join(sorted({str(o) for o in orn}))
+        tech = getattr(note, "technical", None) or []
+        if tech:
+            info["technical"] = " ".join(sorted({str(t) for t in tech}))
+        if getattr(note, "fermata", None) is not None:
+            info["fermata"] = True
+        tie_prev = getattr(note, "tie_prev", None)
+        tie_next = getattr(note, "tie_next", None)
+        if tie_prev is not None or tie_next is not None:
+            if tie_prev is not None and tie_next is not None:
+                info["tied"] = "middle"
+            elif tie_next is not None:
+                info["tied"] = "start"
+            else:
+                info["tied"] = "stop"
+        slur_starts = getattr(note, "slur_starts", None) or []
+        slur_stops = getattr(note, "slur_stops", None) or []
+        if slur_starts or slur_stops:
+            if slur_starts and slur_stops:
+                info["slurred"] = "both"
+            elif slur_starts:
+                info["slurred"] = "start"
+            else:
+                info["slurred"] = "stop"
+        tuplet_starts = getattr(note, "tuplet_starts", None) or []
+        tuplet_stops = getattr(note, "tuplet_stops", None) or []
+        if tuplet_starts or tuplet_stops:
+            if tuplet_starts and tuplet_stops:
+                info["tuplet"] = "both"
+            elif tuplet_starts:
+                info["tuplet"] = "start"
+            else:
+                info["tuplet"] = "stop"
+        if info:
+            out[nid] = info
+    return out
+
+
+_NOTE_ATTACHMENTS_CACHE: Dict[Tuple[Any, ...], Dict[str, Dict[str, Any]]] = {}
+_NOTE_ATTACHMENTS_CACHE_MAX = 64
+
+
+def _mei_note_attachments_cache_key(mei_path: str) -> Optional[Tuple[Any, ...]]:
+    try:
+        stat = os.stat(mei_path)
+    except OSError:
+        return None
+    return (os.path.realpath(mei_path), stat.st_mtime_ns, stat.st_size)
+
+
+def _extract_mei_note_attachments(mei_path: str) -> Dict[str, Dict[str, Any]]:
+    """
+    Build a ``note xml:id -> attachment dict`` map by walking the MEI XML.
+
+    This is the authoritative source of per-note slur/tie/fermata/articulation
+    / ornament / grace / tuplet membership for MEI inputs — partitura's
+    importer does not currently expose these reliably on Note objects.
+    """
+    if Path(mei_path).suffix.lower() != ".mei":
+        return {}
+    cache_key = _mei_note_attachments_cache_key(mei_path)
+    if cache_key is not None:
+        cached = _NOTE_ATTACHMENTS_CACHE.get(cache_key)
+        if cached is not None:
+            return {nid: dict(info) for nid, info in cached.items()}
+
+    try:
+        import xml.etree.ElementTree as ET
+
+        root = ET.parse(mei_path).getroot()
+    except Exception:
+        return {}
+
+    def _lname(tag: Any) -> str:
+        raw = str(tag)
+        return raw.rsplit("}", 1)[-1] if "}" in raw else raw
+
+    xml_id_key = "{http://www.w3.org/XML/1998/namespace}id"
+
+    def _xid(el: Any) -> Optional[str]:
+        if el is None:
+            return None
+        raw = el.attrib.get(xml_id_key) or el.attrib.get("xml:id")
+        if raw is None:
+            return None
+        value = str(raw).strip()
+        if not value:
+            return None
+        return value[1:] if value.startswith("#") else value
+
+    def _ids_from_plist(raw: Any) -> List[str]:
+        if raw is None:
+            return []
+        tokens = str(raw).strip().split()
+        out: List[str] = []
+        for tok in tokens:
+            tok = tok.strip()
+            if not tok:
+                continue
+            out.append(tok[1:] if tok.startswith("#") else tok)
+        return out
+
+    parent_map = {child: parent for parent in root.iter() for child in parent}
+    attachments: Dict[str, Dict[str, Any]] = {}
+
+    def _bucket(nid: str) -> Dict[str, Any]:
+        if nid not in attachments:
+            attachments[nid] = {}
+        return attachments[nid]
+
+    def _mark(nid: str, key: str, value: Any) -> None:
+        b = _bucket(nid)
+        if key in {"articulations", "ornaments", "technical"}:
+            existing = b.get(key)
+            seen = set(existing.split()) if isinstance(existing, str) else set()
+            for tok in str(value).split():
+                if tok:
+                    seen.add(tok)
+            if seen:
+                b[key] = " ".join(sorted(seen))
+        elif key in {"tied", "slurred", "tuplet"}:
+            cur = b.get(key)
+            order = {"start": 1, "stop": 2, "middle": 3, "member": 4, "both": 5}
+            if cur is None:
+                b[key] = value
+            elif cur != value and {cur, value} == {"start", "stop"}:
+                b[key] = "both"
+            elif order.get(value, 0) > order.get(cur, 0):
+                b[key] = value
+        else:
+            b[key] = value
+
+    def _note_ids_in(el: Any) -> List[str]:
+        ids: List[str] = []
+        for ch in el.iter():
+            if _lname(ch.tag) in {"note", "chord"}:
+                xid = _xid(ch)
+                if xid:
+                    ids.append(xid)
+        return ids
+
+    def _chord_child_note_ids(chord_el: Any) -> List[str]:
+        return [
+            _xid(ch)
+            for ch in chord_el
+            if _lname(ch.tag) == "note" and _xid(ch) is not None
+        ]  # type: ignore[misc]
+
+    for el in root.iter():
+        tag = _lname(el.tag)
+
+        if tag == "note":
+            nid = _xid(el)
+            if not nid:
+                continue
+            parent = parent_map.get(el)
+            parent_tag = _lname(parent.tag) if parent is not None else ""
+            if el.attrib.get("grace"):
+                _mark(nid, "grace", True)
+            artic_attr = el.attrib.get("artic")
+            if artic_attr:
+                _mark(nid, "articulations", artic_attr)
+            # Ornaments / articulations / fermata encoded as attributes on a
+            # note (rare but legal).
+            if el.attrib.get("ornam"):
+                _mark(nid, "ornaments", el.attrib["ornam"])
+            if el.attrib.get("fermata"):
+                _mark(nid, "fermata", True)
+            # Children like <artic>, <trill>, <mordent>, <turn>, <ornam>.
+            for child in el:
+                ctag = _lname(child.tag)
+                if ctag == "artic":
+                    val = child.attrib.get("artic") or child.attrib.get("value") or ctag
+                    _mark(nid, "articulations", val)
+                elif ctag in {"trill", "mordent", "turn", "ornam"}:
+                    _mark(nid, "ornaments", ctag)
+                elif ctag == "fermata":
+                    _mark(nid, "fermata", True)
+                elif ctag == "bend":
+                    _mark(nid, "technical", "bend")
+            # Inherit chord-level articulation attribute to member notes so
+            # "chord slur" encodings still annotate each pitch row.
+            if parent_tag == "chord" and parent is not None:
+                chord_artic = parent.attrib.get("artic")
+                if chord_artic:
+                    _mark(nid, "articulations", chord_artic)
+                if parent.attrib.get("grace"):
+                    _mark(nid, "grace", True)
+
+        elif tag in {"slur", "tie"}:
+            field = "tied" if tag == "tie" else "slurred"
+            startid = el.attrib.get("startid")
+            endid = el.attrib.get("endid")
+            if startid:
+                sid = startid.lstrip("#").strip()
+                if sid:
+                    _mark(sid, field, "start")
+            if endid:
+                eid = endid.lstrip("#").strip()
+                if eid:
+                    _mark(eid, field, "stop")
+            for pid in _ids_from_plist(el.attrib.get("plist")):
+                _mark(pid, field, "start")
+
+        elif tag == "fermata":
+            startid = el.attrib.get("startid")
+            if startid:
+                sid = startid.lstrip("#").strip()
+                if sid:
+                    _mark(sid, "fermata", True)
+
+        elif tag in {"trill", "mordent", "turn", "ornam", "arpeg", "gliss"}:
+            startid = el.attrib.get("startid")
+            if startid:
+                sid = startid.lstrip("#").strip()
+                if sid:
+                    _mark(sid, "ornaments", tag)
+
+        elif tag == "tuplet":
+            for nid in _note_ids_in(el):
+                _mark(nid, "tuplet", "member")
+
+        elif tag == "tupletSpan":
+            startid = el.attrib.get("startid")
+            endid = el.attrib.get("endid")
+            if startid:
+                sid = startid.lstrip("#").strip()
+                if sid:
+                    _mark(sid, "tuplet", "start")
+            if endid:
+                eid = endid.lstrip("#").strip()
+                if eid:
+                    _mark(eid, "tuplet", "stop")
+            for pid in _ids_from_plist(el.attrib.get("plist")):
+                _mark(pid, "tuplet", "member")
+
+    if cache_key is not None:
+        if len(_NOTE_ATTACHMENTS_CACHE) >= _NOTE_ATTACHMENTS_CACHE_MAX:
+            try:
+                oldest = next(iter(_NOTE_ATTACHMENTS_CACHE))
+                _NOTE_ATTACHMENTS_CACHE.pop(oldest, None)
+            except StopIteration:
+                pass
+        _NOTE_ATTACHMENTS_CACHE[cache_key] = {
+            nid: dict(info) for nid, info in attachments.items()
+        }
+
+    return attachments
+
+
+def _apply_note_attachments_to_pitch_df(
+    df_pitch: pd.DataFrame,
+    attachments: Mapping[str, Mapping[str, Any]],
+) -> pd.DataFrame:
+    """
+    Merge a ``xml_id -> attachment dict`` mapping into ``df_pitch`` as the
+    standard note-attachment columns. Columns are always added (NA-filled) so
+    downstream schema is stable even when the source had no attachments.
+    """
+    if "xml_id" not in df_pitch.columns:
+        for col in _NOTE_ATTACHMENT_COLUMNS:
+            if col not in df_pitch.columns:
+                df_pitch[col] = pd.NA
+        return df_pitch
+
+    if attachments:
+        id_series = df_pitch["xml_id"].tolist()
+        for col in _NOTE_ATTACHMENT_COLUMNS:
+            df_pitch[col] = [
+                attachments.get(str(nid), {}).get(col, pd.NA) if nid else pd.NA
+                for nid in id_series
+            ]
+    else:
+        for col in _NOTE_ATTACHMENT_COLUMNS:
+            if col not in df_pitch.columns:
+                df_pitch[col] = pd.NA
+    return df_pitch
+
+
+# Columns appended to df_pitch when note-attachment enrichment runs. Keep the
+# order stable so downstream consumers can depend on it.
+_NOTE_ATTACHMENT_COLUMNS: Tuple[str, ...] = (
+    "grace",
+    "tied",
+    "slurred",
+    "tuplet",
+    "fermata",
+    "articulations",
+    "ornaments",
+    "technical",
+)
+
+
+def _part_to_dataframe(
+    part: Any,
+    *,
+    parse_enharmonic: bool = False,
+    include_xml_ids: bool = False,
+    include_note_attachments: bool = False,
+) -> pd.DataFrame:
+    """
+    Convert a single partitura Part into a CAMAT-compatible DataFrame.
+
+    Vectorized over the part's note_array to avoid per-note Python overhead.
+    """
+    note_array_kwargs: Dict[str, Any] = dict(
+        include_metrical_position=True,
+        include_divs_per_quarter=True,
+    )
+    if parse_enharmonic:
+        note_array_kwargs["include_pitch_spelling"] = True
+    try:
+        note_array = part.note_array(**note_array_kwargs)
+    except TypeError:
+        # Older partitura versions may not accept include_pitch_spelling.
+        note_array_kwargs.pop("include_pitch_spelling", None)
+        note_array = part.note_array(**note_array_kwargs)
+    if getattr(note_array, "size", 0) == 0:
+        return pd.DataFrame()
+
+    fields = set(note_array.dtype.names or ())
+    onsets = np.asarray(note_array["onset_quarter"], dtype=float)
+    durations = np.asarray(note_array["duration_quarter"], dtype=float)
+    finite_mask = np.isfinite(onsets) & np.isfinite(durations)
+    if not finite_mask.all():
+        note_array = note_array[finite_mask]
+        if note_array.size == 0:
+            return pd.DataFrame()
+        onsets = onsets[finite_mask]
+        durations = durations[finite_mask]
+    midi = np.asarray(note_array["pitch"], dtype=np.int64)
 
     measure_map = part.measure_map
     quarter_map = part.quarter_map
@@ -573,171 +1228,122 @@ def _part_to_rows(part, *, parse_enharmonic: bool = False, include_xml_ids: bool
         or getattr(part, "id", None)
         or ""
     )
+    part_label_str = str(part_label) if part_label else ""
 
-    fields = set(note_array.dtype.names or ())
-    has_divs = "divs_pq" in fields
-    has_rel = "rel_onset_div" in fields
+    unique_onsets, inverse = np.unique(onsets, return_inverse=True)
+    starts_u, nums_u = _measure_anchors_for_unique_onsets(
+        unique_onsets, measure_map, quarter_map, measure_number_map
+    )
+    measure_starts = starts_u[inverse]
+    measure_nums = nums_u[inverse]
+
+    nan_mask = ~np.isfinite(measure_starts)
+    if nan_mask.any():
+        if "divs_pq" in fields and "rel_onset_div" in fields:
+            divs = np.asarray(note_array["divs_pq"], dtype=float)
+            rel = np.asarray(note_array["rel_onset_div"], dtype=float)
+            safe_divs = np.where(divs > 0, divs, 1.0)
+            fallback_start = onsets - (rel / safe_divs)
+            measure_starts = np.where(nan_mask, fallback_start, measure_starts)
+        else:
+            measure_starts = np.where(nan_mask, onsets, measure_starts)
+
+    local_onsets = onsets - measure_starts
+
     has_voice = "voice" in fields
+    if has_voice:
+        voice_raw = np.asarray(note_array["voice"]).tolist()
+        voice_labels = [
+            _format_voice_label(part_label_str, v) for v in voice_raw
+        ]
+    else:
+        default_voice = _format_voice_label(part_label_str, None)
+        voice_labels = [default_voice] * len(onsets)
 
-    # Build lookup maps for enharmonic spelling
-    id_to_spelling: Dict[Any, str] = {}
-    spelled_sequence: List[str] = []
+    pitch_names = _midi_to_pitch_name_array(midi)
+
+    data: Dict[str, Any] = {
+        "Measure": measure_nums.astype(np.int64),
+        "Local Onset": local_onsets.astype(float),
+        "Global Onset": onsets.astype(float),
+        "Duration": durations.astype(float),
+        "Pitch": pitch_names,
+        "MIDI": midi.astype(np.int64),
+        "Voice": voice_labels,
+    }
+
+    xml_id_field = _resolve_xml_id_field(fields) if include_xml_ids else None
+    if include_xml_ids:
+        if xml_id_field is not None:
+            raw_ids = np.asarray(note_array[xml_id_field]).tolist()
+            data["xml_id"] = [_clean_xml_id_value(v) for v in raw_ids]
+        else:
+            data["xml_id"] = [None] * len(onsets)
 
     if parse_enharmonic:
-        try:
-            # Collect all note info first
-            note_info = []
-            for n in getattr(part, "notes", []):
-                step = getattr(n, "step", None)
-                octave = getattr(n, "octave", None)
-                alter = getattr(n, "alter", None)
-                if alter is None:
-                    acc_name = str(getattr(n, "accidental", "") or "").lower()
-                    if acc_name:
-                        if acc_name in {"sharp", "sharp1"}:
-                            alter = 1
-                        elif acc_name in {"flat", "flat1"}:
-                            alter = -1
-                        elif acc_name in {"double-sharp", "sharp2"}:
-                            alter = 2
-                        elif acc_name in {"double-flat", "flat2"}:
-                            alter = -2
-                        else:
-                            alter = 0
+        spelled_arr = _spelling_from_note_array(note_array, fields)
+        if spelled_arr is None:
+            id_to_spelling, sort_info = _spelling_from_part_notes(part)
+            spelled_sequence = [entry[2] for entry in sort_info]
+            xml_id_for_spelling = xml_id_field or _resolve_xml_id_field(fields)
+            id_column: Optional[List[Any]] = None
+            if xml_id_for_spelling is not None and id_to_spelling:
+                id_column = np.asarray(note_array[xml_id_for_spelling]).tolist()
+            spelled_list: List[Optional[str]] = []
+            seq_idx = 0
+            for i in range(len(onsets)):
+                spelled: Optional[str] = None
+                if id_column is not None:
+                    nid = id_column[i]
+                    if nid in id_to_spelling:
+                        spelled = id_to_spelling[nid]
+                if spelled is None and seq_idx < len(spelled_sequence):
+                    spelled = spelled_sequence[seq_idx]
+                if seq_idx < len(spelled_sequence):
+                    seq_idx += 1
+                spelled_list.append(spelled)
+            data["Pitch Enharmonic"] = spelled_list
+        else:
+            data["Pitch Enharmonic"] = spelled_arr
 
-                acc = ""
-                try:
-                    a = int(round(float(alter))) if alter is not None else 0
-                except Exception:
-                    a = 0
-                if a > 0:
-                    acc = "#" * a
-                elif a < 0:
-                    acc = "b" * (-a)
+    df_part = pd.DataFrame(data)
 
-                spelled = None
-                if step is not None and octave is not None:
-                    spelled = f"{str(step).upper()}{acc}{int(octave)}"
+    if include_note_attachments:
+        attachments = _part_note_attachments_by_xml_id(part)
+        # Always add the columns (NA-filled) so downstream schema is stable
+        # whether or not a particular part yielded any attachment rows.
+        id_series = df_part["xml_id"] if "xml_id" in df_part.columns else None
+        for col in _NOTE_ATTACHMENT_COLUMNS:
+            if id_series is None or not attachments:
+                df_part[col] = pd.NA
+                continue
+            df_part[col] = [
+                attachments.get(nid, {}).get(col, pd.NA) if nid else pd.NA
+                for nid in id_series
+            ]
 
-                if spelled:
-                    # ID lookup
-                    nid = getattr(n, "id", None) or getattr(n, "xml_id", None)
-                    if nid is not None:
-                        id_to_spelling[nid] = spelled
+    return df_part
 
-                    # Sorting info
-                    start_t = getattr(getattr(n, "start", None), "t", 0)
-                    midi_p = getattr(n, "midi_pitch", 0)
-                    note_info.append((start_t, midi_p, spelled))
 
-            # Sort by onset then pitch to match note_array order
-            note_info.sort(key=lambda x: (x[0], x[1]))
-            spelled_sequence = [x[2] for x in note_info]
-
-        except Exception:
-            id_to_spelling = {}
-            spelled_sequence = []
-
-    spelled_idx = 0
-    for note_row in note_array:
-        onset_q = float(note_row["onset_quarter"])
-        duration_q = float(note_row["duration_quarter"])
-        if not np.isfinite(onset_q) or not np.isfinite(duration_q):
-            continue
-
-        try:
-            measure_bounds = measure_map(onset_q)
-            measure_start_t = measure_bounds[0]
-            measure_start_q = quarter_map(measure_start_t)
-            if isinstance(measure_start_q, np.ndarray):
-                measure_start_q = measure_start_q.item()
-            measure_start_q = float(measure_start_q)
-            if not np.isfinite(measure_start_q):
-                raise ValueError
-        except Exception:
-            # Fallback: derive from relative onset if available
-            divs_per_q = float(note_row["divs_pq"]) if has_divs else 0.0
-            rel_div = float(note_row["rel_onset_div"]) if has_rel else 0.0
-            rel_q = rel_div / divs_per_q if divs_per_q else 0.0
-            measure_start_q = onset_q - rel_q
-
-        local_onset = onset_q - measure_start_q
-        try:
-            measure_num_raw = measure_number_map(onset_q)
-            if isinstance(measure_num_raw, np.ndarray):
-                measure_num_raw = measure_num_raw.item()
-            measure_num = int(measure_num_raw)
-        except Exception:
-            measure_num = 0
-
-        midi_pitch = int(note_row["pitch"])
-        voice_value = note_row["voice"] if has_voice else None
-        voice_label = _format_voice_label(part_label, voice_value)
-
-        # Optional xml:id extraction (MEI)
-        xml_id_value: Optional[str] = None
-        if include_xml_ids:
-            # Try a variety of common field names present in note_array dtypes
-            for fid in ("xml_id", "xmlid", "id", "note_id", "noteid", "xml:id"):
-                try:
-                    candidate = note_row[fid]  # type: ignore[index]
-                except Exception:
-                    candidate = None
-                if candidate is None:
-                    continue
-                try:
-                    s = str(candidate).strip()
-                except Exception:
-                    s = ""
-                if s:
-                    if s.startswith("#"):
-                        s = s[1:]
-                    xml_id_value = s
-                    break
-
-        row: Dict[str, Any] = {
-            "Measure": measure_num,
-            "Local Onset": float(local_onset),
-            "Global Onset": onset_q,
-            "Duration": duration_q,
-            "Pitch": _midi_to_pitch_name(midi_pitch),
-            "MIDI": midi_pitch,
-            "Voice": voice_label,
-        }
-        if include_xml_ids:
-            row["xml_id"] = xml_id_value
-        if parse_enharmonic:
-            spelled: Optional[str] = None
-
-            # Try ID lookup first
-            nid = None
-            for fid in ("id", "note_id", "xml_id", "xmlid"):
-                try:
-                    val = note_row[fid]  # type: ignore[index]
-                    if val is not None:
-                        nid = val
-                        break
-                except Exception:
-                    pass
-
-            if nid in id_to_spelling:
-                spelled = id_to_spelling[nid]
-
-            # Fallback to sequential if ID failed but sequence exists
-            # (Advance index regardless to stay in sync if mixing methods)
-            seq_spelled = None
-            if spelled_sequence and spelled_idx < len(spelled_sequence):
-                seq_spelled = spelled_sequence[spelled_idx]
-                spelled_idx += 1
-
-            if not spelled and seq_spelled:
-                spelled = seq_spelled
-
-            if spelled:
-                row["Pitch Enharmonic"] = spelled
-        rows.append(row)
-
-    return rows
+def _part_to_rows(
+    part: Any,
+    *,
+    parse_enharmonic: bool = False,
+    include_xml_ids: bool = False,
+    include_note_attachments: bool = False,
+) -> List[Dict[str, Any]]:
+    """
+    Thin backward-compatible wrapper around _part_to_dataframe.
+    """
+    df = _part_to_dataframe(
+        part,
+        parse_enharmonic=parse_enharmonic,
+        include_xml_ids=include_xml_ids,
+        include_note_attachments=include_note_attachments,
+    )
+    if df.empty:
+        return []
+    return df.to_dict(orient="records")
 
 
 def _partitura_rest_events_to_dataframe(score, *, include_xml_ids: bool = False) -> pd.DataFrame:
@@ -860,19 +1466,37 @@ def _partitura_rest_events_to_dataframe(score, *, include_xml_ids: bool = False)
     return df_events.sort_values("Global Onset", na_position="last").reset_index(drop=True)
 
 
-def partitura_score_to_dataframe(score, *, parse_enharmonic: bool = False, include_xml_ids: bool = False) -> pd.DataFrame:
+def partitura_score_to_dataframe(
+    score,
+    *,
+    parse_enharmonic: bool = False,
+    include_xml_ids: bool = False,
+    include_note_attachments: bool = False,
+) -> pd.DataFrame:
     """
     Convert a partitura Score into a CAMAT-compatible dataframe.
     """
-    all_rows: List[Dict[str, Any]] = []
+    frames: List[pd.DataFrame] = []
     for part in getattr(score, "parts", []):
-        all_rows.extend(_part_to_rows(part, parse_enharmonic=parse_enharmonic, include_xml_ids=include_xml_ids))
+        part_df = _part_to_dataframe(
+            part,
+            parse_enharmonic=parse_enharmonic,
+            include_xml_ids=include_xml_ids,
+            include_note_attachments=include_note_attachments,
+        )
+        if not part_df.empty:
+            frames.append(part_df)
 
-    # Build DataFrame; include optional column when present
-    df = pd.DataFrame(all_rows)
+    if not frames:
+        df = pd.DataFrame()
+    elif len(frames) == 1:
+        df = frames[0]
+    else:
+        df = pd.concat(frames, ignore_index=True, sort=False, copy=False)
+
     if parse_enharmonic and "Pitch Enharmonic" not in df.columns:
-        # Ensure column exists (left as None) to reflect requested output schema
         df["Pitch Enharmonic"] = None
+
     expected = [
         "Measure",
         "Local Onset",
@@ -883,18 +1507,21 @@ def partitura_score_to_dataframe(score, *, parse_enharmonic: bool = False, inclu
         "Voice",
     ]
     if include_xml_ids and "xml_id" in df.columns:
-        # Place xml_id immediately after 'Voice'
         try:
             expected.insert(expected.index("Voice") + 1, "xml_id")
         except Exception:
             expected.append("xml_id")
     if parse_enharmonic and "Pitch Enharmonic" in df.columns:
         expected.insert(5, "Pitch Enharmonic")
-    # Reorder if all present; otherwise let pandas keep available columns
+    if include_note_attachments:
+        for col in _NOTE_ATTACHMENT_COLUMNS:
+            if col in df.columns and col not in expected:
+                expected.append(col)
     if set(expected).issubset(df.columns):
         df = df[expected]
+
     if len(df):
-        df = df.sort_values(["Global Onset", "MIDI"]).reset_index(drop=True)
+        df = df.sort_values(["Global Onset", "MIDI"], kind="stable").reset_index(drop=True)
     return df
 
 
@@ -1300,12 +1927,46 @@ def _count_event_anchor_xml_id_overlap(
     return len(event_anchor_ids & pitch_ids), len(event_anchor_ids)
 
 
+_MEI_EVENTS_CACHE_MAX = 32
+_MEI_EVENTS_CACHE: Dict[Tuple[str, float, int], List[Dict[str, Any]]] = {}
+
+
+def _mei_events_cache_key(mei_path: str) -> Optional[Tuple[str, float, int]]:
+    try:
+        st = os.stat(mei_path)
+    except OSError:
+        return None
+    return (os.path.abspath(mei_path), float(st.st_mtime), int(st.st_size))
+
+
+def _clone_mei_events(events: Sequence[Mapping[str, Any]]) -> List[Dict[str, Any]]:
+    """Return shallow copies of cached event dicts so callers can mutate freely."""
+    out: List[Dict[str, Any]] = []
+    for evt in events:
+        clone = dict(evt)
+        extra = clone.get("extra")
+        if isinstance(extra, dict):
+            clone["extra"] = dict(extra)
+        out.append(clone)
+    return out
+
+
 def _extract_mei_events(mei_path: str) -> List[Dict[str, Any]]:
     """
     Extract supported MEI control/text elements as lightweight event dictionaries.
+
+    Results are cached per (path, mtime, size) so repeated calls on the same
+    file (common when partitura loads a sanitized copy pointing at the same
+    bytes) don't re-walk the XML tree.
     """
     if Path(mei_path).suffix.lower() != ".mei":
         return []
+
+    cache_key = _mei_events_cache_key(mei_path)
+    if cache_key is not None:
+        cached = _MEI_EVENTS_CACHE.get(cache_key)
+        if cached is not None:
+            return _clone_mei_events(cached)
 
     try:
         import xml.etree.ElementTree as ET
@@ -1427,10 +2088,83 @@ def _extract_mei_events(mei_path: str) -> List[Dict[str, Any]]:
     events: List[Dict[str, Any]] = []
     barline_ordinal = 0
 
+    # Per-layer precomputed indexes used by barline lookups. Without this, each
+    # barline triggers multiple full subtree walks over its sibling children; the
+    # combined work becomes quadratic in the number of notes in the layer.
+    layer_index_cache: Dict[int, Dict[str, Any]] = {}
+
+    def _layer_index(layer_el: Any) -> Dict[str, Any]:
+        key = id(layer_el)
+        cached = layer_index_cache.get(key)
+        if cached is not None:
+            return cached
+        children = list(layer_el)
+        child_info: List[Dict[str, Any]] = []
+        cum_note = 0
+        cum_timed = 0
+        cum_notes: List[int] = []
+        cum_timeds: List[int] = []
+        for ch in children:
+            first_note = None
+            last_note = None
+            first_timed = None
+            last_timed = None
+            note_count = 0
+            timed_count = 0
+            for sub in ch.iter():
+                sub_name = _local_name(sub.tag)
+                if sub_name in {"note", "chord"}:
+                    if first_note is None:
+                        first_note = sub
+                    last_note = sub
+                    note_count += 1
+                    if first_timed is None:
+                        first_timed = sub
+                    last_timed = sub
+                    timed_count += 1
+                elif sub_name == "rest":
+                    if first_timed is None:
+                        first_timed = sub
+                    last_timed = sub
+                    timed_count += 1
+            child_info.append(
+                {
+                    "first_note_id": _get_xml_id(first_note),
+                    "last_note_id": _get_xml_id(last_note),
+                    "first_timed_id": _get_xml_id(first_timed),
+                    "last_timed_id": _get_xml_id(last_timed),
+                    "note_count": note_count,
+                    "timed_count": timed_count,
+                }
+            )
+            cum_notes.append(cum_note)
+            cum_timeds.append(cum_timed)
+            cum_note += note_count
+            cum_timed += timed_count
+        # Map each child's python id to its sibling index for O(1) lookup.
+        index_by_id = {id(ch): i for i, ch in enumerate(children)}
+        cached = {
+            "children": children,
+            "child_info": child_info,
+            "cum_notes_before": cum_notes,
+            "cum_timed_before": cum_timeds,
+            "index_by_id": index_by_id,
+        }
+        layer_index_cache[key] = cached
+        return cached
+
     for el in root.iter():
         tag_name = _local_name(el.tag)
         if tag_name not in _MEI_EVENT_TYPE_MAP:
             continue
+
+        # Note-internal markers (e.g. <accid> on a <note>) are already represented
+        # by the pitch row; suppress them here to avoid duplicate events.
+        if tag_name in _MEI_NOTE_INTERNAL_TAGS:
+            parent_el = parent_map.get(el)
+            parent_tag = _local_name(parent_el.tag) if parent_el is not None else ""
+            if parent_tag in {"note", "chord"}:
+                continue
 
         event_type = _MEI_EVENT_TYPE_MAP[tag_name]
         staff_el = _ancestor(el, "staff")
@@ -1562,74 +2296,187 @@ def _extract_mei_events(mei_path: str) -> List[Dict[str, Any]]:
             event["barline_ordinal"] = barline_ordinal
             if layer_el is not None:
                 try:
-                    children = list(layer_el)
-                    bar_idx = next((i for i, ch in enumerate(children) if ch is el), None)
+                    layer_idx = _layer_index(layer_el)
                 except Exception:
-                    bar_idx = None
-                    children = []
-                if bar_idx is not None:
+                    layer_idx = None
+                bar_idx = (
+                    layer_idx["index_by_id"].get(id(el))
+                    if layer_idx is not None
+                    else None
+                )
+                if layer_idx is not None and bar_idx is not None:
+                    child_info = layer_idx["child_info"]
+                    cum_notes_before = layer_idx["cum_notes_before"]
+                    cum_timed_before = layer_idx["cum_timed_before"]
+                    n_children = len(child_info)
+
                     prev_note_id: Optional[str] = None
                     next_note_id: Optional[str] = None
-                    prev_note_ordinal: Optional[int] = None
                     prev_timed_id: Optional[str] = None
                     next_timed_id: Optional[str] = None
-                    prev_timed_ordinal: Optional[int] = None
-                    for j in range(int(bar_idx) - 1, -1, -1):
-                        prev_note_el = _last_note_or_chord_in_subtree(children[j])
-                        prev_note_id = _get_xml_id(prev_note_el)
-                        if prev_note_id:
+
+                    for j in range(bar_idx - 1, -1, -1):
+                        candidate = child_info[j].get("last_note_id")
+                        if candidate:
+                            prev_note_id = candidate
                             break
-                    try:
-                        count_before = sum(
-                            _count_note_or_chord_in_subtree(ch)
-                            for ch in children[:int(bar_idx)]
-                        )
-                        if count_before > 0:
-                            prev_note_ordinal = int(count_before)
-                    except Exception:
-                        prev_note_ordinal = None
-                    for j in range(int(bar_idx) - 1, -1, -1):
-                        prev_timed_el = _last_timed_anchor_in_subtree(children[j])
-                        prev_timed_id = _get_xml_id(prev_timed_el)
-                        if prev_timed_id:
+                    for j in range(bar_idx - 1, -1, -1):
+                        candidate = child_info[j].get("last_timed_id")
+                        if candidate:
+                            prev_timed_id = candidate
                             break
-                    try:
-                        timed_count_before = sum(
-                            _count_timed_anchor_in_subtree(ch)
-                            for ch in children[:int(bar_idx)]
-                        )
-                        if timed_count_before > 0:
-                            prev_timed_ordinal = int(timed_count_before)
-                    except Exception:
-                        prev_timed_ordinal = None
-                    for j in range(int(bar_idx) + 1, len(children)):
-                        next_note_el = _first_note_or_chord_in_subtree(children[j])
-                        next_note_id = _get_xml_id(next_note_el)
-                        if next_note_id:
+                    for j in range(bar_idx + 1, n_children):
+                        candidate = child_info[j].get("first_note_id")
+                        if candidate:
+                            next_note_id = candidate
                             break
-                    for j in range(int(bar_idx) + 1, len(children)):
-                        next_timed_el = _first_timed_anchor_in_subtree(children[j])
-                        next_timed_id = _get_xml_id(next_timed_el)
-                        if next_timed_id:
+                    for j in range(bar_idx + 1, n_children):
+                        candidate = child_info[j].get("first_timed_id")
+                        if candidate:
+                            next_timed_id = candidate
                             break
+
+                    # Prefix-sum lookup: counts notes/timed anchors strictly before
+                    # the barline child, matching the original sum() semantics.
+                    prev_note_ordinal = (
+                        cum_notes_before[bar_idx] if 0 <= bar_idx < n_children else 0
+                    )
+                    prev_timed_ordinal = (
+                        cum_timed_before[bar_idx] if 0 <= bar_idx < n_children else 0
+                    )
+
                     if prev_note_id:
                         event["prev_note_xml_id"] = prev_note_id
                     if next_note_id:
                         event["next_note_xml_id"] = next_note_id
-                    if prev_note_ordinal is not None:
-                        event["prev_note_ordinal_staff"] = prev_note_ordinal
+                    if prev_note_ordinal > 0:
+                        event["prev_note_ordinal_staff"] = int(prev_note_ordinal)
                     if prev_timed_id:
                         event["prev_timed_xml_id"] = prev_timed_id
                     if next_timed_id:
                         event["next_timed_xml_id"] = next_timed_id
-                    if prev_timed_ordinal is not None:
-                        event["prev_timed_ordinal_staff"] = prev_timed_ordinal
+                    if prev_timed_ordinal > 0:
+                        event["prev_timed_ordinal_staff"] = int(prev_timed_ordinal)
         elif tag_name in {"slur", "tie", "hairpin", "phrase", "gliss"}:
             event["scope"] = "span"
             if tag_name == "hairpin" and "form" in event and "subtype" not in event:
                 event["subtype"] = event["form"]
         elif tag_name in {"annot", "dynam", "dir", "tempo", "harm", "repeatMark", "harpPedal"} and "tstamp2_raw" in event:
             event["scope"] = "span"
+        elif tag_name in _MEI_NOTE_ATTACHED_TAGS:
+            # <artic>, <fing>, <bend> inside a <note>/<chord>: mirror the parent
+            # note id into start_xml_id so downstream joins to df_pitch succeed,
+            # and mark scope so consumers can filter note-attached vs. free events.
+            parent_el = parent_map.get(el)
+            parent_tag = _local_name(parent_el.tag) if parent_el is not None else ""
+            if parent_tag in {"note", "chord"}:
+                event["scope"] = "note_attached"
+                if not event.get("start_xml_id"):
+                    parent_id = _get_xml_id(parent_el)
+                    if parent_id:
+                        event["start_xml_id"] = parent_id
+            attr_val = _clean_string(el.attrib.get("artic")) if tag_name == "artic" else None
+            if attr_val is None and tag_name == "fing":
+                attr_val = _clean_string(el.attrib.get("value"))
+            if attr_val and "subtype" not in event:
+                event["subtype"] = attr_val
+            if attr_val and not event.get("text"):
+                event["text"] = attr_val
+                event["text_role"] = event_type
+        elif tag_name in {"trill", "mordent", "turn", "ornam", "bTrem", "fTrem"}:
+            event["scope"] = "note_attached" if start_xml_id else "point"
+            glyph = _clean_string(el.attrib.get("glyph.name")) or _clean_string(
+                el.attrib.get("form")
+            )
+            if glyph and "subtype" not in event:
+                event["subtype"] = glyph
+        elif tag_name == "pedal":
+            pedal_dir = _clean_string(el.attrib.get("dir"))
+            if pedal_dir and "subtype" not in event:
+                event["subtype"] = pedal_dir
+            event["scope"] = "span" if "tstamp2_raw" in event or end_xml_id else "point"
+        elif tag_name == "octave":
+            dis_val = _clean_string(el.attrib.get("dis"))
+            dis_place = _clean_string(el.attrib.get("dis.place"))
+            if dis_val and "subtype" not in event:
+                event["subtype"] = f"{dis_val}{dis_place or ''}"
+            event["scope"] = "span"
+        elif tag_name == "ending":
+            event["scope"] = "span"
+            n_val = _clean_string(el.attrib.get("n"))
+            if n_val and "form" not in event:
+                event["form"] = n_val
+        elif tag_name in {"beamSpan", "tupletSpan"}:
+            event["scope"] = "span"
+        elif tag_name in {"clef", "keySig", "meterSig"}:
+            ancestor_tags: Set[str] = set()
+            cur = parent_map.get(el)
+            # Walk up at most ~6 ancestors; scoreDef/staffDef lives shallow.
+            hops = 0
+            while cur is not None and hops < 8:
+                ancestor_tags.add(_local_name(cur.tag))
+                cur = parent_map.get(cur)
+                hops += 1
+            is_setup = bool(ancestor_tags & _MEI_DEFINITION_ANCESTORS)
+            event["scope"] = "setup" if is_setup else "change"
+            # Inherit staff from the surrounding <staffDef n="..."> when the
+            # element has no explicit staff/@layer.
+            if staff_n is None and "staffDef" in ancestor_tags:
+                staff_def = _ancestor(el, "staffDef")
+                if staff_def is not None:
+                    staff_n = _first_token(staff_def.attrib.get("n"))
+                    if staff_n is not None:
+                        event["staff_n"] = staff_n
+            # Capture the interesting attributes into subtype/form/extra.
+            if tag_name == "clef":
+                shape = _clean_string(el.attrib.get("shape"))
+                line = _clean_string(el.attrib.get("line"))
+                dis = _clean_string(el.attrib.get("dis"))
+                dis_place = _clean_string(el.attrib.get("dis.place"))
+                parts = []
+                if shape:
+                    parts.append(shape)
+                if line:
+                    parts.append(line)
+                if dis:
+                    parts.append(f"{dis}{dis_place or ''}")
+                if parts and "subtype" not in event:
+                    event["subtype"] = "-".join(parts)
+            elif tag_name == "keySig":
+                sig = _clean_string(el.attrib.get("sig"))
+                mode = _clean_string(el.attrib.get("mode"))
+                if sig and "subtype" not in event:
+                    event["subtype"] = sig if not mode else f"{sig}-{mode}"
+            elif tag_name == "meterSig":
+                count = _clean_string(el.attrib.get("count"))
+                unit = _clean_string(el.attrib.get("unit"))
+                sym = _clean_string(el.attrib.get("sym"))
+                if count and unit and "subtype" not in event:
+                    event["subtype"] = f"{count}/{unit}"
+                elif sym and "subtype" not in event:
+                    event["subtype"] = sym
+        elif tag_name in {"mRest", "multiRest", "space"}:
+            event["scope"] = "timeline"
+            if tag_name == "multiRest":
+                num_val = _coerce_number(el.attrib.get("num"))
+                if num_val is not None:
+                    event["form"] = str(int(num_val)) if float(num_val).is_integer() else str(num_val)
+                    event["extra"] = {"measures": int(num_val)} if float(num_val).is_integer() else {"measures": num_val}
+            if tag_name == "space":
+                event["subtype"] = event.get("subtype", "space")
+        elif tag_name == "custos":
+            event["scope"] = "point"
+            pname = _clean_string(el.attrib.get("pname"))
+            octv = _clean_string(el.attrib.get("oct"))
+            if pname and "subtype" not in event:
+                event["subtype"] = f"{pname.upper()}{octv or ''}"
+        elif tag_name == "accid":
+            event["scope"] = "point"
+            accid_val = _clean_string(el.attrib.get("accid")) or _clean_string(
+                el.attrib.get("accid.ges")
+            )
+            if accid_val and "subtype" not in event:
+                event["subtype"] = accid_val
 
         extra_attrs = _collect_extra_attrs(
             el,
@@ -1651,12 +2498,47 @@ def _extract_mei_events(mei_path: str) -> List[Dict[str, Any]]:
                 "mm.dots",
                 "wordpos",
                 "con",
+                "n",
+                # clef / keySig / meterSig
+                "shape",
+                "line",
+                "dis",
+                "dis.place",
+                "sig",
+                "mode",
+                "count",
+                "unit",
+                "sym",
+                # multiRest / space
+                "num",
+                # ornaments / articulations / bend
+                "artic",
+                "value",
+                "glyph.name",
+                # pedal
+                "dir",
+                # accid
+                "accid",
+                "accid.ges",
+                # custos
+                "pname",
+                "oct",
             ],
         )
         if extra_attrs:
             event["extra"] = extra_attrs
 
         events.append(event)
+
+    if cache_key is not None:
+        if len(_MEI_EVENTS_CACHE) >= _MEI_EVENTS_CACHE_MAX:
+            # FIFO-ish eviction; keeps the cache bounded across long notebook sessions.
+            try:
+                oldest_key = next(iter(_MEI_EVENTS_CACHE))
+                _MEI_EVENTS_CACHE.pop(oldest_key, None)
+            except StopIteration:
+                pass
+        _MEI_EVENTS_CACHE[cache_key] = _clone_mei_events(events)
 
     return events
 
@@ -2128,6 +3010,7 @@ def parse_files_partitura(
     colorize_voices: bool = False,
     palette: Optional[Union[str, Sequence[str]]] = None,
     include_xml_ids: bool = True,
+    include_note_attachments: bool = True,
     normalize_mensural_durations: bool = True,
     inject_missing_meter_signature: bool = True,
     default_meter_count: int = DEFAULT_METER_COUNT,
@@ -2141,6 +3024,9 @@ def parse_files_partitura(
     allow_music21_fallback: bool = True,
     dedupe_weaker_text_events: bool = True,
     quiet_native_warnings: bool = False,
+    use_remote_cache: bool = True,
+    remote_cache_dir: Optional[str] = None,
+    n_jobs: int = 1,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, pd.DataFrame], Optional[pd.DataFrame]]:
     """
     Parse multiple symbolic music files using partitura, producing CAMAT-ready dataframes.
@@ -2168,6 +3054,16 @@ def parse_files_partitura(
     - `quiet_native_warnings=True` suppresses noisy dependency stdout/stderr chatter
       and partitura-emitted `UserWarning`s during loading/conversion while
       preserving CAMAT logs.
+    - `use_remote_cache=True` stores downloaded URL sources in a persistent cache
+      (``~/.cache/camat/downloads`` by default) so re-runs skip the download step.
+      When a source was served from the cache, `cleanup_remote` is ignored for
+      that file to preserve the cached copy.
+    - `remote_cache_dir` overrides the cache location (also honored via the
+      ``CAMAT_DOWNLOAD_CACHE_DIR`` environment variable).
+    - `n_jobs` controls parallel parsing of multiple files. ``1`` keeps the current
+      serial behavior; ``>1`` or ``-1`` spawns a ``ThreadPoolExecutor`` (-1 picks a
+      sensible default based on CPU count). Display/plot work is always executed
+      serially in input order to keep notebook output stable.
     """
     if use_verovio_mensural_timing:
         from .mensural_backend import parse_files_mensural
@@ -2212,11 +3108,17 @@ def parse_files_partitura(
             allow_music21_fallback=allow_music21_fallback,
             dedupe_weaker_text_events=dedupe_weaker_text_events,
             quiet_native_warnings=quiet_native_warnings,
+            use_remote_cache=use_remote_cache,
+            remote_cache_dir=remote_cache_dir,
+            n_jobs=n_jobs,
         )
+
+    import threading as _threading
+    from concurrent.futures import ThreadPoolExecutor as _ThreadPoolExecutor, as_completed as _as_completed
 
     results: List[Dict[str, Any]] = []
     dfs_by_name: Dict[str, pd.DataFrame] = {}
-    last_df: Optional[pd.DataFrame] = None
+    last_df_holder: List[Optional[pd.DataFrame]] = [None]
 
     try:
         from IPython.display import display as ipy_display  # type: ignore
@@ -2230,10 +3132,37 @@ def parse_files_partitura(
         if use_progress
         else None
     )
-    log = _tqdm.write if use_progress else print
+    raw_log = _tqdm.write if use_progress else print
 
-    try:
-        for idx, file_source in enumerate(sources):
+    # Resolve parallelism request. n_jobs == 1 keeps the serial code path to
+    # preserve deterministic display ordering in notebooks. Values != 1 enable
+    # a thread pool; plotting + ipy_display are serialized with a lock so the
+    # notebook output never interleaves mid-call.
+    if n_jobs is None:
+        effective_n_jobs = 1
+    elif n_jobs < 0:
+        try:
+            cpu = os.cpu_count() or 1
+        except Exception:
+            cpu = 1
+        effective_n_jobs = max(1, cpu)
+    else:
+        effective_n_jobs = max(1, int(n_jobs))
+    if len(sources) <= 1:
+        effective_n_jobs = 1
+
+    _display_lock = _threading.Lock()
+    _state_lock = _threading.Lock()
+
+    def log(msg: str) -> None:
+        with _display_lock:
+            raw_log(msg)
+
+    def _process_one(idx: int, file_source: str) -> None:
+        # The extra `if True:` keeps the body's historical indentation stable
+        # so the per-file logic below (originally nested inside the serial for
+        # loop) can live here without a mass-reindent.
+        if True:
             file_path: Optional[str] = None
             try:
                 if idx > 0 and len(sources) > 1:
@@ -2245,7 +3174,11 @@ def parse_files_partitura(
                 if pbar is not None:
                     pbar.set_postfix_str(short_name)
 
-                file_path = get_file_path(file_source)
+                file_path = get_file_path(
+                    file_source,
+                    use_cache=bool(use_remote_cache),
+                    cache_dir=remote_cache_dir,
+                )
                 conversion_cleanup_fns: List[Callable[[], None]] = []
                 conversion_source_path = file_path
                 is_mei_source = Path(file_path).suffix.lower() == ".mei"
@@ -2413,7 +3346,26 @@ def parse_files_partitura(
                         score,
                         parse_enharmonic=parse_enharmonic,
                         include_xml_ids=include_ids_this_score,
+                        include_note_attachments=include_note_attachments
+                        and include_ids_this_score,
                     )
+                # For MEI sources, derive note attachments from the XML directly
+                # because partitura's importer does not hydrate slur/fermata/
+                # articulation/ornament onto its Note objects. This overwrites
+                # the (weaker) partitura-derived columns added above.
+                if (
+                    include_note_attachments
+                    and include_ids_this_score
+                    and isinstance(df_raw, pd.DataFrame)
+                    and not df_raw.empty
+                    and str(score_source_path).lower().endswith(".mei")
+                ):
+                    try:
+                        mei_attachments = _extract_mei_note_attachments(str(score_source_path))
+                    except Exception:
+                        mei_attachments = {}
+                    if mei_attachments is not None:
+                        df_raw = _apply_note_attachments_to_pitch_df(df_raw, mei_attachments)
                 warning_ctx = _suppress_partitura_user_warnings(quiet_native_warnings)
                 output_ctx = _suppress_partitura_dependency_output(quiet_native_warnings)
                 with warning_ctx, output_ctx:
@@ -2455,11 +3407,13 @@ def parse_files_partitura(
                                 excess_clamped = 0
                         if excess_clamped > 0:
                             log(f"Warning: {excess_clamped} note(s) exceeded ±5 accidentals; clamped to 5.")
+                # df_raw is already sorted by (Global Onset, MIDI) in partitura_score_to_dataframe.
+                # filter_and_adjust_durations preserves row order, so no resort is needed here.
                 df_processed = filter_and_adjust_durations(
                     df_raw,
                     filter_zero_duration=filter_zero_duration,
                     adjust_fractional_duration=adjust_fractional_duration,
-                ).sort_values("Global Onset").reset_index(drop=True)
+                ).reset_index(drop=True)
 
                 include_ids_this_score = (want_xml_ids and "xml_id" in df_processed.columns)
                 if want_xml_ids and not include_ids_this_score and "xml_id" not in df_processed.columns:
@@ -2575,32 +3529,37 @@ def parse_files_partitura(
 
                 plot_obj = None
                 if return_plots or backend != "none":
-                    plot_obj = draw_piano_roll(
-                        df_processed,
-                        measure_offsets=measure_offsets,
-                        backend=backend,
-                        barline_events=df_events,
-                        plot_parsed_barlines_with_voice_coloring=plot_parsed_barlines_with_voice_coloring,
-                        show_measure_lines=show_measure_lines,
-                        measure_line_color=measure_line_color,
-                        show_hover=show_hover,
-                        hover_fields=hover_fields,
-                        show=True,
-                        plot_width=plot_width,
-                        plot_height=plot_height,
-                        zoom_drag_dim=zoom_drag_dim,
-                        zoom_wheel_dim=zoom_wheel_dim,
-                        colorize_voices=colorize_voices,
-                        palette=palette,
-                    )
+                    # Plot libraries are not thread-safe; serialize the call so
+                    # concurrent workers cannot interleave matplotlib/Bokeh state.
+                    with _display_lock:
+                        plot_obj = draw_piano_roll(
+                            df_processed,
+                            measure_offsets=measure_offsets,
+                            backend=backend,
+                            barline_events=df_events,
+                            plot_parsed_barlines_with_voice_coloring=plot_parsed_barlines_with_voice_coloring,
+                            show_measure_lines=show_measure_lines,
+                            measure_line_color=measure_line_color,
+                            show_hover=show_hover,
+                            hover_fields=hover_fields,
+                            show=True,
+                            plot_width=plot_width,
+                            plot_height=plot_height,
+                            zoom_drag_dim=zoom_drag_dim,
+                            zoom_wheel_dim=zoom_wheel_dim,
+                            colorize_voices=colorize_voices,
+                            palette=palette,
+                        )
 
                 if display_preview_df_pitch and ipy_display is not None:
-                    ipy_display(df_processed.head(preview_rows))
+                    with _display_lock:
+                        ipy_display(df_processed.head(preview_rows))
                     log(
                         f"Rows: {len(df_processed)}, unique pitches: {df_processed['MIDI'].nunique()}"
                     )
                 if display_preview_df_events and ipy_display is not None:
-                    ipy_display(df_events.head(preview_rows))
+                    with _display_lock:
+                        ipy_display(df_events.head(preview_rows))
                     log(f"Event rows: {len(df_events)}")
 
                 result_entry: Dict[str, Any] = {
@@ -2616,10 +3575,11 @@ def parse_files_partitura(
                 }
                 if return_plots:
                     result_entry["plot"] = plot_obj
-                results.append(result_entry)
-                dfs_by_name[pitch_name] = df_pitch
-                dfs_by_name[events_name] = df_events
-                last_df = df_pitch
+                with _state_lock:
+                    results.append(result_entry)
+                    dfs_by_name[pitch_name] = df_pitch
+                    dfs_by_name[events_name] = df_events
+                    last_df_holder[0] = df_pitch
 
             except Exception as exc:
                 should_try_music21_fallback = (
@@ -2698,19 +3658,22 @@ def parse_files_partitura(
                                 fb_entry["df_name_pitch"] = f"{name}_pitch"
                                 fb_entry["df_name_events"] = f"{name}_events"
                                 fb_entry["barline_events"] = fb_entry.get("barline_events", [])
-                                results.append(fb_entry)
-                                dfs_by_name[f"{name}_pitch"] = fb_df
-                                dfs_by_name[f"{name}_events"] = fb_events
-                                last_df = fb_df
+                                with _state_lock:
+                                    results.append(fb_entry)
+                                    dfs_by_name[f"{name}_pitch"] = fb_df
+                                    dfs_by_name[f"{name}_events"] = fb_events
+                                    last_df_holder[0] = fb_df
                                 if display_preview_df_pitch and ipy_display is not None:
-                                    ipy_display(fb_df.head(preview_rows))
+                                    with _display_lock:
+                                        ipy_display(fb_df.head(preview_rows))
                                     log(
                                         f"Rows: {len(fb_df)}, unique pitches: {fb_df['MIDI'].nunique()}"
                                     )
                                 if display_preview_df_events and ipy_display is not None:
-                                    ipy_display(fb_events.head(preview_rows))
+                                    with _display_lock:
+                                        ipy_display(fb_events.head(preview_rows))
                                     log(f"Event rows: {len(fb_events)}")
-                                continue
+                                return
                         log(
                             "Fallback to music21 returned no parsed data for "
                             f"{file_source}."
@@ -2734,6 +3697,7 @@ def parse_files_partitura(
                     cleanup_remote
                     and file_path
                     and file_source.startswith(("http://", "https://"))
+                    and not is_cached_download(file_path, remote_cache_dir)
                 ):
                     try:
                         os.remove(file_path)
@@ -2742,9 +3706,26 @@ def parse_files_partitura(
                     except OSError:
                         pass
                 if pbar is not None:
-                    pbar.update(1)
+                    with _display_lock:
+                        pbar.update(1)
+
+    try:
+        if effective_n_jobs == 1:
+            for idx, file_source in enumerate(sources):
+                _process_one(idx, file_source)
+        else:
+            with _ThreadPoolExecutor(max_workers=effective_n_jobs) as pool:
+                futures = [
+                    pool.submit(_process_one, i, src)
+                    for i, src in enumerate(sources)
+                ]
+                for fut in _as_completed(futures):
+                    try:
+                        fut.result()
+                    except Exception as exc:  # pragma: no cover - defensive
+                        raw_log(f"Parallel worker raised: {exc}")
     finally:
         if pbar is not None:
             pbar.close()
 
-    return results, dfs_by_name, last_df
+    return results, dfs_by_name, last_df_holder[0]

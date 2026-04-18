@@ -21,6 +21,8 @@ except Exception:  # pragma: no cover - optional dependency at runtime
 
 __all__ = [
     "get_file_path",
+    "get_download_cache_dir",
+    "is_cached_download",
     "extract_voice_data",
     "filter_and_adjust_durations",
     "get_measure_offsets",
@@ -67,7 +69,55 @@ def _get_requests_module():
     return requests
 
 
-def get_file_path(file_source: str, *, timeout_seconds: int = 30) -> str:
+def get_download_cache_dir(cache_dir: Optional[str] = None) -> str:
+    """
+    Resolve and ensure the persistent download cache directory exists.
+
+    Precedence:
+        1. Explicit ``cache_dir`` argument
+        2. ``CAMAT_DOWNLOAD_CACHE_DIR`` environment variable
+        3. ``~/.cache/camat/downloads``
+    """
+    if cache_dir is None:
+        cache_dir = os.environ.get("CAMAT_DOWNLOAD_CACHE_DIR") or os.path.join(
+            os.path.expanduser("~"), ".cache", "camat", "downloads"
+        )
+    os.makedirs(cache_dir, exist_ok=True)
+    return cache_dir
+
+
+def _cached_download_filename(file_source: str) -> str:
+    """
+    Build a filesystem-safe filename for a remote ``file_source``.
+
+    Uses a sha1 digest of the URL + the original extension so cached files remain
+    inspectable and the path collides deterministically on re-use.
+    """
+    import hashlib
+
+    digest = hashlib.sha1(file_source.encode("utf-8", errors="ignore")).hexdigest()[:16]
+    _, ext = os.path.splitext(file_source.split("?", 1)[0].split("#", 1)[0])
+    return f"{digest}{ext}"
+
+
+def is_cached_download(path: str, cache_dir: Optional[str] = None) -> bool:
+    """Return True when ``path`` lives under the persistent download cache."""
+    if not path:
+        return False
+    try:
+        base = os.path.abspath(get_download_cache_dir(cache_dir))
+        return os.path.abspath(path).startswith(base + os.sep)
+    except Exception:
+        return False
+
+
+def get_file_path(
+    file_source: str,
+    *,
+    timeout_seconds: int = 30,
+    use_cache: bool = False,
+    cache_dir: Optional[str] = None,
+) -> str:
     """
     Resolve a local path from a URL or verify a local path exists.
 
@@ -77,6 +127,14 @@ def get_file_path(file_source: str, *, timeout_seconds: int = 30) -> str:
         URL or local file path.
     timeout_seconds : int, optional
         Timeout for downloading remote files (seconds). Default is 30.
+    use_cache : bool, optional
+        When True, remote files are stored in a persistent cache keyed by a
+        sha1 of the URL. Repeated calls with the same URL return the cached
+        path without re-downloading. Default is False to preserve backward
+        compatible behavior.
+    cache_dir : str, optional
+        Override the cache location. Falls back to ``CAMAT_DOWNLOAD_CACHE_DIR``
+        and ``~/.cache/camat/downloads``.
 
     Returns
     -------
@@ -91,6 +149,23 @@ def get_file_path(file_source: str, *, timeout_seconds: int = 30) -> str:
         If the local file does not exist.
     """
     if file_source.startswith(("http://", "https://")):
+        if use_cache:
+            resolved_dir = get_download_cache_dir(cache_dir)
+            cached_path = os.path.join(resolved_dir, _cached_download_filename(file_source))
+            if os.path.exists(cached_path) and os.path.getsize(cached_path) > 0:
+                return cached_path
+            requests = _get_requests_module()
+            try:
+                response = requests.get(file_source, stream=True, timeout=timeout_seconds)
+                response.raise_for_status()
+                tmp_path = cached_path + ".part"
+                with open(tmp_path, "wb") as fh:
+                    fh.write(response.content)
+                os.replace(tmp_path, cached_path)
+                return cached_path
+            except requests.RequestException as exc:
+                raise ValueError(f"Error downloading the file: {exc}") from exc
+
         requests = _get_requests_module()
         try:
             response = requests.get(file_source, stream=True, timeout=timeout_seconds)
@@ -800,15 +875,18 @@ def filter_and_adjust_durations(
     pandas.DataFrame
         Processed DataFrame.
     """
-    df_processed = df.copy()
-
-    if filter_zero_duration:
-        df_processed = df_processed[df_processed["Duration"] > 0]
+    if filter_zero_duration and "Duration" in df.columns:
+        df_processed = df.loc[df["Duration"] > 0]
+    else:
+        df_processed = df
 
     if adjust_fractional_duration:
-        df_processed["Duration"] = df_processed["Duration"].round(3)
-        df_processed["Local Onset"] = df_processed["Local Onset"].round(3)
-        df_processed["Global Onset"] = df_processed["Global Onset"].round(3)
+        round_cols = [c for c in ("Duration", "Local Onset", "Global Onset") if c in df_processed.columns]
+        if round_cols:
+            # Ensure we don't mutate the caller's frame when no filter ran.
+            if df_processed is df:
+                df_processed = df_processed.copy()
+            df_processed.loc[:, round_cols] = df_processed[round_cols].round(3)
 
     return df_processed
 
