@@ -430,6 +430,8 @@ def _postprocess_mei_for_partitura(mei_text: str) -> Tuple[str, int, int]:
     Returns:
         (updated_mei_text, removed_annot_count, wrapped_staff_group_count)
     """
+    mei_text, _ = _copy_staffgrp_symbol_for_partitura(mei_text)
+
     try:
         from lxml import etree  # type: ignore
     except Exception:
@@ -506,6 +508,61 @@ def _postprocess_mei_for_partitura(mei_text: str) -> Tuple[str, int, int]:
 
     out = etree.tostring(root, encoding="unicode")
     return out, removed_annot, wrapped_staff_groups
+
+
+def _copy_staffgrp_symbol_for_partitura(mei_text: str) -> Tuple[str, int]:
+    """
+    Ensure every <staffGrp> has the symbol value partitura expects.
+
+    Verovio may emit MEI with a child <grpSym> carrying the brace/bracket symbol
+    while partitura 1.8.0 expects the symbol attribute directly on every nested
+    staffGrp. Keep child elements intact and add the parent attribute only when
+    it is missing. If a nested group has no own <grpSym>, inherit the nearest
+    ancestor symbol; top-level unsymbolized groups receive "none".
+    """
+    try:
+        from lxml import etree  # type: ignore
+    except Exception:
+        return mei_text, 0
+
+    parser = etree.XMLParser(recover=True, remove_blank_text=False, huge_tree=True)
+    try:
+        root = etree.fromstring(mei_text.encode("utf-8", errors="ignore"), parser=parser)
+    except Exception:
+        return mei_text, 0
+
+    def _lname(el: Any) -> str:
+        try:
+            return etree.QName(el.tag).localname
+        except Exception:
+            return str(el.tag)
+
+    def _direct_grpsym_symbol(el: Any) -> Optional[str]:
+        for child in el:
+            if _lname(child) == "grpSym" and child.get("symbol"):
+                return str(child.get("symbol"))
+        return None
+
+    changed = 0
+    for staffgrp_el in root.xpath(".//*[local-name()='staffGrp']"):
+        if staffgrp_el.get("symbol"):
+            continue
+        symbol = _direct_grpsym_symbol(staffgrp_el)
+        if symbol is None:
+            for ancestor in staffgrp_el.iterancestors():
+                if _lname(ancestor) != "staffGrp":
+                    continue
+                symbol = ancestor.get("symbol") or _direct_grpsym_symbol(ancestor)
+                if symbol:
+                    break
+        if symbol is None:
+            symbol = "none"
+        staffgrp_el.set("symbol", symbol)
+        changed += 1
+
+    if changed == 0:
+        return mei_text, 0
+    return etree.tostring(root, encoding="unicode"), changed
 
 
 def _looks_mensural_mei_text(mei_text: str) -> bool:
@@ -639,6 +696,9 @@ def _sanitize_source_for_partitura(
     )
     if filtered != sanitized:
         sanitized = filtered
+
+    if suffix == ".mei":
+        sanitized, _ = _copy_staffgrp_symbol_for_partitura(sanitized)
 
     mensural_replacement_count = 0
     meter_injection_count = 0

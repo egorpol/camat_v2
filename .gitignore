@@ -11,6 +11,9 @@ site/
 # Jupyter notebooks
 .ipynb_checkpoints/
 
+# Generated score conversion artifacts
+converted_mei/
+
 # Virtual environments
 .venv/
 venv/

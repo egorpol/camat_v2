@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import io
 import os
 import re
@@ -238,9 +239,10 @@ def vrv_set_options(**kwargs: Any) -> None:
 
 def vrv_guess_input_from(source_hint: Optional[str] = None, content: Optional[str] = None) -> Optional[str]:
     """
-    Guess Verovio's inputFrom option (one of 'mei', 'musicxml', 'humdrum').
+    Guess Verovio's inputFrom option.
 
     Uses file extension from source_hint (URL or path) or lightweight content sniffing.
+    Returns one of {'mei', 'musicxml', 'musicxml-zip', 'humdrum'} when known.
     Returns None when unknown.
     """
     # 1) Extension-based
@@ -249,7 +251,9 @@ def vrv_guess_input_from(source_hint: Optional[str] = None, content: Optional[st
         _, ext = os.path.splitext(path.lower())
         if ext in {".mei"}:
             return "mei"
-        if ext in {".xml", ".musicxml", ".mxl"}:
+        if ext in {".mxl"}:
+            return "musicxml-zip"
+        if ext in {".xml", ".musicxml"}:
             return "musicxml"
         if ext in {".krn", ".kern", ".hum"}:
             return "humdrum"
@@ -277,6 +281,33 @@ def vrv_guess_input_from(source_hint: Optional[str] = None, content: Optional[st
     return None
 
 
+def _vrv_load_zip_bytes(data: bytes, *, source_hint: Optional[str] = None) -> int:
+    """
+    Load compressed MusicXML (.mxl) bytes into Verovio and return page count.
+    """
+    with _vrv_suppress_if_needed():
+        if hasattr(_VRV_TOOLKIT, "loadZipDataBase64"):
+            load_result = _VRV_TOOLKIT.loadZipDataBase64(base64.b64encode(data).decode("ascii"))
+        elif hasattr(_VRV_TOOLKIT, "loadZipDataBuffer"):
+            load_result = _VRV_TOOLKIT.loadZipDataBuffer(data, len(data))
+        else:
+            raise RuntimeError("This Verovio build does not expose a compressed MusicXML loader.")
+        pages = _VRV_TOOLKIT.getPageCount()
+    if not load_result or pages <= 0:
+        log_msg = ""
+        if hasattr(_VRV_TOOLKIT, "getLog"):
+            try:
+                log_msg = _VRV_TOOLKIT.getLog() or ""
+            except Exception:
+                log_msg = ""
+        detail = f" for {source_hint}" if source_hint else ""
+        raise RuntimeError(
+            f"Verovio failed to load compressed MusicXML{detail} (pageCount={pages}). "
+            f"{('Log: ' + log_msg) if log_msg else ''}"
+        )
+    return pages
+
+
 def vrv_load_data(
     data: str,
     *,
@@ -286,6 +317,7 @@ def vrv_load_data(
     """
     Load a score string into Verovio. Returns page count.
     Set input_from to one of {'mei', 'musicxml', 'humdrum'}; if None, attempts to guess from content.
+    Use vrv_load_from_file or vrv_load_from_url for compressed MusicXML (.mxl).
     """
     inferred = input_from or vrv_guess_input_from(None, data) or "musicxml"
     with _vrv_suppress_if_needed():
@@ -301,6 +333,10 @@ def vrv_load_data(
 
 
 def vrv_load_from_file(path: str, *, input_from: Optional[str] = None, encoding: str = "utf-8") -> int:
+    inferred = input_from or vrv_guess_input_from(path, None)
+    if inferred == "musicxml-zip":
+        with io.open(path, "rb") as f:
+            return _vrv_load_zip_bytes(f.read(), source_hint=path)
     with io.open(path, "r", encoding=encoding, errors="ignore") as f:
         data = f.read()
     inferred = input_from or vrv_guess_input_from(path, data)
@@ -315,6 +351,9 @@ def vrv_load_from_url(url: str, *, input_from: Optional[str] = None, timeout: in
     requests = _get_requests_module()
     resp = requests.get(url, timeout=timeout)
     resp.raise_for_status()
+    inferred = input_from or vrv_guess_input_from(url, None)
+    if inferred == "musicxml-zip":
+        return _vrv_load_zip_bytes(resp.content, source_hint=url)
     # Prefer text; fall back to bytes decode
     try:
         data = resp.text
@@ -335,14 +374,14 @@ def vrv_convert_to_mei(
     timeout: int = 30,
 ) -> str:
     """
-    Convert a score (MusicXML, Humdrum, or MEI) to MEI using the global Verovio toolkit.
+    Convert a score (MusicXML, compressed MusicXML, Humdrum, or MEI) to MEI using the global Verovio toolkit.
 
     This is a thin convenience wrapper around the existing vrv_load_* helpers plus
     vrv_get_mei():
 
     - When is_url=True, 'source' is treated as a remote URL and loaded via vrv_load_from_url.
     - Otherwise, 'source' is treated as a local file path and loaded via vrv_load_from_file.
-    - input_from can be one of {'mei', 'musicxml', 'humdrum'}; when omitted, the type
+    - input_from can be one of {'mei', 'musicxml', 'musicxml-zip', 'humdrum'}; when omitted, the type
       is auto-detected from the file extension or content.
 
     The converted MEI is returned as a string, and the score remains loaded in the toolkit
