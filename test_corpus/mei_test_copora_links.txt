@@ -1,0 +1,153 @@
+# MEI test corpus — raw GitHub links to .mei (and MEI-as-.xml) files.
+# Sorted by encoding project, following the ranking from the source table.
+#
+# Excluded from this list (no usable raw-GitHub MEI corpus available):
+#   - Measuring Polyphony (mp-music-files): repo contains MusicXML only, no .mei
+#   - Digital Mozart Edition / DIME: served from dme.mozarteum.at, not GitHub
+#   - CRIM Project: data exposed via web/API at crimproject.org, not a clean GitHub corpus
+#   - ELVIS-Project mass-duos-corpus-josquin-larue: repo contains MusicXML/krn/MIDI/Sibelius, no .mei
+#   - Music DH catalogue (#10): a discovery layer, not a corpus
+
+# ------------------------
+# Freischütz Digital — Freischuetz-Digital/data-music
+# Note: files use the .xml extension but are MEI 2013 (mei-version 2.1.1).
+# ------------------------
+
+# Core edition (consolidated movements 0–16)
+https://raw.githubusercontent.com/Freischuetz-Digital/data-music/master/ready-for-use/core/core_mov0.xml
+https://raw.githubusercontent.com/Freischuetz-Digital/data-music/master/ready-for-use/core/core_mov1.xml
+https://raw.githubusercontent.com/Freischuetz-Digital/data-music/master/ready-for-use/core/core_mov2.xml
+https://raw.githubusercontent.com/Freischuetz-Digital/data-music/master/ready-for-use/core/core_mov3.xml
+https://raw.githubusercontent.com/Freischuetz-Digital/data-music/master/ready-for-use/core/core_mov4.xml
+https://raw.githubusercontent.com/Freischuetz-Digital/data-music/master/ready-for-use/core/core_mov5.xml
+https://raw.githubusercontent.com/Freischuetz-Digital/data-music/master/ready-for-use/core/core_mov6.xml
+https://raw.githubusercontent.com/Freischuetz-Digital/data-music/master/ready-for-use/core/core_mov7.xml
+https://raw.githubusercontent.com/Freischuetz-Digital/data-music/master/ready-for-use/core/core_mov8.xml
+https://raw.githubusercontent.com/Freischuetz-Digital/data-music/master/ready-for-use/core/core_mov9.xml
+https://raw.githubusercontent.com/Freischuetz-Digital/data-music/master/ready-for-use/core/core_mov10.xml
+https://raw.githubusercontent.com/Freischuetz-Digital/data-music/master/ready-for-use/core/core_mov11.xml
+https://raw.githubusercontent.com/Freischuetz-Digital/data-music/master/ready-for-use/core/core_mov12.xml
+https://raw.githubusercontent.com/Freischuetz-Digital/data-music/master/ready-for-use/core/core_mov13.xml
+https://raw.githubusercontent.com/Freischuetz-Digital/data-music/master/ready-for-use/core/core_mov14.xml
+https://raw.githubusercontent.com/Freischuetz-Digital/data-music/master/ready-for-use/core/core_mov15.xml
+https://raw.githubusercontent.com/Freischuetz-Digital/data-music/master/ready-for-use/core/core_mov16.xml
+
+# Source-specific encodings (selected witnesses)
+https://raw.githubusercontent.com/Freischuetz-Digital/data-music/master/musicSources/freidi-musicSource_A.xml
+https://raw.githubusercontent.com/Freischuetz-Digital/data-music/master/musicSources/freidi-musicSource_D1849.xml
+https://raw.githubusercontent.com/Freischuetz-Digital/data-music/master/musicSources/freidi-musicSource_D1867.xml
+https://raw.githubusercontent.com/Freischuetz-Digital/data-music/master/musicSources/freidi-musicSource_D1871.xml
+https://raw.githubusercontent.com/Freischuetz-Digital/data-music/master/musicSources/freidi-musicSource_DJochum.xml
+https://raw.githubusercontent.com/Freischuetz-Digital/data-music/master/musicSources/freidi-musicSource_ED-kl.xml
+
+# ------------------------
+# MEI Sample Encodings — music-encoding/sample-encodings
+# Curated reference collection across MEI versions; good for parser/edge-case testing.
+# (Extends the few entries already present in test_corpus_links.txt.)
+# ------------------------
+
+# MEI 5.1 — complete examples (latest schema)
+https://raw.githubusercontent.com/music-encoding/sample-encodings/main/MEI_5.1/Music/Complete_examples/Bach-JS_BrandenburgConcert_No4_I_BWV1049.mei
+https://raw.githubusercontent.com/music-encoding/sample-encodings/main/MEI_5.1/Music/Complete_examples/Beethoven_StringQuartet_Op18_No1.mei
+https://raw.githubusercontent.com/music-encoding/sample-encodings/main/MEI_5.1/Music/Complete_examples/Brahms_StringQuartet_Op51_No1.mei
+https://raw.githubusercontent.com/music-encoding/sample-encodings/main/MEI_5.1/Music/Complete_examples/Chopin_Etude_Op10_No9.mei
+https://raw.githubusercontent.com/music-encoding/sample-encodings/main/MEI_5.1/Music/Complete_examples/Chopin_Mazurka_Op6_No1.mei
+https://raw.githubusercontent.com/music-encoding/sample-encodings/main/MEI_5.1/Music/Complete_examples/Haydn_StringQuartet_Op1_No1.mei
+https://raw.githubusercontent.com/music-encoding/sample-encodings/main/MEI_5.1/Music/Complete_examples/Joplin_Maple_leaf_Rag.mei
+https://raw.githubusercontent.com/music-encoding/sample-encodings/main/MEI_5.1/Music/Complete_examples/Schumann_Song_Op48_No1.mei
+
+# MEI 5.1 — musical-feature snippets (edge cases)
+https://raw.githubusercontent.com/music-encoding/sample-encodings/main/MEI_5.1/Musical-features/snippets/grace_Notes.mei
+https://raw.githubusercontent.com/music-encoding/sample-encodings/main/MEI_5.1/Musical-features/snippets/special_features.mei
+
+# MEI 5.0 — complete examples
+https://raw.githubusercontent.com/music-encoding/sample-encodings/main/MEI_5.0/Music/Complete_examples/Mozart_Fugue_g-minor_KV401.mei
+https://raw.githubusercontent.com/music-encoding/sample-encodings/main/MEI_5.0/Music/Complete_examples/Debussy_Golliwogg'sCakewalk.mei
+
+# MEI 4.0 — complete examples
+https://raw.githubusercontent.com/music-encoding/sample-encodings/main/MEI_4.0/Music/Complete_examples/Bach-JS_BrandenburgConcert_No4_I_BWV1049.mei
+https://raw.githubusercontent.com/music-encoding/sample-encodings/main/MEI_4.0/Music/Complete_examples/Mozart_Fugue_g-minor_KV401.mei
+
+# MEI 3.0 — complete examples (older schema)
+https://raw.githubusercontent.com/music-encoding/sample-encodings/main/MEI_3.0/Music/Complete_examples/Bach_BrandenburgConcert_No.4_I.mei
+https://raw.githubusercontent.com/music-encoding/sample-encodings/main/MEI_3.0/Music/Complete_examples/Joplin_Maple_leaf_Rag.mei
+https://raw.githubusercontent.com/music-encoding/sample-encodings/main/MEI_3.0/Music/Complete_examples/Mozart_Fuge_G_minor.mei
+
+# Legacy MEI 2013 (2.1)
+https://raw.githubusercontent.com/music-encoding/sample-encodings/main/legacy/MEI2013_2.1/Music/Complete_examples/Bach_BrandenburgConcert_No.4_I.mei
+https://raw.githubusercontent.com/music-encoding/sample-encodings/main/legacy/MEI2013_2.1/Music/Complete_examples/Beethoven_op.18.mei
+
+# ------------------------
+# SEILS Dataset — SEILSdataset/SEILSdataset
+# 30 madrigals from "Il Lauro Secco"; white mensural and modern notation.
+# ------------------------
+
+# Choral diplomatic ground truth (complete works, all voices in one file)
+https://raw.githubusercontent.com/SEILSdataset/SEILSdataset/master/SEILSdataset/SEILS_diplomatic_OMRgroundTruth/choral/marenzio_mentrelaura_choral.mei
+https://raw.githubusercontent.com/SEILSdataset/SEILSdataset/master/SEILSdataset/SEILS_diplomatic_OMRgroundTruth/choral/wert_horfuggi_choral.mei
+https://raw.githubusercontent.com/SEILSdataset/SEILSdataset/master/SEILSdataset/SEILS_diplomatic_OMRgroundTruth/choral/luzzaschi_sellauro_choral.mei
+https://raw.githubusercontent.com/SEILSdataset/SEILSdataset/master/SEILSdataset/SEILS_diplomatic_OMRgroundTruth/choral/vecchi_fummofelici_choral.mei
+https://raw.githubusercontent.com/SEILSdataset/SEILSdataset/master/SEILSdataset/SEILS_diplomatic_OMRgroundTruth/choral/strigio_conlaura_choral.mei
+https://raw.githubusercontent.com/SEILSdataset/SEILSdataset/master/SEILSdataset/SEILS_diplomatic_OMRgroundTruth/choral/ingegneri_gianon_choral.mei
+https://raw.githubusercontent.com/SEILSdataset/SEILSdataset/master/SEILSdataset/SEILS_diplomatic_OMRgroundTruth/choral/giovannelli_nelfoco_choral.mei
+
+# Particella (single-voice) encodings — Marenzio, all 5 voices (A=alto, B=bass, C=canto, Q=quintus, T=tenore)
+https://raw.githubusercontent.com/SEILSdataset/SEILSdataset/master/SEILSdataset/SEILS_diplomatic_OMRgroundTruth/particellas_codified/marenzio_mentrelaura_A.mei
+https://raw.githubusercontent.com/SEILSdataset/SEILSdataset/master/SEILSdataset/SEILS_diplomatic_OMRgroundTruth/particellas_codified/marenzio_mentrelaura_B.mei
+https://raw.githubusercontent.com/SEILSdataset/SEILSdataset/master/SEILSdataset/SEILS_diplomatic_OMRgroundTruth/particellas_codified/marenzio_mentrelaura_C.mei
+https://raw.githubusercontent.com/SEILSdataset/SEILSdataset/master/SEILSdataset/SEILS_diplomatic_OMRgroundTruth/particellas_codified/marenzio_mentrelaura_Q.mei
+https://raw.githubusercontent.com/SEILSdataset/SEILSdataset/master/SEILSdataset/SEILS_diplomatic_OMRgroundTruth/particellas_codified/marenzio_mentrelaura_T.mei
+
+# Modern-notation encodings with analytical annotations (paired plain / annotated)
+https://raw.githubusercontent.com/SEILSdataset/SEILSdataset/master/SEILSdataset/SEILS_with_annotations/Marenzio/marenzio_mentrelaura_mn.mei
+https://raw.githubusercontent.com/SEILSdataset/SEILSdataset/master/SEILSdataset/SEILS_with_annotations/Marenzio/marenzio_mentrelaura_mn_annotated.mei
+https://raw.githubusercontent.com/SEILSdataset/SEILSdataset/master/SEILSdataset/SEILS_with_annotations/Wert/wert_horfuggi_mn.mei
+https://raw.githubusercontent.com/SEILSdataset/SEILSdataset/master/SEILSdataset/SEILS_with_annotations/Wert/wert_horfuggi_mn_annotated.mei
+https://raw.githubusercontent.com/SEILSdataset/SEILSdataset/master/SEILSdataset/SEILS_with_annotations/Luzzaschi/luzzaschi_sellauro_mn.mei
+https://raw.githubusercontent.com/SEILSdataset/SEILSdataset/master/SEILSdataset/SEILS_with_annotations/Luzzaschi/luzzaschi_sellauro_mn_annotated.mei
+
+# ------------------------
+# Marenzio Online Digital Edition — marenzio/marenzio.github.io
+# Luca Marenzio madrigal books, organised by book number/voice count (M-{book}-{voices}).
+# ------------------------
+
+# Book I a 4 (Il primo libro de madrigali a quattro voci, 1585)
+https://raw.githubusercontent.com/marenzio/marenzio.github.io/master/mei/M-01-4/M_01_4_01_Non_vidi_mai_dopo_notturna_pioggia.mei
+https://raw.githubusercontent.com/marenzio/marenzio.github.io/master/mei/M-01-4/M_01_4_05_Non_al_suo_amante_piu_Diana_piacque.mei
+https://raw.githubusercontent.com/marenzio/marenzio.github.io/master/mei/M-01-4/M_01_4_12_Vezzosi_augelli_infra_le_verdi_fronde.mei
+https://raw.githubusercontent.com/marenzio/marenzio.github.io/master/mei/M-01-4/M_01_4_18_Zefiro_torna_e_l_bel_tempo_rimena.mei
+
+# Book I a 5 (Il primo libro de madrigali a cinque voci, 1580)
+https://raw.githubusercontent.com/marenzio/marenzio.github.io/master/mei/M-01-5/M_01_5_01_Liquide_perle_Amor_da_gl_occhi_sparse.mei
+https://raw.githubusercontent.com/marenzio/marenzio.github.io/master/mei/M-01-5/M_01_5_05_Tirsi_morir_volea.mei
+https://raw.githubusercontent.com/marenzio/marenzio.github.io/master/mei/M-01-5/M_01_5_06_Dolorosi_martir.mei
+
+# Book IV a 6 (Il quarto libro de madrigali a sei voci, 1587)
+https://raw.githubusercontent.com/marenzio/marenzio.github.io/master/mei/M-04-6/M_04_6_01_Se_bramate_ch_io_mora.mei
+https://raw.githubusercontent.com/marenzio/marenzio.github.io/master/mei/M-04-6/M_04_6_06_Crudel_perche_mi_fuggi.mei
+https://raw.githubusercontent.com/marenzio/marenzio.github.io/master/mei/M-04-6/M_04_6_15_Donne_il_celeste_lume.mei
+
+# Book VI a 5 (Il sesto libro de madrigali a cinque voci, 1594)
+https://raw.githubusercontent.com/marenzio/marenzio.github.io/master/mei/M-06-5/M_06_5_01_S_io_parto_i_moro_e_pur_partir_conviene.mei
+https://raw.githubusercontent.com/marenzio/marenzio.github.io/master/mei/M-06-5/M_06_5_02_Clori_nel_mio_partire.mei
+https://raw.githubusercontent.com/marenzio/marenzio.github.io/master/mei/M-06-5/M_06_5_03_Donna_de_l_alma_mia_de_la_mia_vita.mei
+
+# ------------------------
+# Beethovens Werkstatt — BeethovensWerkstatt/data and BeethovensWerkstatt/module2
+# Genetic/source-critical edition materials. Public .mei files are limited;
+# most edition data lives in version-specific .xml source files.
+# ------------------------
+
+# Module 2 (VideApp-Arr) — Beethoven arrangements (data repo, dev branch)
+https://raw.githubusercontent.com/BeethovensWerkstatt/data/dev/data/module2/works/BRA1.Adagio-Allegro%20con%20brio.mei
+https://raw.githubusercontent.com/BeethovensWerkstatt/data/dev/data/module2/works/BRA2_Adagio.mei
+https://raw.githubusercontent.com/BeethovensWerkstatt/data/dev/data/module2/works/BRA3.Tempo%20di%20Menuetto.mei
+https://raw.githubusercontent.com/BeethovensWerkstatt/data/dev/data/module2/works/BRA4.Thema%20con%20variazioni-Andante_B.mei
+https://raw.githubusercontent.com/BeethovensWerkstatt/data/dev/data/module2/works/BRA5.Scherzo_Allegro%20molto%20e%20vivace_Es_ohneWdhl.mei
+https://raw.githubusercontent.com/BeethovensWerkstatt/data/dev/data/module2/works/BRA6_Andante%20con%20moto%20alla%20marcia_Es.mei
+
+# Module 4 — Diabelli Variations Op. 120 (B&H reference encoding)
+https://raw.githubusercontent.com/BeethovensWerkstatt/data/dev/data/module4/op120_B%26H.mei
+
+# Concept / structural example
+https://raw.githubusercontent.com/BeethovensWerkstatt/data/dev/concepts/Landsberg_19_mdiv.mei
