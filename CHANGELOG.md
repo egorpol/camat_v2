@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.9] - 2026-05-05
+
+### Added
+
+- Added MEI measure metadata extraction to `df_events`, including dedicated `type == "measure"` rows and `measure_type`, `measure_metcon`, `measure_join`, and `measure_n` columns for measure-aware analysis.
+- Added `build_onset_position_counts(...)` and `display_onset_position_histogram(...)` in `camat.analysis_utils` (re-exported from the top-level `camat` package), with combined multi-source plotting, time-signature/span summaries, bin-size warnings, per-measure debug output, and metadata-aware pickup/incomplete-measure handling through `edge_measure_mode='merge_to_regular' | 'split_by_span'`. Auto-resolves per-source `reference_df` / `events_df` / `measure_offsets` from the notebook's `dfs_by_name`, `results`, `selection`, and full-source DataFrame when not passed explicitly.
+- Added an onset-position beat histogram cell to `testing_annot_stats.ipynb` that drives the new helper with `ONSET_BIN_SIZE`, `ONSET_NORMALIZE`, `ONSET_EDGE_MEASURE_MODE`, `ONSET_USE_MEASURE_METADATA`, `ONSET_SHOW_MEASURE_DEBUG`, `ONSET_BAR_COLOR`, and `ONSET_FLOAT_FORMAT`.
+- Added a Verovio-to-MEI conversion pipeline in `testing_verovio_conversion.ipynb` backed by `scripts/test_verovio_conversion.py`, with conversion reports, downloaded-source caching, XML ID / note / measure sanity checks, optional first-page SVG smoke tests, and subprocess isolation around native Verovio imports.
+- Added support for converting plain MusicXML (`.xml`, `.musicxml`), compressed MusicXML (`.mxl`), Humdrum/Kern (`.krn`, `.kern`, `.hum`), and existing MEI sources into MEI for downstream parser analysis.
+- Added an opt-in MIDI import path for `.mid` / `.midi` sources through `music21 -> MusicXML -> Verovio`, recording the intermediate MusicXML file in the conversion report so lossy notation inference can be inspected.
+- Added compressed MusicXML loading to the shared Verovio helpers in `camat.verovio_render`, so `.mxl` files are auto-detected and handled by `vrv_load_from_file(...)`, `vrv_load_from_url(...)`, and `vrv_convert_to_mei(...)`.
+- Added TXT source-list expansion to the Verovio conversion workflow, reusing `camat.parser_utils.expand_file_sources(...)` so `testing_verovio_conversion.ipynb` and `scripts/test_verovio_conversion.py --source test_corpus/test_corpus_links.txt` can convert newline-separated corpora directly.
+
+### Fixed
+
+- Fixed the onset-position histogram producing a separate plot per inferred measure span when `edge_measure_mode='merge_to_regular'` and the source contained internal MEI barline splits (e.g. a 4/4 piece with a 3+1 split mid-piece). Runs of consecutive short internal measures whose spans sum to the regular meter span are now packed into a single virtual regular-sized measure (the second in the run is offset by the first's span), so the combined plot stays unified. With `edge_measure_mode='split_by_span'` the legacy per-span plots are preserved.
+
 ## [0.1.8] - 2026-04-17
 
 ### Added

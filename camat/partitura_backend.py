@@ -286,6 +286,10 @@ _EVENT_DF_COLUMNS = [
     "mm",
     "mm_unit",
     "mm_dots",
+    "measure_type",
+    "measure_metcon",
+    "measure_join",
+    "measure_n",
     "extra",
 ]
 
@@ -1820,6 +1824,10 @@ def _event_row(
         "mm": mm_value if mm_value is not None else pd.NA,
         "mm_unit": mm_unit,
         "mm_dots": mm_dots,
+        "measure_type": event.get("measure_type", pd.NA),
+        "measure_metcon": event.get("measure_metcon", pd.NA),
+        "measure_join": event.get("measure_join", pd.NA),
+        "measure_n": event.get("measure_n", pd.NA),
         "extra": event.get("extra", pd.NA),
     }
 
@@ -2141,12 +2149,52 @@ def _extract_mei_events(mei_path: str) -> List[Dict[str, Any]]:
                 out[key_name] = cleaned
         return out
 
+    def _measure_metadata(measure_el: Any) -> Dict[str, Any]:
+        if measure_el is None:
+            return {}
+        metadata: Dict[str, Any] = {}
+        measure_type = _clean_string(measure_el.attrib.get("type"))
+        measure_metcon = _clean_string(measure_el.attrib.get("metcon"))
+        measure_join = _clean_string(measure_el.attrib.get("join"))
+        measure_n = _clean_string(measure_el.attrib.get("n"))
+        if measure_type is not None:
+            metadata["measure_type"] = measure_type
+        if measure_metcon is not None:
+            metadata["measure_metcon"] = measure_metcon
+        if measure_join is not None:
+            metadata["measure_join"] = measure_join
+        if measure_n is not None:
+            metadata["measure_n"] = measure_n
+        return metadata
+
     xml_id_key = "{http://www.w3.org/XML/1998/namespace}id"
     parent_map = {child: parent for parent in root.iter() for child in parent}
     measure_elements = [el for el in root.iter() if _local_name(el.tag) == "measure"]
     measure_index_map = {id(el): idx for idx, el in enumerate(measure_elements, start=1)}
     events: List[Dict[str, Any]] = []
     barline_ordinal = 0
+
+    for measure_el in measure_elements:
+        measure_index = measure_index_map.get(id(measure_el))
+        measure_number: Optional[int] = None
+        try:
+            measure_number = int(str(measure_el.attrib.get("n")))
+        except Exception:
+            measure_number = measure_index
+        measure_event: Dict[str, Any] = {
+            "event": "measure",
+            "scope": "measure",
+        }
+        if measure_index is not None:
+            measure_event["measure_index"] = measure_index
+        if measure_number is not None:
+            measure_event["measure"] = measure_number
+        measure_xml_id = _get_xml_id(measure_el)
+        if measure_xml_id:
+            measure_event["xml_id"] = measure_xml_id
+            measure_event["measure_xml_id"] = measure_xml_id
+        measure_event.update(_measure_metadata(measure_el))
+        events.append(measure_event)
 
     # Per-layer precomputed indexes used by barline lookups. Without this, each
     # barline triggers multiple full subtree walks over its sibling children; the
@@ -2264,6 +2312,7 @@ def _extract_mei_events(mei_path: str) -> List[Dict[str, Any]]:
             measure_xml_id = _get_xml_id(measure_el)
             if measure_xml_id:
                 event["measure_xml_id"] = measure_xml_id
+            event.update(_measure_metadata(measure_el))
         if staff_n is not None:
             event["staff_n"] = staff_n
         if staff_raw is not None:
@@ -2854,7 +2903,11 @@ def _other_mei_events_to_dataframe(
         start_xml_id = _normalize_xml_ref(event.get("start_xml_id"))
         end_xml_id = _normalize_xml_ref(event.get("end_xml_id"))
 
-        if start_xml_id and start_xml_id in onset_map:
+        if event_type == "measure":
+            measure_start = _measure_start_from_offsets(event.get("measure_index"), measure_offsets)
+            if measure_start is not None and np.isfinite(measure_start):
+                global_onset = float(measure_start)
+        elif start_xml_id and start_xml_id in onset_map:
             global_onset = float(onset_map[start_xml_id])
         else:
             resolved = _resolve_measure_tstamp(
@@ -2880,11 +2933,26 @@ def _other_mei_events_to_dataframe(
                 global_end = float(resolved_end)
 
         duration = 0.0
-        if np.isfinite(global_onset) and global_end is not None and np.isfinite(global_end):
+        if event_type == "measure" and np.isfinite(global_onset):
+            measure_index = event.get("measure_index")
+            try:
+                next_measure_index = int(measure_index) + 1
+            except Exception:
+                next_measure_index = None
+            if next_measure_index is not None:
+                next_measure_start = _measure_start_from_offsets(
+                    next_measure_index,
+                    measure_offsets,
+                )
+                if next_measure_start is not None and np.isfinite(next_measure_start):
+                    duration = max(0.0, float(next_measure_start - global_onset))
+        elif np.isfinite(global_onset) and global_end is not None and np.isfinite(global_end):
             duration = max(0.0, float(global_end - global_onset))
 
         local_onset = np.nan
-        if np.isfinite(global_onset):
+        if event_type == "measure" and np.isfinite(global_onset):
+            local_onset = 0.0
+        elif np.isfinite(global_onset):
             measure_start = _measure_start_from_offsets(event.get("measure_index"), measure_offsets)
             if measure_start is not None and np.isfinite(measure_start):
                 local_onset = float(global_onset - measure_start)

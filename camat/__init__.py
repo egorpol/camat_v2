@@ -1,4 +1,4 @@
-__version__ = "0.1.8"
+__version__ = "0.1.9"
 
 from .pattern_search import run_pattern_search
 from .parser_registry import get_parse_files, list_parsers, parse_files_quiet
@@ -54,6 +54,8 @@ from .analysis_utils import (
     check_monophonic_input,
     melodic_interval_distribution,
     display_melodic_interval_distribution,
+    build_onset_position_counts,
+    display_onset_position_histogram,
 )
 from .parser_utils import (
     expand_file_sources,
@@ -123,6 +125,8 @@ __all__ = [
     'check_monophonic_input',
     'melodic_interval_distribution',
     'display_melodic_interval_distribution',
+    'build_onset_position_counts',
+    'display_onset_position_histogram',
     'expand_file_sources',
     'format_parsed_summary',
     'print_parsed_summary',

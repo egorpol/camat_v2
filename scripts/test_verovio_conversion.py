@@ -39,6 +39,7 @@ if str(REPO_ROOT) not in sys.path:
 os.environ.setdefault("MPLCONFIGDIR", "/tmp/camat-matplotlib")
 Path(os.environ["MPLCONFIGDIR"]).mkdir(parents=True, exist_ok=True)
 
+from camat.parser_utils import expand_file_sources  # noqa: E402
 from camat.verovio_render import vrv_guess_input_from  # noqa: E402
 
 
@@ -375,10 +376,19 @@ def convert_sources(
     output_suffix: str = "",
     timestamp: bool = False,
     show_progress: bool = True,
+    expand_txt_sources: bool = True,
+    source_base_dir: Path | str | None = None,
 ) -> List[Dict[str, Any]]:
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
-    source_list = list(sources)
+    if expand_txt_sources:
+        source_list = expand_file_sources(
+            sources,
+            base_dir=source_base_dir,
+            verbose=show_progress,
+        )
+    else:
+        source_list = [str(source).strip() for source in sources if str(source).strip()]
     effective_n_jobs = _resolve_n_jobs(n_jobs, len(source_list))
     stamp = _timestamp_label(timestamp)
 
@@ -474,7 +484,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument(
         "--source",
         action="append",
-        help="Override default source list. May be passed multiple times.",
+        help=(
+            "Override default source list. May be passed multiple times. "
+            "Local .txt files are expanded as newline-separated source lists."
+        ),
     )
     parser.add_argument(
         "--no-render",

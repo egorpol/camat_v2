@@ -2887,6 +2887,754 @@ def display_successive_pitch_transition_heatmaps(
     return outputs
 
 
+# --------------------------------------------------------------------
+# Onset-position-within-measure histogram
+# --------------------------------------------------------------------
+
+_ONSET_DEFAULT_BAR_COLOR: Tuple[str, ...] = ('#4682B4', '#adf542')
+
+_ONSET_PICKUP_TYPES = frozenset({'upbeat', 'pickup', 'anacrusis'})
+_ONSET_NONCONFORMING_METCON = frozenset({'false', '0', 'no'})
+
+_ONSET_COUNTS_COLUMNS = (
+    'source',
+    'meter_group',
+    'time_signature_info',
+    'measure_count',
+    'total_distance_quarters',
+    'measure_start_source',
+    'measure_span_quarters',
+    'measure_handling',
+    'onset_within_measure',
+    'count_raw',
+    'share',
+    'count',
+)
+
+
+def _onset_first_existing_column(df: pd.DataFrame, candidates: Sequence[str]) -> Optional[str]:
+    for col in candidates:
+        if col in df.columns:
+            return col
+    return None
+
+
+def _onset_clean_meta(value: Any) -> str:
+    if value is None:
+        return ''
+    try:
+        if pd.isna(value):
+            return ''
+    except Exception:
+        pass
+    return str(value).strip().lower()
+
+
+def _onset_meter_label(span: Any, float_format: Optional[str]) -> str:
+    try:
+        ql = float(span)
+    except Exception:
+        return 'unknown meter span'
+    ql_text = _format_number_for_display(ql, float_format)
+    if abs(ql - round(ql)) < 1e-6 and ql > 0:
+        return f'~{int(round(ql))}/4 ({ql_text} quarter lengths)'
+    eighths = ql * 2.0
+    if abs(eighths - round(eighths)) < 1e-6 and eighths > 0:
+        return f'~{int(round(eighths))}/8 ({ql_text} quarter lengths)'
+    return f'{ql_text} quarter lengths'
+
+
+def _onset_regular_span(spans: Sequence[Any]) -> float:
+    import numpy as np
+    clean = pd.Series([
+        round(float(span), 6)
+        for span in spans
+        if pd.notna(span) and np.isfinite(float(span))
+    ])
+    if clean.empty:
+        return float('nan')
+    return float(clean.value_counts().idxmax())
+
+
+def _onset_positive_min_step(values: Sequence[Any]) -> float:
+    clean = sorted({round(float(v), 6) for v in values if pd.notna(v)})
+    if len(clean) < 2:
+        return float('nan')
+    diffs = [round(b - a, 6) for a, b in zip(clean, clean[1:]) if b - a > 1e-6]
+    return min(diffs) if diffs else float('nan')
+
+
+def _onset_source_total_distance(reference_df: Optional[pd.DataFrame], starts: Sequence[float]) -> float:
+    if reference_df is None or len(reference_df) == 0:
+        return float('nan')
+    global_col = _onset_first_existing_column(reference_df, ['Global Onset', 'global_onset', 'Onset'])
+    duration_col = _onset_first_existing_column(reference_df, ['Duration', 'duration'])
+    if global_col is None:
+        return float('nan')
+    onset = pd.to_numeric(reference_df[global_col], errors='coerce')
+    if duration_col is not None:
+        duration = pd.to_numeric(reference_df[duration_col], errors='coerce').fillna(0.0)
+        end = (onset + duration).max()
+    else:
+        end = onset.max()
+    if pd.isna(end):
+        return float('nan')
+    start = min(starts) if starts else onset.min()
+    if pd.isna(start):
+        return float('nan')
+    return round(float(end - start), 6)
+
+
+def _onset_fallback_measure_starts(reference_df: Optional[pd.DataFrame]) -> list[float]:
+    if reference_df is None:
+        return []
+    measure_col = _onset_first_existing_column(reference_df, ['Measure', 'measure'])
+    global_col = _onset_first_existing_column(reference_df, ['Global Onset', 'global_onset', 'Onset'])
+    if measure_col is None or global_col is None:
+        return []
+    ref = reference_df[[measure_col, global_col]].copy()
+    ref['_measure'] = pd.to_numeric(ref[measure_col], errors='coerce')
+    ref['_global_onset'] = pd.to_numeric(ref[global_col], errors='coerce')
+    ref = ref.dropna(subset=['_measure', '_global_onset'])
+    if ref.empty:
+        return []
+    return sorted(ref.groupby('_measure')['_global_onset'].min().round(6).unique().tolist())
+
+
+def _onset_resolve_measure_starts(
+    reference_df: Optional[pd.DataFrame],
+    measure_offsets: Optional[Sequence[Any]],
+) -> Tuple[list[float], str]:
+    import numpy as np
+    if measure_offsets:
+        clean: list[float] = []
+        for value in measure_offsets:
+            try:
+                v = float(value)
+            except Exception:
+                continue
+            if np.isfinite(v):
+                clean.append(round(v, 6))
+        if clean:
+            return sorted(set(clean)), 'measure_offsets'
+    fallback = _onset_fallback_measure_starts(reference_df)
+    if fallback:
+        return fallback, 'first_onset_per_measure'
+    return [], 'unavailable'
+
+
+def _onset_metadata_by_measure_start(
+    events_df: Optional[pd.DataFrame],
+    use_measure_metadata: bool,
+) -> dict:
+    if not use_measure_metadata or events_df is None or not isinstance(events_df, pd.DataFrame):
+        return {}
+    required = {'type', 'Global Onset'}
+    if not required.issubset(set(events_df.columns)):
+        return {}
+    measures = events_df[events_df['type'].astype(str).str.lower() == 'measure'].copy()
+    if measures.empty:
+        return {}
+    measures['_measure_start_key'] = pd.to_numeric(measures['Global Onset'], errors='coerce').round(6)
+    measures = measures.dropna(subset=['_measure_start_key'])
+    metadata: dict[float, dict[str, Any]] = {}
+    for _, row in measures.iterrows():
+        key = float(row['_measure_start_key'])
+        metadata[key] = {
+            'measure_type': row.get('measure_type', pd.NA),
+            'measure_metcon': row.get('measure_metcon', pd.NA),
+            'measure_join': row.get('measure_join', pd.NA),
+            'measure_n': row.get('measure_n', pd.NA),
+        }
+    return metadata
+
+
+def _onset_classify_measure(
+    row: Mapping[str, Any],
+    regular_span: float,
+    first_measure_index: int,
+    last_measure_index: int,
+    edge_mode: str,
+    use_measure_metadata: bool,
+) -> str:
+    span = row.get('measure_span_quarters', float('nan'))
+    measure_type = _onset_clean_meta(row.get('measure_type'))
+    metcon = _onset_clean_meta(row.get('measure_metcon'))
+    measure_index = int(row.get('inferred_measure_index'))
+    is_short = pd.notna(span) and pd.notna(regular_span) and float(span) < float(regular_span) - 1e-6
+    is_nonconforming = metcon in _ONSET_NONCONFORMING_METCON
+    is_pickup_type = measure_type in _ONSET_PICKUP_TYPES
+
+    if is_short and measure_index == first_measure_index:
+        if use_measure_metadata and (is_pickup_type or is_nonconforming):
+            return 'pickup_right_aligned'
+        if edge_mode == 'merge_to_regular':
+            return 'pickup_right_aligned_inferred'
+    if is_short and measure_index == last_measure_index:
+        if use_measure_metadata and is_nonconforming:
+            return 'incomplete_final_left_aligned'
+        if edge_mode == 'merge_to_regular':
+            return 'incomplete_final_left_aligned_inferred'
+    if is_short and not (measure_index == first_measure_index or measure_index == last_measure_index):
+        if edge_mode == 'merge_to_regular':
+            return 'short_internal_merged'
+        return 'short_internal_split_as_meter'
+    return 'regular'
+
+
+def _onset_pack_internal_runs(
+    work: pd.DataFrame,
+    regular_span: float,
+) -> pd.DataFrame:
+    """Offset onsets in runs of consecutive `short_internal_merged` measures so that
+    they pack into a virtual regular-sized measure (e.g. a 3+1 split becomes 0..3)."""
+    internal_merged_mask = work['measure_handling'] == 'short_internal_merged'
+    if not internal_merged_mask.any() or pd.isna(regular_span):
+        return work
+
+    measure_info = (
+        work[['inferred_measure_index', 'measure_span_quarters', 'measure_handling']]
+        .drop_duplicates(subset='inferred_measure_index')
+        .sort_values('inferred_measure_index')
+        .reset_index(drop=True)
+    )
+    cumulative_offset: dict[int, float] = {}
+    run_offset = 0.0
+    prev_idx: Optional[int] = None
+    prev_handling: Optional[str] = None
+    prev_span = 0.0
+    for _, info_row in measure_info.iterrows():
+        idx = int(info_row['inferred_measure_index'])
+        handling = info_row['measure_handling']
+        span_value = float(info_row['measure_span_quarters']) if pd.notna(info_row['measure_span_quarters']) else 0.0
+        if handling == 'short_internal_merged':
+            if prev_handling == 'short_internal_merged' and prev_idx is not None and idx == prev_idx + 1:
+                candidate = run_offset + prev_span
+                if candidate + span_value > float(regular_span) + 1e-6:
+                    candidate = 0.0
+                run_offset = candidate
+            else:
+                run_offset = 0.0
+            cumulative_offset[idx] = run_offset
+        else:
+            run_offset = 0.0
+        prev_idx = idx
+        prev_handling = handling
+        prev_span = span_value
+
+    offsets_series = (
+        work.loc[internal_merged_mask, 'inferred_measure_index']
+        .map(cumulative_offset)
+        .astype(float)
+    )
+    work.loc[internal_merged_mask, 'onset_within_measure_raw'] = (
+        work.loc[internal_merged_mask, 'onset_within_measure_raw'].astype(float) + offsets_series
+    ).round(6)
+    return work
+
+
+def build_onset_position_counts(
+    df: pd.DataFrame,
+    *,
+    label: str = 'Source',
+    reference_df: Optional[pd.DataFrame] = None,
+    events_df: Optional[pd.DataFrame] = None,
+    measure_offsets: Optional[Sequence[Any]] = None,
+    bin_size: float = 0.25,
+    normalize: bool = True,
+    edge_measure_mode: str = 'merge_to_regular',
+    use_measure_metadata: bool = True,
+    float_format: Optional[str] = None,
+) -> Tuple[pd.DataFrame, dict]:
+    """Compute an onset-within-measure histogram for a single source.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        Notes/pitches DataFrame (must contain a `Global Onset` column).
+    label : str
+        Label used to identify the source in the returned counts table.
+    reference_df : pandas.DataFrame, optional
+        Full source DataFrame used as a reference for measure-start fallback
+        and total-distance computation. Defaults to `df`.
+    events_df : pandas.DataFrame, optional
+        Events DataFrame containing `type='measure'` rows with `measure_type`,
+        `measure_metcon`, `measure_join`, `measure_n` metadata. Used when
+        `use_measure_metadata` is True.
+    measure_offsets : sequence of float, optional
+        Pre-parsed barline offsets (e.g. `result['measure_offsets']`). Preferred
+        over inferring measure starts from the DataFrame.
+    bin_size : float
+        Rhythmic grid in quarter lengths (e.g. 0.25 for sixteenth notes).
+    normalize : bool
+        When True the `count` column holds proportions per (source, meter_group).
+    edge_measure_mode : {'merge_to_regular', 'split_by_span'}
+        How to handle short edge / split-internal measures. With
+        `merge_to_regular`, pickups are right-aligned, incomplete finals
+        left-aligned, and runs of consecutive short internal measures are
+        packed into a virtual regular-sized measure.
+    use_measure_metadata : bool
+        When True, MEI measure metadata in `events_df` is consulted to detect
+        pickups and incomplete final measures.
+    float_format : str or None
+        Optional Python-style float format for the meter group label.
+
+    Returns
+    -------
+    counts : pandas.DataFrame
+        Long-form histogram with one row per (meter_group, onset_within_measure).
+    summary : dict
+        Diagnostic summary with measure-start source, regular span, warnings,
+        and a per-measure debug DataFrame.
+    """
+    import numpy as np
+
+    edge_mode = str(edge_measure_mode).strip().lower()
+    if edge_mode not in {'merge_to_regular', 'split_by_span'}:
+        raise ValueError("edge_measure_mode must be 'merge_to_regular' or 'split_by_span'.")
+
+    global_col = _onset_first_existing_column(df, ['Global Onset', 'global_onset', 'Onset'])
+    if global_col is None:
+        raise ValueError(f'{label}: no Global Onset column found.')
+
+    if reference_df is None:
+        reference_df = df
+    starts, start_source = _onset_resolve_measure_starts(reference_df, measure_offsets)
+    if not starts:
+        raise ValueError(f'{label}: could not determine measure starts.')
+
+    metadata_by_start = _onset_metadata_by_measure_start(events_df, use_measure_metadata)
+    starts_arr = np.array(starts, dtype=float)
+    source_distance = _onset_source_total_distance(reference_df, starts)
+    spans_arr = np.diff(starts_arr) if len(starts_arr) > 1 else np.array([], dtype=float)
+    if starts and pd.notna(source_distance):
+        source_end = float(min(starts)) + float(source_distance)
+        if source_end > float(starts_arr[-1]) + 1e-6:
+            spans_arr = np.append(spans_arr, round(source_end - float(starts_arr[-1]), 6))
+    regular_span = _onset_regular_span(spans_arr)
+
+    empty = pd.DataFrame(columns=list(_ONSET_COUNTS_COLUMNS))
+
+    work = df.copy()
+    work['_global_onset'] = pd.to_numeric(work[global_col], errors='coerce')
+    work = work.dropna(subset=['_global_onset'])
+    if work.empty:
+        return empty, {}
+
+    onset_values = work['_global_onset'].to_numpy(dtype=float)
+    measure_idx = np.searchsorted(starts_arr, onset_values, side='right') - 1
+    valid = measure_idx >= 0
+    if len(spans_arr):
+        valid = valid & (measure_idx < len(spans_arr))
+    work = work.loc[valid].copy()
+    measure_idx = measure_idx[valid]
+    onset_values = onset_values[valid]
+    if work.empty:
+        return empty, {}
+
+    work['inferred_measure_index'] = measure_idx + 1
+    work['inferred_measure_start'] = starts_arr[measure_idx]
+    work['onset_within_measure_raw'] = (onset_values - starts_arr[measure_idx]).round(6)
+    work.loc[work['onset_within_measure_raw'].abs() < 1e-6, 'onset_within_measure_raw'] = 0.0
+    if len(spans_arr):
+        work['measure_span_quarters'] = np.round(spans_arr[measure_idx], 6)
+    else:
+        work['measure_span_quarters'] = np.nan
+
+    meta_rows = (
+        work['inferred_measure_start']
+        .round(6)
+        .map(metadata_by_start)
+        .map(lambda value: value if isinstance(value, dict) else {})
+    )
+    work['measure_type'] = meta_rows.map(lambda v: v.get('measure_type', pd.NA))
+    work['measure_metcon'] = meta_rows.map(lambda v: v.get('measure_metcon', pd.NA))
+    work['measure_join'] = meta_rows.map(lambda v: v.get('measure_join', pd.NA))
+    work['measure_n'] = meta_rows.map(lambda v: v.get('measure_n', pd.NA))
+
+    first_measure_index = int(np.nanmin(work['inferred_measure_index']))
+    last_measure_index = int(np.nanmax(work['inferred_measure_index']))
+    work['measure_handling'] = work.apply(
+        lambda row: _onset_classify_measure(
+            row, regular_span, first_measure_index, last_measure_index, edge_mode, use_measure_metadata,
+        ),
+        axis=1,
+    )
+
+    pickup_mask = work['measure_handling'].astype(str).str.startswith('pickup_right_aligned')
+    if pickup_mask.any() and pd.notna(regular_span):
+        work.loc[pickup_mask, 'onset_within_measure_raw'] = (
+            work.loc[pickup_mask, 'onset_within_measure_raw']
+            + (float(regular_span) - work.loc[pickup_mask, 'measure_span_quarters'].astype(float))
+        ).round(6)
+
+    work = _onset_pack_internal_runs(work, regular_span)
+
+    step = float(bin_size)
+    smallest_onset_step = _onset_positive_min_step(work['onset_within_measure_raw'])
+    bin_warning: Optional[str] = None
+    if pd.notna(smallest_onset_step) and step > float(smallest_onset_step) + 1e-9:
+        bin_warning = (
+            f"Warning: bin_size={step:g} is coarser than the smallest detected "
+            f"onset-position step in {label!r} ({smallest_onset_step:g}). Some positions will be merged."
+        )
+
+    work['onset_within_measure'] = ((work['onset_within_measure_raw'] / step).round() * step).round(6)
+
+    display_span = work['measure_span_quarters'].copy()
+    edge_mask = work['measure_handling'].astype(str).str.startswith(
+        ('pickup_right_aligned', 'incomplete_final_left_aligned', 'short_internal_merged')
+    )
+    if edge_mode == 'merge_to_regular' and pd.notna(regular_span):
+        display_span = display_span.mask(edge_mask, float(regular_span))
+    work['display_span_quarters'] = display_span
+    work['meter_group'] = work['display_span_quarters'].map(
+        lambda value: _onset_meter_label(value, float_format) if pd.notna(value) else 'unknown meter span'
+    )
+
+    represented_meter_groups = work['meter_group'].dropna().unique().tolist()
+    multi_meter_warning: Optional[str] = None
+    if len(represented_meter_groups) > 1:
+        multi_meter_warning = (
+            f"Warning: {label!r} contains multiple inferred measure spans/time signatures after "
+            f"metadata handling: {', '.join(str(group) for group in represented_meter_groups)}. "
+            'Histograms will be drawn separately by time signature.'
+        )
+
+    measure_debug = (
+        work.groupby('inferred_measure_index', dropna=False)
+        .agg(
+            measure_start=('inferred_measure_start', 'first'),
+            measure_span_quarters=('measure_span_quarters', 'first'),
+            display_span_quarters=('display_span_quarters', 'first'),
+            measure_handling=('measure_handling', 'first'),
+            measure_type=('measure_type', 'first'),
+            measure_metcon=('measure_metcon', 'first'),
+            measure_join=('measure_join', 'first'),
+            measure_n=('measure_n', 'first'),
+            first_onset_within_measure=('onset_within_measure', 'min'),
+            last_onset_within_measure=('onset_within_measure', 'max'),
+            onset_count=('onset_within_measure', 'size'),
+        )
+        .reset_index()
+    )
+
+    metadata_hits = int(
+        work[['measure_type', 'measure_metcon', 'measure_join', 'measure_n']]
+        .notna()
+        .any(axis=1)
+        .sum()
+    )
+
+    counts = (
+        work.groupby(['meter_group', 'onset_within_measure'], dropna=False)
+        .size()
+        .rename('count_raw')
+        .reset_index()
+        .sort_values(['meter_group', 'onset_within_measure'])
+        .reset_index(drop=True)
+    )
+    counts.insert(0, 'source', label)
+
+    measure_counts = work.groupby('meter_group')['inferred_measure_index'].nunique().to_dict()
+    span_values = work.groupby('meter_group')['display_span_quarters'].first().to_dict()
+    handling_values = (
+        work.groupby('meter_group')['measure_handling']
+        .apply(lambda values: ', '.join(sorted({str(v) for v in values})))
+        .to_dict()
+    )
+    counts.insert(2, 'time_signature_info', counts['meter_group'])
+    counts.insert(3, 'measure_count', counts['meter_group'].map(measure_counts).astype(int))
+    counts.insert(4, 'total_distance_quarters', source_distance)
+    counts.insert(5, 'measure_start_source', start_source)
+    counts.insert(6, 'measure_span_quarters', counts['meter_group'].map(span_values))
+    counts.insert(7, 'measure_handling', counts['meter_group'].map(handling_values))
+    counts['share'] = counts.groupby(['source', 'meter_group'])['count_raw'].transform(
+        lambda series: series / series.sum()
+    )
+    counts['count'] = counts['share'] if normalize else counts['count_raw']
+
+    measure_metadata_rows = 0
+    if events_df is not None and isinstance(events_df, pd.DataFrame):
+        type_series = events_df.get('type', pd.Series(dtype=object))
+        measure_metadata_rows = int((type_series.astype(str).str.lower() == 'measure').sum())
+
+    summary = {
+        'label': label,
+        'measure_start_source': start_source,
+        'total_distance_quarters': source_distance,
+        'meter_groups': represented_meter_groups,
+        'smallest_onset_step': smallest_onset_step,
+        'regular_span_quarters': regular_span,
+        'measure_metadata_rows': measure_metadata_rows,
+        'measure_metadata_note_hits': metadata_hits,
+        'measure_handling': sorted({str(v) for v in work['measure_handling'].dropna().tolist()}),
+        'edge_measure_mode': edge_mode,
+        'bin_size': step,
+        'normalize': bool(normalize),
+        'measure_debug': measure_debug,
+        'bin_warning': bin_warning,
+        'multi_meter_warning': multi_meter_warning,
+    }
+    return counts, summary
+
+
+def _onset_resolve_source_metadata(
+    source_dfs: Sequence[pd.DataFrame],
+    *,
+    dfs_by_name: Optional[Mapping[str, pd.DataFrame]] = None,
+    results: Optional[Sequence[Mapping[str, Any]]] = None,
+    selection: Optional[pd.DataFrame] = None,
+    full_df: Optional[pd.DataFrame] = None,
+) -> Tuple[list[Optional[pd.DataFrame]], list[Optional[pd.DataFrame]], list[Optional[list[float]]]]:
+    """Best-effort resolution of `(reference_df, events_df, measure_offsets)` per
+    source by inspecting the standard parsed-result structures used by the
+    notebook tutorials (`dfs_by_name`, `results`, `selection`, full source DF).
+    """
+    refs: list[Optional[pd.DataFrame]] = []
+    events: list[Optional[pd.DataFrame]] = []
+    offsets: list[Optional[list[float]]] = []
+    for df in source_dfs:
+        ref = df
+        if selection is not None and full_df is not None and df is selection:
+            ref = full_df
+        result_name: Optional[str] = None
+        if dfs_by_name is not None:
+            for key, value in dfs_by_name.items():
+                if key.endswith('_pitch') and value is ref:
+                    result_name = key[:-6]
+                    break
+        ev_df: Optional[pd.DataFrame] = None
+        offs: Optional[list[float]] = None
+        if result_name and results is not None:
+            for result in results:
+                if result.get('name') == result_name:
+                    candidate = result.get('df_events')
+                    if isinstance(candidate, pd.DataFrame):
+                        ev_df = candidate
+                    raw_offsets = result.get('measure_offsets') or []
+                    if raw_offsets:
+                        offs = list(raw_offsets)
+                    break
+        if ev_df is None and result_name and dfs_by_name is not None:
+            candidate = dfs_by_name.get(f'{result_name}_events')
+            if isinstance(candidate, pd.DataFrame):
+                ev_df = candidate
+        refs.append(ref)
+        events.append(ev_df)
+        offsets.append(offs)
+    return refs, events, offsets
+
+
+def display_onset_position_histogram(
+    source_df: Union[pd.DataFrame, Sequence[pd.DataFrame]],
+    *more_source_dfs: pd.DataFrame,
+    source_labels: Optional[Sequence[str]] = None,
+    reference_dfs: Optional[Sequence[Optional[pd.DataFrame]]] = None,
+    events_dfs: Optional[Sequence[Optional[pd.DataFrame]]] = None,
+    measure_offsets: Optional[Sequence[Optional[Sequence[Any]]]] = None,
+    dfs_by_name: Optional[Mapping[str, pd.DataFrame]] = None,
+    results: Optional[Sequence[Mapping[str, Any]]] = None,
+    selection: Optional[pd.DataFrame] = None,
+    full_df: Optional[pd.DataFrame] = None,
+    bin_size: float = 0.25,
+    normalize: bool = True,
+    edge_measure_mode: str = 'merge_to_regular',
+    use_measure_metadata: bool = True,
+    backend: str = 'bokeh',
+    plot_width: int = 1200,
+    plot_height: int = 350,
+    show_hover: bool = True,
+    show_table: bool = True,
+    show_measure_debug: bool = True,
+    bar_color: Union[str, Sequence[str]] = _ONSET_DEFAULT_BAR_COLOR,
+    float_format: Optional[str] = None,
+) -> Union[pd.DataFrame, Mapping[str, pd.DataFrame]]:
+    """Build and display an onset-within-measure histogram for one or more sources.
+
+    Per-source measurement metadata can either be passed explicitly via
+    `reference_dfs` / `events_dfs` / `measure_offsets`, or auto-resolved by
+    inspecting the notebook's `dfs_by_name`, `results`, `selection`, and
+    full-source DataFrame (`full_df`, typically `SOURCE_DF`).
+
+    With `edge_measure_mode='merge_to_regular'`:
+      - Pickup measures are right-aligned into the regular grid.
+      - Incomplete final measures are left-aligned.
+      - Consecutive short internal measures whose spans sum to the regular span
+        are packed into a single virtual regular measure.
+
+    Returns the counts DataFrame for a single source, or a dict mapping label
+    to counts DataFrame for multiple sources.
+    """
+    if not more_source_dfs and not isinstance(source_df, pd.DataFrame):
+        if isinstance(source_df, (list, tuple)):
+            dfs = list(source_df)
+        else:
+            dfs = [source_df]
+    else:
+        dfs = [source_df] + list(more_source_dfs)
+
+    n_sources = len(dfs)
+    if source_labels is not None:
+        labels = list(source_labels)[:n_sources]
+        if len(labels) < n_sources:
+            labels.extend(_guess_labels_for_dfs(dfs[len(labels):], default_prefix='Source'))
+    else:
+        labels = _guess_labels_for_dfs(dfs, default_prefix='Source')
+
+    needs_resolve = reference_dfs is None or events_dfs is None or measure_offsets is None
+    if needs_resolve:
+        auto_refs, auto_events, auto_offsets = _onset_resolve_source_metadata(
+            dfs,
+            dfs_by_name=dfs_by_name,
+            results=results,
+            selection=selection,
+            full_df=full_df,
+        )
+    else:
+        auto_refs = [None] * n_sources
+        auto_events = [None] * n_sources
+        auto_offsets = [None] * n_sources
+
+    def _pick(seq, fallback):
+        if seq is None:
+            return list(fallback)
+        chosen = list(seq)[:n_sources]
+        chosen.extend(fallback[len(chosen):])
+        return chosen
+
+    refs_list = _pick(reference_dfs, auto_refs)
+    events_list = _pick(events_dfs, auto_events)
+    offsets_list = _pick(measure_offsets, auto_offsets)
+
+    counts_by_label: dict[str, pd.DataFrame] = {}
+    summaries: dict[str, dict] = {}
+
+    for label, df, ref, ev, offs in zip(labels, dfs, refs_list, events_list, offsets_list):
+        counts, summary = build_onset_position_counts(
+            df,
+            label=label,
+            reference_df=ref if ref is not None else df,
+            events_df=ev,
+            measure_offsets=offs,
+            bin_size=bin_size,
+            normalize=normalize,
+            edge_measure_mode=edge_measure_mode,
+            use_measure_metadata=use_measure_metadata,
+            float_format=float_format,
+        )
+        counts_by_label[label] = counts
+        summaries[label] = summary
+
+        if summary.get('bin_warning'):
+            print(summary['bin_warning'])
+        if summary.get('multi_meter_warning'):
+            print(summary['multi_meter_warning'])
+
+        if show_table:
+            print(f'=== Onset Position Histogram ({label}) ===')
+            represented_total = (
+                int(counts[['meter_group', 'measure_count']].drop_duplicates()['measure_count'].sum())
+                if len(counts)
+                else 0
+            )
+            print(f'Measures represented: {represented_total}')
+            print(f"Measure start source: {summary.get('measure_start_source', 'unavailable')}")
+            print(f"Time signature / measure span(s): {', '.join(summary.get('meter_groups') or ['unknown'])}")
+            print(
+                'Regular inferred span: '
+                f"{_format_number_for_display(summary.get('regular_span_quarters'), float_format)} quarter lengths"
+            )
+            print(
+                'Total loaded-source distance: '
+                f"{_format_number_for_display(summary.get('total_distance_quarters'), float_format)} quarter lengths"
+            )
+            print(f"MEI measure metadata rows: {summary.get('measure_metadata_rows', 0)}")
+            print(f"Edge measure mode: {summary.get('edge_measure_mode', 'unknown')}")
+            print(f"Metadata-informed handling: {', '.join(summary.get('measure_handling') or ['none'])}")
+            smallest_step = summary.get('smallest_onset_step', float('nan'))
+            if pd.notna(smallest_step):
+                print(
+                    'Smallest detected onset-position step: '
+                    f'{_format_number_for_display(smallest_step, float_format)} quarter lengths'
+                )
+            debug_df = summary.get('measure_debug')
+            if show_measure_debug and isinstance(debug_df, pd.DataFrame) and len(debug_df):
+                print('Measure handling debug:')
+                try:
+                    ipy_display(_format_table_for_display(debug_df, float_format))
+                except Exception:
+                    print(_format_table_for_display(debug_df, float_format))
+            if len(counts):
+                table_cols = [
+                    'source', 'time_signature_info', 'measure_count',
+                    'total_distance_quarters', 'measure_start_source',
+                    'measure_handling', 'onset_within_measure',
+                    'count_raw', 'share', 'count',
+                ]
+                table_df = counts[table_cols].copy()
+                try:
+                    ipy_display(_format_table_for_display(table_df, float_format))
+                except Exception:
+                    print(_format_table_for_display(table_df, float_format))
+
+    if summaries:
+        all_meter_groups = sorted(set().union(*[set(s.get('meter_groups') or []) for s in summaries.values()]))
+        if len(all_meter_groups) > 1:
+            print(
+                'Warning: selected sources include multiple inferred time signatures/measure spans: '
+                + ', '.join(all_meter_groups)
+                + '. Combined histograms will be split by time signature.'
+            )
+
+    backend_opt = (backend or 'bokeh').strip().lower()
+    if backend_opt != 'none' and counts_by_label:
+        meter_groups_in_counts = sorted(set().union(*[
+            set(df['meter_group'].dropna().tolist())
+            for df in counts_by_label.values()
+        ]))
+        for meter_group in meter_groups_in_counts:
+            group_counts = {
+                lab: df[df['meter_group'] == meter_group].copy()
+                for lab, df in counts_by_label.items()
+            }
+            group_counts = {lab: df for lab, df in group_counts.items() if not df.empty}
+            if not group_counts:
+                continue
+            active_labels = [lab for lab in labels if lab in group_counts]
+            categories = sorted(set().union(*[
+                set(df['onset_within_measure'].tolist())
+                for df in group_counts.values()
+            ]))
+            x_labels = [f'{float(value):.3g}' for value in categories]
+            title = f'Onset Position Histogram - {meter_group}'
+            if len(meter_groups_in_counts) > 1:
+                print(f'Drawing separate combined plot for {meter_group}.')
+            series_values: list[list[float]] = []
+            for lab in active_labels:
+                indexed = group_counts[lab].set_index('onset_within_measure')['count']
+                series_values.append([float(indexed.get(value, 0.0)) for value in categories])
+            _plot_multi_bar(
+                categories=x_labels,
+                series_values=series_values,
+                series_labels=active_labels,
+                title=title,
+                x_label='Onset within Measure (quarter lengths)',
+                y_label=('Proportion' if normalize else 'Count'),
+                backend=backend_opt,
+                plot_width=plot_width,
+                plot_height=plot_height,
+                show_hover=bool(show_hover),
+                bar_color=bar_color,
+                default_palette=_DEFAULT_PITCH_PALETTE,
+                float_format=float_format,
+            )
+
+    if len(counts_by_label) == 1:
+        return next(iter(counts_by_label.values()))
+    return counts_by_label
+
+
 __all__ = [
     'parse_pitch_name',
     'name_to_midi',
@@ -2906,4 +3654,6 @@ __all__ = [
     'melodic_interval_distribution',
     'display_melodic_interval_distribution',
     'display_successive_pitch_transition_heatmaps',
+    'build_onset_position_counts',
+    'display_onset_position_histogram',
 ]

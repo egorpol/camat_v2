@@ -67,6 +67,10 @@ _EVENT_DF_COLUMNS = [
     "mm",
     "mm_unit",
     "mm_dots",
+    "measure_type",
+    "measure_metcon",
+    "measure_join",
+    "measure_n",
     "extra",
 ]
 
@@ -270,6 +274,10 @@ def _music21_rest_events_to_dataframe(df_rests: pd.DataFrame) -> pd.DataFrame:
                 "mm": pd.NA,
                 "mm_unit": pd.NA,
                 "mm_dots": pd.NA,
+                "measure_type": row.get("measure_type", pd.NA),
+                "measure_metcon": row.get("measure_metcon", pd.NA),
+                "measure_join": row.get("measure_join", pd.NA),
+                "measure_n": row.get("measure_n", pd.NA),
                 "extra": pd.NA,
             }
         )
