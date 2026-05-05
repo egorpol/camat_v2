@@ -1,0 +1,6 @@
+# BEETHOVEN — Piano Sonatas (repository: craigsapp/beethoven-piano-sonatas)
+# Op. 106 "Hammerklavier" (B-flat major, harmonically extremely complex)
+https://raw.githubusercontent.com/craigsapp/beethoven-piano-sonatas/master/kern/sonata29-1.krn
+https://raw.githubusercontent.com/craigsapp/beethoven-piano-sonatas/master/kern/sonata29-2.krn
+https://raw.githubusercontent.com/craigsapp/beethoven-piano-sonatas/master/kern/sonata29-3.krn
+https://raw.githubusercontent.com/craigsapp/beethoven-piano-sonatas/master/kern/sonata29-4.krn
