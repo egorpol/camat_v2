@@ -29,6 +29,7 @@ THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.abspath(os.path.join(THIS_DIR, ".."))
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
+os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib")
 
 from camat.parser_registry import parse_files  # noqa: E402
 
@@ -166,12 +167,12 @@ def _resolve_local_mei(url: str) -> Path:
     if local.exists():
         return local
     # Fallback: CAMAT cache lives under ~/.cache/camat/downloads/<slug>.mei.
-    from camat.music_utils import get_download_cache_dir  # type: ignore
+    from camat.music_utils import _cached_download_filename, get_download_cache_dir  # type: ignore
 
     cache_dir = Path(get_download_cache_dir())
-    for candidate in cache_dir.glob(f"*{stem}"):
-        if candidate.is_file():
-            return candidate
+    candidate = cache_dir / _cached_download_filename(url)
+    if candidate.is_file():
+        return candidate
     raise FileNotFoundError(
         f"Cannot locate cached copy of {stem}; run the notebook once or download to /tmp/camat_mei_inventory first."
     )

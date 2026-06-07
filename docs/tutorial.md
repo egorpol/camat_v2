@@ -35,6 +35,27 @@ Use `music21` only when you specifically need the legacy parser behavior or
 want a fallback implementation. The `music21` backend is still supported for
 common-notation files, but it is not the recommended first choice.
 
+## Timeline / Rap Humdrum Parsing
+
+For MCFlow-style rap Humdrum timelines, use the dedicated `timeline` backend:
+
+```python
+from camat import timeline_to_mei
+from camat.parser_registry import parse_files
+
+results, dfs_by_name, df_timeline = parse_files(
+    ["path/to/song.rap"],
+    parsing_backend="timeline",
+    add_rhythm_analysis=True,
+)
+
+mei_text = timeline_to_mei(results[0]["df_timeline"], metadata=results[0]["metadata"])
+```
+
+Timeline parsing creates `df_timeline` instead of `df_pitch`. The optional
+rhythm enrichment adds duration-distribution and onset-position columns that
+can be rendered later with `timeline_to_mei(...)` or `save_timeline_mei(...)`.
+
 ## Mensural MEI Normalization
 
 Use the helper script to normalize mensural duration labels in MEI files for

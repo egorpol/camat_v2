@@ -17,6 +17,10 @@ Use it by default for new work.
 common-notation files and exposes the same top-level result structure, but it
 should be treated as a compatibility option rather than the preferred parser.
 
+For MCFlow-style rap Humdrum timelines, use the `timeline` backend. It emits
+`df_timeline` rows with stable MEI ids and optional rhythm-analysis columns for
+duration and onset-position distributions.
+
 ## Top-Level API
 
 ::: camat
@@ -66,6 +70,10 @@ should be treated as a compatibility option rather than the preferred parser.
 ### Pattern search
 
 ::: camat.pattern_search
+
+### Timeline backend
+
+::: camat.timeline_backend
 
 ### Verovio render
 

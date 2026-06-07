@@ -1,4 +1,4 @@
-__version__ = "0.1.9"
+__version__ = "0.1.10"
 
 from .pattern_search import run_pattern_search
 from .parser_registry import get_parse_files, list_parsers, parse_files_quiet
@@ -49,6 +49,9 @@ from .analysis_utils import (
     build_pc_counts_from_names,
     build_pitch_class_distributions,
     display_pitch_class_distributions,
+    build_duration_counts,
+    plot_duration_distribution,
+    display_duration_distribution,
     display_filtered_piano_roll,
     extract_selected_xml_ids,
     check_monophonic_input,
@@ -56,6 +59,20 @@ from .analysis_utils import (
     display_melodic_interval_distribution,
     build_onset_position_counts,
     display_onset_position_histogram,
+)
+from .timeline_backend import (
+    TimelineParseResult,
+    humdrum_rap_to_timeline,
+    parse_rap_humdrum_file,
+    parse_rap_humdrum_source,
+    parse_files_timeline,
+    build_timeline_duration_counts,
+    build_timeline_onset_position_counts,
+    add_timeline_rhythm_analysis,
+    timeline_to_mei,
+    save_timeline_mei,
+    load_timeline_mei_with_verovio,
+    find_duplicate_mei_xml_ids,
 )
 from .parser_utils import (
     expand_file_sources,
@@ -120,6 +137,9 @@ __all__ = [
     'build_pc_counts_from_names',
     'build_pitch_class_distributions',
     'display_pitch_class_distributions',
+    'build_duration_counts',
+    'plot_duration_distribution',
+    'display_duration_distribution',
     'display_filtered_piano_roll',
     'extract_selected_xml_ids',
     'check_monophonic_input',
@@ -127,6 +147,18 @@ __all__ = [
     'display_melodic_interval_distribution',
     'build_onset_position_counts',
     'display_onset_position_histogram',
+    'TimelineParseResult',
+    'humdrum_rap_to_timeline',
+    'parse_rap_humdrum_file',
+    'parse_rap_humdrum_source',
+    'parse_files_timeline',
+    'build_timeline_duration_counts',
+    'build_timeline_onset_position_counts',
+    'add_timeline_rhythm_analysis',
+    'timeline_to_mei',
+    'save_timeline_mei',
+    'load_timeline_mei_with_verovio',
+    'find_duplicate_mei_xml_ids',
     'expand_file_sources',
     'format_parsed_summary',
     'print_parsed_summary',

@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.10] - 2026-06-07
+
+### Added
+
+- Added the timeline/rap Humdrum parser as a first-class parser backend via `parse_files(..., parsing_backend="timeline")`, with `rap` and `humdrum-rap` aliases, top-level exports, and stable `df_timeline` result entries.
+- Added timeline-native rhythm analysis helpers: `build_timeline_duration_counts(...)`, `build_timeline_onset_position_counts(...)`, and `add_timeline_rhythm_analysis(...)`. The timeline schema now reserves duration/onset distribution columns so rhythm-only analyses can be carried into MEI lyric/annotation views without requiring pitch data.
+- Added `scripts/test_timeline_backend.py`, an offline py310 smoke test covering timeline parsing, rhythm-schema enrichment, MEI generation, duplicate `xml:id` checks, and Verovio loading.
+- Added timeline backend API docs and tutorial/reference guidance for parsing MCFlow-style rap Humdrum sources.
+
+### Changed
+
+- Refreshed `testing_timeline.ipynb` so the timeline workflow computes duration and onset-position summaries from `df_timeline`, enriches `df_timeline_rhythm`, and renders rhythm-share fields through configurable lyric-info lines.
+- Added an `ACTIVE_SOURCE` selector to `testing_timeline.ipynb` so different MCFlow timeline sources can drive the same MEI export and statistics cells without rewriting downstream code.
+- Reworked the timeline onset-position notebook plot to reuse `display_onset_position_histogram(...)` with timeline-derived measure offsets instead of a separate custom plotting path.
+- Added automatic timeline onset binning via `bin_size="auto"` / `onset_bin_size="auto"`, which uses the smallest positive timeline duration and avoids manually hard-coding grids such as `0.125`.
+- Updated the timeline Verovio notebook settings to encode four measures per system and use a wider page, preventing every measure from being forced onto its own line and reducing distorted pickup/final-measure spacing.
+- Added `lyric_info_value_formats` and `lyric_info_max_value_chars` to timeline MEI export so analysis values such as duration share (`D`) and onset-position share (`O`) can be rendered as compact percentages instead of long raw floats.
+- Exposed existing duration-distribution helpers (`build_duration_counts`, `plot_duration_distribution`, `display_duration_distribution`) from the top-level `camat` package.
+- Preserved source order for `parse_files_partitura(..., n_jobs > 1)` results instead of returning entries in worker completion order.
+
+### Fixed
+
+- Fixed timeline onset-position grouping so rest-filtered histograms infer measure/meter spans from the full timeline context instead of creating spurious `3.75` / `4.25` meter groups in otherwise `4/4` sources.
+- Fixed MEI note-attachment extraction after common-notation MEI sanitization/conversion so `df_pitch` attachment columns such as `fermata`, `slurred`, `articulations`, and `ornaments` are populated from the persistent source MEI when temporary parser files have already been cleaned up.
+- Fixed `scripts/test_mei_coverage.py` so it resolves CAMAT's hashed remote-download cache filenames, allowing the coverage test to run after normal cached parsing.
+
 ## [0.1.9] - 2026-05-05
 
 ### Added
@@ -208,7 +234,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-[Unreleased]: https://github.com/egorpol/camat_v2/compare/v0.1.7...HEAD
+[Unreleased]: https://github.com/egorpol/camat_v2/compare/v0.1.10...HEAD
+[0.1.10]: https://github.com/egorpol/camat_v2/compare/v0.1.9...v0.1.10
+[0.1.9]: https://github.com/egorpol/camat_v2/compare/v0.1.8...v0.1.9
+[0.1.8]: https://github.com/egorpol/camat_v2/compare/v0.1.7...v0.1.8
 [0.1.7]: https://github.com/egorpol/camat_v2/compare/v0.1.6...v0.1.7
 [0.1.6]: https://github.com/egorpol/camat_v2/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/egorpol/camat_v2/compare/v0.1.4...v0.1.5

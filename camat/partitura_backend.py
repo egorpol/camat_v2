@@ -3244,9 +3244,8 @@ def parse_files_partitura(
     import threading as _threading
     from concurrent.futures import ThreadPoolExecutor as _ThreadPoolExecutor, as_completed as _as_completed
 
-    results: List[Dict[str, Any]] = []
+    results_by_index: Dict[int, Dict[str, Any]] = {}
     dfs_by_name: Dict[str, pd.DataFrame] = {}
-    last_df_holder: List[Optional[pd.DataFrame]] = [None]
 
     try:
         from IPython.display import display as ipy_display  # type: ignore
@@ -3486,12 +3485,23 @@ def parse_files_partitura(
                     and include_ids_this_score
                     and isinstance(df_raw, pd.DataFrame)
                     and not df_raw.empty
-                    and str(score_source_path).lower().endswith(".mei")
                 ):
-                    try:
-                        mei_attachments = _extract_mei_note_attachments(str(score_source_path))
-                    except Exception:
-                        mei_attachments = {}
+                    mei_attachments = {}
+                    attachment_paths: List[str] = []
+                    for candidate_path in (score_source_path, sanitized_path, file_path):
+                        candidate_text = str(candidate_path)
+                        if not candidate_text.lower().endswith(".mei"):
+                            continue
+                        if candidate_text in attachment_paths:
+                            continue
+                        attachment_paths.append(candidate_text)
+                    for attachment_path in attachment_paths:
+                        try:
+                            mei_attachments = _extract_mei_note_attachments(attachment_path)
+                        except Exception:
+                            mei_attachments = {}
+                        if mei_attachments:
+                            break
                     if mei_attachments is not None:
                         df_raw = _apply_note_attachments_to_pitch_df(df_raw, mei_attachments)
                 warning_ctx = _suppress_partitura_user_warnings(quiet_native_warnings)
@@ -3704,10 +3714,9 @@ def parse_files_partitura(
                 if return_plots:
                     result_entry["plot"] = plot_obj
                 with _state_lock:
-                    results.append(result_entry)
+                    results_by_index[idx] = result_entry
                     dfs_by_name[pitch_name] = df_pitch
                     dfs_by_name[events_name] = df_events
-                    last_df_holder[0] = df_pitch
 
             except Exception as exc:
                 should_try_music21_fallback = (
@@ -3787,10 +3796,9 @@ def parse_files_partitura(
                                 fb_entry["df_name_events"] = f"{name}_events"
                                 fb_entry["barline_events"] = fb_entry.get("barline_events", [])
                                 with _state_lock:
-                                    results.append(fb_entry)
+                                    results_by_index[idx] = fb_entry
                                     dfs_by_name[f"{name}_pitch"] = fb_df
                                     dfs_by_name[f"{name}_events"] = fb_events
-                                    last_df_holder[0] = fb_df
                                 if display_preview_df_pitch and ipy_display is not None:
                                     with _display_lock:
                                         ipy_display(fb_df.head(preview_rows))
@@ -3856,4 +3864,6 @@ def parse_files_partitura(
         if pbar is not None:
             pbar.close()
 
-    return results, dfs_by_name, last_df_holder[0]
+    results = [results_by_index[idx] for idx in sorted(results_by_index)]
+    last_df = results[-1]["df"] if results else None
+    return results, dfs_by_name, last_df

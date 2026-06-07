@@ -19,6 +19,9 @@ __all__ = [
     "parse_rap_humdrum_file",
     "parse_rap_humdrum_source",
     "parse_files_timeline",
+    "build_timeline_duration_counts",
+    "build_timeline_onset_position_counts",
+    "add_timeline_rhythm_analysis",
     "timeline_to_mei",
     "save_timeline_mei",
     "load_timeline_mei_with_verovio",
@@ -66,6 +69,13 @@ _KNOWN_TIMELINE_COLUMNS = [
     "xml_id_note",
     "xml_id_syl",
     "xml_id_annot",
+    "duration_count_raw",
+    "duration_share",
+    "duration_count",
+    "onset_position",
+    "onset_position_count_raw",
+    "onset_position_share",
+    "onset_position_count",
 ]
 
 
@@ -480,22 +490,68 @@ def _annotation_text(row: pd.Series) -> str:
     return "; ".join(values)
 
 
+def _normalize_lyric_info_format_spec(spec: Any) -> Optional[str]:
+    if spec is None:
+        return None
+    text = str(spec).strip()
+    if not text:
+        return None
+    if len(text) >= 2 and text[:-1].isdigit() and text[-1].lower() in {"f", "e", "g", "%"}:
+        return f".{text}"
+    return text
+
+
+def _format_lyric_info_value(
+    field: str,
+    value: Any,
+    *,
+    value_formats: Optional[Mapping[str, str]] = None,
+    max_value_chars: Optional[int] = None,
+) -> str:
+    spec = _normalize_lyric_info_format_spec(
+        value_formats.get(field) if value_formats else None
+    )
+    if spec is None:
+        text = str(value)
+    else:
+        try:
+            text = format(float(value), spec)
+        except Exception:
+            try:
+                text = format(value, spec)
+            except Exception:
+                text = str(value)
+    if max_value_chars is not None:
+        limit = max(1, int(max_value_chars))
+        if len(text) > limit:
+            text = text[:limit]
+    return text
+
+
 def _lyric_info_text(
     row: pd.Series,
     fields: Sequence[str],
     *,
     labels: Optional[Mapping[str, str]] = None,
     separator: str = " ",
+    value_formats: Optional[Mapping[str, str]] = None,
+    max_value_chars: Optional[int] = None,
 ) -> str:
     values = []
     for field in fields:
         value = row.get(field)
         if not _is_null_token(value):
             label = str(labels.get(field, field)) if labels else str(field)
+            text_value = _format_lyric_info_value(
+                field,
+                value,
+                value_formats=value_formats,
+                max_value_chars=max_value_chars,
+            )
             if label:
-                values.append(f"{label}:{value}")
+                values.append(f"{label}:{text_value}")
             else:
-                values.append(str(value))
+                values.append(text_value)
     return separator.join(values)
 
 
@@ -504,6 +560,8 @@ def _lyric_info_items(
     fields: Sequence[str],
     *,
     labels: Optional[Mapping[str, str]] = None,
+    value_formats: Optional[Mapping[str, str]] = None,
+    max_value_chars: Optional[int] = None,
 ) -> List[Tuple[int, str, str]]:
     items: List[Tuple[int, str, str]] = []
     for field_index, field in enumerate(fields):
@@ -511,7 +569,13 @@ def _lyric_info_items(
         if _is_null_token(value):
             continue
         label = str(labels.get(field, field)) if labels else str(field)
-        text = f"{label}:{value}" if label else str(value)
+        text_value = _format_lyric_info_value(
+            field,
+            value,
+            value_formats=value_formats,
+            max_value_chars=max_value_chars,
+        )
+        text = f"{label}:{text_value}" if label else text_value
         items.append((field_index, field, text))
     return items
 
@@ -536,6 +600,342 @@ def _scoredef_attrs(df_timeline: pd.DataFrame) -> Tuple[str, str, Optional[float
     else:
         count, unit = "4", "4"
     return count, unit, tempo
+
+
+def _meter_span_quarters(meter: Any) -> Optional[float]:
+    if _is_null_token(meter):
+        return None
+    text = str(meter).strip()
+    match = re.match(r"^(\d+(?:\.\d+)?)/(\d+(?:\.\d+)?)$", text)
+    if not match:
+        return None
+    count = float(match.group(1))
+    unit = float(match.group(2))
+    if unit == 0:
+        return None
+    return count * (4.0 / unit)
+
+
+def _timeline_numeric_col(df: pd.DataFrame, col: str, *, label: str) -> pd.Series:
+    if col not in df.columns:
+        raise ValueError(f"{label}: missing required timeline column {col!r}.")
+    return pd.to_numeric(df[col], errors="coerce")
+
+
+def _timeline_regular_measure_span(measure_spans: pd.Series, meter_spans: pd.Series) -> float:
+    meter_clean = meter_spans.dropna()
+    if not meter_clean.empty:
+        return float(meter_clean.mode(dropna=True).iloc[0])
+
+    clean = measure_spans.dropna()
+    clean = clean[clean > 0]
+    if clean.empty:
+        return float("nan")
+    return float(clean.round(6).mode(dropna=True).iloc[0])
+
+
+def _resolve_timeline_onset_bin_size(work: pd.DataFrame, bin_size: Any) -> float:
+    if isinstance(bin_size, str):
+        text = bin_size.strip().lower()
+        if text == "auto":
+            duration_col = "_duration" if "_duration" in work.columns else "duration"
+            durations = pd.to_numeric(work.get(duration_col, pd.Series(dtype=float)), errors="coerce")
+            durations = durations[durations > 0]
+            if durations.empty:
+                return 0.25
+            return float(durations.min())
+        try:
+            resolved = float(text)
+        except Exception as exc:
+            raise ValueError("bin_size must be a positive number or 'auto'.") from exc
+        if resolved <= 0:
+            raise ValueError("bin_size must be positive.")
+        return resolved
+
+    try:
+        resolved = float(bin_size)
+    except Exception as exc:
+        raise ValueError("bin_size must be a positive number or 'auto'.") from exc
+    if resolved <= 0:
+        raise ValueError("bin_size must be positive.")
+    return resolved
+
+
+def _timeline_prepare_onset_positions(
+    df_timeline: pd.DataFrame,
+    *,
+    label: str,
+    bin_size: Any,
+    include_rests: bool,
+    edge_measure_mode: str,
+) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+    import numpy as np
+
+    edge_mode = str(edge_measure_mode).strip().lower()
+    if edge_mode not in {"merge_to_regular", "split_by_span"}:
+        raise ValueError("edge_measure_mode must be 'merge_to_regular' or 'split_by_span'.")
+
+    required = ["measure_index", "local_onset", "duration"]
+    for col in required:
+        if col not in df_timeline.columns:
+            raise ValueError(f"{label}: missing required timeline column {col!r}.")
+
+    span_work = df_timeline.copy()
+    span_work["_measure_index"] = pd.to_numeric(span_work["measure_index"], errors="coerce")
+    span_work["_local_onset"] = pd.to_numeric(span_work["local_onset"], errors="coerce")
+    span_work["_duration"] = pd.to_numeric(span_work["duration"], errors="coerce").fillna(0.0)
+    span_work = span_work.dropna(subset=["_measure_index", "_local_onset"])
+    span_work["_measure_index"] = span_work["_measure_index"].astype(int)
+    span_work["_meter_span_quarters"] = span_work.get(
+        "meter", pd.Series(index=span_work.index, dtype=object)
+    ).map(_meter_span_quarters)
+
+    measure_spans = (
+        span_work.assign(_event_end=span_work["_local_onset"] + span_work["_duration"])
+        .groupby("_measure_index")["_event_end"]
+        .max()
+        .round(6)
+    )
+    measure_expected_spans = span_work.groupby("_measure_index")["_meter_span_quarters"].first()
+    regular_span = _timeline_regular_measure_span(measure_spans, span_work["_meter_span_quarters"])
+
+    work = df_timeline.copy()
+    if not include_rests and "is_rest" in work.columns:
+        work = work[~work["is_rest"].fillna(False).astype(bool)].copy()
+
+    work["_measure_index"] = pd.to_numeric(work["measure_index"], errors="coerce")
+    work["_local_onset"] = pd.to_numeric(work["local_onset"], errors="coerce")
+    work["_duration"] = pd.to_numeric(work["duration"], errors="coerce").fillna(0.0)
+    work = work.dropna(subset=["_measure_index", "_local_onset"])
+    resolved_bin_size = _resolve_timeline_onset_bin_size(work, bin_size)
+    if work.empty:
+        empty_summary = {
+            "label": label,
+            "regular_span_quarters": regular_span,
+            "measure_count": int(measure_spans.shape[0]),
+            "include_rests": bool(include_rests),
+            "edge_measure_mode": edge_mode,
+            "bin_size": resolved_bin_size,
+            "measure_spans": measure_spans.reset_index(name="measure_span_quarters"),
+        }
+        return work, empty_summary
+
+    work["_measure_index"] = work["_measure_index"].astype(int)
+    first_measure = int(work["_measure_index"].min())
+    last_measure = int(work["_measure_index"].max())
+    work["_measure_span_quarters"] = work["_measure_index"].map(measure_spans)
+    work["_expected_span_quarters"] = work["_measure_index"].map(measure_expected_spans)
+
+    onset_raw = work["_local_onset"].astype(float)
+    if edge_mode == "merge_to_regular" and np.isfinite(regular_span):
+        first_mask = (
+            (work["_measure_index"] == first_measure)
+            & (work["_measure_span_quarters"] < regular_span - 1e-6)
+        )
+        if first_mask.any():
+            onset_raw = onset_raw.copy()
+            onset_raw.loc[first_mask] = (
+                onset_raw.loc[first_mask]
+                + (regular_span - work.loc[first_mask, "_measure_span_quarters"].astype(float))
+            ).round(6)
+
+    work["onset_position"] = ((onset_raw / resolved_bin_size).round() * resolved_bin_size).round(6)
+    display_span = work["_measure_span_quarters"].copy()
+    if edge_mode == "merge_to_regular":
+        display_span = work["_expected_span_quarters"].combine_first(display_span)
+    if edge_mode == "merge_to_regular" and np.isfinite(regular_span):
+        edge_mask = (
+            work["_measure_index"].isin([first_measure, last_measure])
+            & (display_span < regular_span - 1e-6)
+        )
+        display_span = display_span.mask(edge_mask, regular_span)
+    work["_display_span_quarters"] = display_span
+
+    summary = {
+        "label": label,
+        "regular_span_quarters": regular_span,
+        "measure_count": int(work["_measure_index"].nunique()),
+        "first_measure_index": first_measure,
+        "last_measure_index": last_measure,
+        "include_rests": bool(include_rests),
+        "edge_measure_mode": edge_mode,
+        "bin_size": resolved_bin_size,
+        "measure_spans": (
+            measure_spans.reset_index(name="measure_span_quarters")
+            .merge(
+                measure_expected_spans.reset_index(name="expected_span_quarters"),
+                on="_measure_index",
+                how="left",
+            )
+        ),
+    }
+    return work, summary
+
+
+def build_timeline_duration_counts(
+    df_timeline: pd.DataFrame,
+    *,
+    label: str = "Timeline",
+    duration_col: str = "duration",
+    drop_zero: bool = True,
+    round_decimals: Optional[int] = 4,
+    normalize: bool = False,
+) -> pd.DataFrame:
+    """Build a duration distribution table from a timeline DataFrame.
+
+    The returned table mirrors the notebook duration-distribution analysis but
+    uses the timeline schema directly. ``count`` contains raw counts by default
+    and per-source proportions when ``normalize=True``; ``share`` is always the
+    proportion for convenience.
+    """
+    durations = _timeline_numeric_col(df_timeline, duration_col, label=label).dropna()
+    if drop_zero:
+        durations = durations[durations != 0]
+    if round_decimals is not None:
+        durations = durations.round(round_decimals)
+
+    counts = durations.value_counts().sort_index()
+    out = counts.rename("count_raw").reset_index()
+    out.columns = [duration_col, "count_raw"]
+    out.insert(0, "source", label)
+    total = float(out["count_raw"].sum())
+    out["share"] = out["count_raw"].astype(float) / total if total > 0 else 0.0
+    out["count"] = out["share"] if normalize else out["count_raw"]
+    return out
+
+
+def build_timeline_onset_position_counts(
+    df_timeline: pd.DataFrame,
+    *,
+    label: str = "Timeline",
+    bin_size: Any = "auto",
+    normalize: bool = True,
+    include_rests: bool = False,
+    edge_measure_mode: str = "merge_to_regular",
+) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+    """Build an onset-position histogram from timeline-local onsets.
+
+    This is the timeline-native counterpart to the common-notation onset
+    histogram in ``analysis_utils``. It needs no pitches: positions are computed
+    from ``local_onset`` and grouped by the timeline's inferred/meter measure
+    span. Pass ``bin_size="auto"`` to quantize onset positions to the smallest
+    positive duration in the timeline after the rest filter is applied.
+    """
+    work, summary = _timeline_prepare_onset_positions(
+        df_timeline,
+        label=label,
+        bin_size=bin_size,
+        include_rests=include_rests,
+        edge_measure_mode=edge_measure_mode,
+    )
+    columns = [
+        "source",
+        "meter_group",
+        "measure_count",
+        "measure_span_quarters",
+        "onset_position",
+        "count_raw",
+        "share",
+        "count",
+    ]
+    if work.empty:
+        return pd.DataFrame(columns=columns), summary
+
+    work["meter_group"] = work["_display_span_quarters"].map(
+        lambda value: f"{float(value):g} quarter lengths" if pd.notna(value) else "unknown meter span"
+    )
+    counts = (
+        work.groupby(["meter_group", "onset_position"], dropna=False)
+        .size()
+        .rename("count_raw")
+        .reset_index()
+        .sort_values(["meter_group", "onset_position"])
+        .reset_index(drop=True)
+    )
+    counts.insert(0, "source", label)
+    measure_counts = work.groupby("meter_group")["_measure_index"].nunique().to_dict()
+    span_values = work.groupby("meter_group")["_display_span_quarters"].first().to_dict()
+    counts.insert(2, "measure_count", counts["meter_group"].map(measure_counts).astype(int))
+    counts.insert(3, "measure_span_quarters", counts["meter_group"].map(span_values))
+    counts["share"] = counts.groupby(["source", "meter_group"])["count_raw"].transform(
+        lambda series: series / series.sum()
+    )
+    counts["count"] = counts["share"] if normalize else counts["count_raw"]
+    return counts[columns], summary
+
+
+def add_timeline_rhythm_analysis(
+    df_timeline: pd.DataFrame,
+    *,
+    label: str = "Timeline",
+    duration_drop_zero: bool = True,
+    duration_round_decimals: Optional[int] = 4,
+    duration_normalize: bool = True,
+    onset_bin_size: Any = "auto",
+    onset_normalize: bool = True,
+    include_rests_for_onsets: bool = False,
+    edge_measure_mode: str = "merge_to_regular",
+    inplace: bool = False,
+) -> pd.DataFrame:
+    """Add duration/onset distribution values to each row of ``df_timeline``.
+
+    The added columns are part of the timeline schema:
+    ``duration_count_raw``, ``duration_share``, ``duration_count``,
+    ``onset_position``, ``onset_position_count_raw``,
+    ``onset_position_share``, and ``onset_position_count``.
+    """
+    out = df_timeline if inplace else df_timeline.copy()
+
+    duration_counts = build_timeline_duration_counts(
+        out,
+        label=label,
+        drop_zero=duration_drop_zero,
+        round_decimals=duration_round_decimals,
+        normalize=duration_normalize,
+    )
+    duration_key = pd.to_numeric(out["duration"], errors="coerce")
+    if duration_round_decimals is not None:
+        duration_key = duration_key.round(duration_round_decimals)
+    duration_lookup = duration_counts.set_index("duration")
+    out["duration_count_raw"] = duration_key.map(duration_lookup["count_raw"])
+    out["duration_share"] = duration_key.map(duration_lookup["share"])
+    out["duration_count"] = duration_key.map(duration_lookup["count"])
+
+    onset_work, _summary = _timeline_prepare_onset_positions(
+        out,
+        label=label,
+        bin_size=onset_bin_size,
+        include_rests=include_rests_for_onsets,
+        edge_measure_mode=edge_measure_mode,
+    )
+    onset_counts, _ = build_timeline_onset_position_counts(
+        out,
+        label=label,
+        bin_size=onset_bin_size,
+        normalize=onset_normalize,
+        include_rests=include_rests_for_onsets,
+        edge_measure_mode=edge_measure_mode,
+    )
+    for col in ["onset_position", "onset_position_count_raw", "onset_position_share", "onset_position_count"]:
+        out[col] = pd.NA
+    if not onset_work.empty and not onset_counts.empty:
+        onset_work["meter_group"] = onset_work["_display_span_quarters"].map(
+            lambda value: f"{float(value):g} quarter lengths" if pd.notna(value) else "unknown meter span"
+        )
+        keyed_counts = onset_counts.rename(
+            columns={
+                "count_raw": "onset_position_count_raw",
+                "share": "onset_position_share",
+                "count": "onset_position_count",
+            }
+        ).set_index(["meter_group", "onset_position"])
+        onset_assign = onset_work[["meter_group", "onset_position"]].copy()
+        joined = onset_assign.join(keyed_counts, on=["meter_group", "onset_position"])
+        out.loc[joined.index, "onset_position"] = joined["onset_position"]
+        out.loc[joined.index, "onset_position_count_raw"] = joined["onset_position_count_raw"]
+        out.loc[joined.index, "onset_position_share"] = joined["onset_position_share"]
+        out.loc[joined.index, "onset_position_count"] = joined["onset_position_count"]
+    return out
 
 
 def _iter_measure_groups(df_timeline: pd.DataFrame):
@@ -563,6 +963,8 @@ def timeline_to_mei(
     lyric_info_fields: Optional[Sequence[str]] = None,
     lyric_info_labels: Optional[Mapping[str, str]] = None,
     lyric_info_separator: str = " ",
+    lyric_info_value_formats: Optional[Mapping[str, str]] = None,
+    lyric_info_max_value_chars: Optional[int] = None,
     lyric_info_verse_n: str = "2",
     lyric_info_layout: str = "combined",
     include_annotations: bool = True,
@@ -572,6 +974,7 @@ def timeline_to_mei(
 ) -> str:
     """Convert a timeline dataframe to MEI note/lyric anchors plus annotations."""
     metadata = dict(metadata or {})
+    info_value_formats = dict(lyric_info_value_formats or {})
     count, unit, _tempo = _scoredef_attrs(df_timeline)
     staff_line_count = max(1, int(staff_lines))
     clef_attrs = ' clef.shape="G" clef.line="2"' if show_clef else ""
@@ -656,6 +1059,8 @@ def timeline_to_mei(
                     info_fields,
                     labels=lyric_info_labels,
                     separator=lyric_info_separator,
+                    value_formats=info_value_formats,
+                    max_value_chars=lyric_info_max_value_chars,
                 )
                 if info_fields
                 else ""
@@ -671,7 +1076,11 @@ def timeline_to_mei(
                 else:
                     verse_start = _lyric_info_verse_start(lyric_info_verse_n)
                     for field_index, field, item_text in _lyric_info_items(
-                        row, info_fields, labels=lyric_info_labels
+                        row,
+                        info_fields,
+                        labels=lyric_info_labels,
+                        value_formats=info_value_formats,
+                        max_value_chars=lyric_info_max_value_chars,
                     ):
                         field_slug = _slug(field, fallback="field")
                         field_info_id = f"{info_id}-{field_slug}"
@@ -740,6 +1149,8 @@ def save_timeline_mei(
     lyric_info_fields: Optional[Sequence[str]] = None,
     lyric_info_labels: Optional[Mapping[str, str]] = None,
     lyric_info_separator: str = " ",
+    lyric_info_value_formats: Optional[Mapping[str, str]] = None,
+    lyric_info_max_value_chars: Optional[int] = None,
     lyric_info_verse_n: str = "2",
     lyric_info_layout: str = "combined",
     include_annotations: bool = True,
@@ -763,6 +1174,8 @@ def save_timeline_mei(
         lyric_info_fields=lyric_info_fields,
         lyric_info_labels=lyric_info_labels,
         lyric_info_separator=lyric_info_separator,
+        lyric_info_value_formats=lyric_info_value_formats,
+        lyric_info_max_value_chars=lyric_info_max_value_chars,
         lyric_info_verse_n=lyric_info_verse_n,
         lyric_info_layout=lyric_info_layout,
         include_annotations=include_annotations,
@@ -804,36 +1217,43 @@ def parse_files_timeline(
     file_sources: Iterable[str],
     *,
     encoding: str = "utf-8",
+    add_rhythm_analysis: bool = False,
+    rhythm_analysis_kwargs: Optional[Mapping[str, Any]] = None,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, pd.DataFrame], Optional[pd.DataFrame]]:
-    """Parse rap/timeline sources without registering a main parser backend."""
+    """Parse rap/timeline sources into ``df_timeline`` result entries."""
     results: List[Dict[str, Any]] = []
     dfs_by_name: Dict[str, pd.DataFrame] = {}
     last_df: Optional[pd.DataFrame] = None
 
     for index, source in enumerate(file_sources):
         parsed = parse_rap_humdrum_source(source, encoding=encoding)
+        df_timeline = parsed.df_timeline
+        if add_rhythm_analysis:
+            kwargs = dict(rhythm_analysis_kwargs or {})
+            kwargs.setdefault("label", _source_name(source))
+            df_timeline = add_timeline_rhythm_analysis(df_timeline, **kwargs)
         name = f"{index:02d}_{_slug(_source_name(source), fallback='timeline')}"
         df_name = f"{name}_timeline"
         entry = {
             "name": name,
             "source": source,
-            "df": parsed.df_timeline,
-            "df_timeline": parsed.df_timeline,
+            "df": df_timeline,
+            "df_timeline": df_timeline,
             "df_name_timeline": df_name,
             "metadata": parsed.metadata,
         }
         results.append(entry)
-        dfs_by_name[df_name] = parsed.df_timeline
-        last_df = parsed.df_timeline
+        dfs_by_name[df_name] = df_timeline
+        last_df = df_timeline
     return results, dfs_by_name, last_df
 
 
-def load_timeline_mei_with_verovio(mei: str) -> int:
+def load_timeline_mei_with_verovio(mei: str, **options: Any) -> int:
     """Load generated timeline MEI into Verovio and return the page count."""
     import verovio  # type: ignore
 
     toolkit = verovio.toolkit()
-    toolkit.setOptions({"inputFrom": "mei"})
+    toolkit.setOptions({"inputFrom": "mei", **options})
     ok = toolkit.loadData(mei)
     pages = int(toolkit.getPageCount())
     if not ok or pages <= 0:

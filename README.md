@@ -17,6 +17,7 @@ pip install camat
 ## What Is Included
 
 - Parsing helpers for `partitura` and `music21` backends.
+- Timeline/rap Humdrum parsing with rhythm-only duration and onset-position summaries.
 - Pattern search and similarity utilities.
 - Piano-roll and overlay visualization helpers.
 - Verovio-based rendering utilities.
@@ -31,6 +32,10 @@ alignment with the rest of the parsing pipeline.
 The `music21` backend is kept as a legacy-compatible alternative. It can now
 emit `df_pitch` and `df_events` for common-notation files as well, but it
 should be treated as a fallback implementation rather than the default parser.
+
+For MCFlow-style rap Humdrum timelines, use `parse_files(...,
+parsing_backend="timeline")`. This returns `df_timeline` rows with stable MEI
+ids and optional rhythm-analysis columns suitable for timeline MEI rendering.
 
 ## Documentation
 
