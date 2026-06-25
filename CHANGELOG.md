@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Added MuseScore-native `.mscz` / `.mscx` support to the Verovio conversion workflow via an optional MuseScore Studio/CLI export step: MuseScore sources are converted to intermediate MusicXML, then passed through the existing Verovio-to-MEI pipeline. The conversion report now records the intermediate MusicXML path and emits a clear optional-dependency message when MuseScore is unavailable.
+
 ## [0.1.10] - 2026-06-07
 
 ### Added
