@@ -17,6 +17,15 @@ import pandas as pd
 from .quiet_utils import _NATIVE_FD_LOCK, suppress_native_output
 
 
+def _ensure_numpy_compat_aliases() -> None:
+    """Restore NumPy aliases still used by supported dependency versions."""
+    if not hasattr(np, "row_stack") and hasattr(np, "vstack"):
+        np.row_stack = np.vstack  # type: ignore[attr-defined]
+
+
+_ensure_numpy_compat_aliases()
+
+
 # -- Verovio main-thread singleton + monkey-patch ---------------------------
 #
 # Verovio's Python toolkit loads its font resources (Bravura, Leipzig, text
