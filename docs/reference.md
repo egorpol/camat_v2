@@ -17,6 +17,12 @@ Use it by default for new work.
 common-notation files and exposes the same top-level result structure, but it
 should be treated as a compatibility option rather than the preferred parser.
 
+`verovio` is available as an experimental common-notation MEI backend via
+`parse_files(..., parsing_backend="verovio")` or the `"vrv"` alias. It reuses
+the CAMAT result shape (`df_pitch`, `df_events`, `measure_offsets`, and
+`barline_events`) and is intended for Partitura parity testing, not as the
+default parser yet. Non-MEI inputs raise a clear error in this first milestone.
+
 For MCFlow-style rap Humdrum timelines, use the `timeline` backend. It emits
 `df_timeline` rows with stable MEI ids and optional rhythm-analysis columns for
 duration and onset-position distributions.
@@ -66,6 +72,10 @@ duration and onset-position distributions.
 ### Partitura backend
 
 ::: camat.partitura_backend
+
+### Verovio backend
+
+::: camat.verovio_backend
 
 ### Pattern search
 

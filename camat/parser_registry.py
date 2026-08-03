@@ -18,6 +18,7 @@ _BACKEND_MAP: Dict[str, Tuple[str, str]] = {
     "partitura": ("camat.partitura_backend", "parse_files_partitura"),
     "mensural": ("camat.mensural_backend", "parse_files_mensural"),
     "timeline": ("camat.timeline_backend", "parse_files_timeline"),
+    "verovio": ("camat.verovio_backend", "parse_files_verovio"),
 }
 
 # Common synonyms for convenience
@@ -29,6 +30,7 @@ _SYNONYMS: Dict[str, str] = {
     "mens": "mensural",
     "rap": "timeline",
     "humdrum-rap": "timeline",
+    "vrv": "verovio",
 }
 
 
@@ -74,6 +76,8 @@ def get_parse_files(backend: str | None = None) -> Callable:
         if name == "partitura":
             hint = " Install 'partitura' via 'pip install partitura'."
         elif name == "mensural":
+            hint = " Install 'verovio' via 'pip install verovio'."
+        elif name == "verovio":
             hint = " Install 'verovio' via 'pip install verovio'."
         elif name == "timeline":
             hint = " Timeline parsing requires pandas, included in CAMAT dependencies."

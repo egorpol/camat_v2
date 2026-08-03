@@ -47,6 +47,7 @@ nav:
           - Parser registry: api/parser_registry.md
           - Parser utils: api/parser_utils.md
           - Partitura backend: api/partitura_backend.md
+          - Verovio backend: api/verovio_backend.md
           - Pattern search: api/pattern_search.md
           - Timeline backend: api/timeline_backend.md
           - Verovio render: api/verovio_render.md

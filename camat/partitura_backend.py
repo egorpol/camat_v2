@@ -186,6 +186,11 @@ from .music_utils import (  # type: ignore
     canonicalize_pitch_name,
     accidental_rank_from_name,
 )
+from .parser_utils import (
+    reanchor_to_measure_offsets,
+    reject_unexpected_kwargs,
+    resolve_collapse_tied_pitch_events,
+)
 from .mensural_utils import (
     DEFAULT_MENSURAL_DURATION_MAP,
     DEFAULT_METER_COUNT,
@@ -930,7 +935,11 @@ def _measure_anchors_for_unique_onsets(
     return starts, nums
 
 
-def _part_note_attachments_by_xml_id(part: Any) -> Dict[str, Dict[str, Any]]:
+def _part_note_attachments_by_xml_id(
+    part: Any,
+    *,
+    use_tied_notes: bool = True,
+) -> Dict[str, Dict[str, Any]]:
     """
     Collect per-note attachment metadata from a partitura Part.
 
@@ -945,7 +954,12 @@ def _part_note_attachments_by_xml_id(part: Any) -> Dict[str, Dict[str, Any]]:
     except Exception:  # pragma: no cover - very old partitura versions
         _GraceNote = None  # type: ignore
 
-    for note in getattr(part, "notes_tied", None) or getattr(part, "notes", []) or []:
+    if use_tied_notes:
+        notes_iter = getattr(part, "notes_tied", None) or getattr(part, "notes", [])
+    else:
+        notes_iter = getattr(part, "notes", None) or []
+
+    for note in notes_iter or []:
         try:
             nid = _clean_xml_id_value(getattr(note, "id", None))
         except Exception:
@@ -1259,12 +1273,24 @@ def _part_to_dataframe(
     parse_enharmonic: bool = False,
     include_xml_ids: bool = False,
     include_note_attachments: bool = False,
+    collapse_tied_pitch_events: bool = True,
 ) -> pd.DataFrame:
     """
     Convert a single partitura Part into a CAMAT-compatible DataFrame.
 
     Vectorized over the part's note_array to avoid per-note Python overhead.
+    When collapse_tied_pitch_events is False, build from part.notes so tied
+    continuation segments remain visible instead of using partitura's collapsed
+    note_array.
     """
+    if not collapse_tied_pitch_events:
+        return _part_notes_to_dataframe(
+            part,
+            parse_enharmonic=parse_enharmonic,
+            include_xml_ids=include_xml_ids,
+            include_note_attachments=include_note_attachments,
+        )
+
     note_array_kwargs: Dict[str, Any] = dict(
         include_metrical_position=True,
         include_divs_per_quarter=True,
@@ -1382,9 +1408,128 @@ def _part_to_dataframe(
     df_part = pd.DataFrame(data)
 
     if include_note_attachments:
-        attachments = _part_note_attachments_by_xml_id(part)
+        attachments = _part_note_attachments_by_xml_id(part, use_tied_notes=True)
         # Always add the columns (NA-filled) so downstream schema is stable
         # whether or not a particular part yielded any attachment rows.
+        id_series = df_part["xml_id"] if "xml_id" in df_part.columns else None
+        for col in _NOTE_ATTACHMENT_COLUMNS:
+            if id_series is None or not attachments:
+                df_part[col] = pd.NA
+                continue
+            df_part[col] = [
+                attachments.get(nid, {}).get(col, pd.NA) if nid else pd.NA
+                for nid in id_series
+            ]
+
+    return df_part
+
+
+def _part_notes_to_dataframe(
+    part: Any,
+    *,
+    parse_enharmonic: bool = False,
+    include_xml_ids: bool = False,
+    include_note_attachments: bool = False,
+) -> pd.DataFrame:
+    """
+    Convert source Note objects into a CAMAT-compatible dataframe.
+
+    Partitura's note_array is based on notes_tied and therefore collapses tied
+    chains. This slower path is used only when callers explicitly request the
+    untied source segmentation.
+    """
+    try:
+        notes = list(getattr(part, "notes", []) or [])
+    except Exception:
+        notes = []
+    if not notes:
+        return pd.DataFrame()
+
+    quarter_map = part.quarter_map
+    measure_map = part.measure_map
+    measure_number_map = part.measure_number_map
+    part_label = (
+        getattr(part, "part_name", None)
+        or getattr(part, "name", None)
+        or getattr(part, "id", None)
+        or ""
+    )
+    part_label_str = str(part_label) if part_label else ""
+
+    rows: List[Dict[str, Any]] = []
+    id_to_spelling: Dict[Any, str] = {}
+    if parse_enharmonic:
+        id_to_spelling, _ = _spelling_from_part_notes(part)
+
+    for note in notes:
+        try:
+            start_t = getattr(getattr(note, "start", None), "t")
+            end_t = getattr(getattr(note, "end", None), "t")
+            onset_q = quarter_map(start_t)
+            end_q = quarter_map(end_t)
+            if isinstance(onset_q, np.ndarray):
+                onset_q = onset_q.item()
+            if isinstance(end_q, np.ndarray):
+                end_q = end_q.item()
+            onset = float(onset_q)
+            duration = float(end_q) - onset
+        except Exception:
+            continue
+        if not np.isfinite(onset) or not np.isfinite(duration):
+            continue
+
+        try:
+            midi = int(getattr(note, "midi_pitch"))
+        except Exception:
+            continue
+
+        try:
+            bounds = measure_map(onset)
+            measure_start_t = bounds[0] if hasattr(bounds, "__getitem__") else bounds
+            measure_start_q = quarter_map(measure_start_t)
+            if isinstance(measure_start_q, np.ndarray):
+                measure_start_q = measure_start_q.item()
+            measure_start = float(measure_start_q)
+        except Exception:
+            measure_start = onset
+
+        try:
+            measure_num_raw = measure_number_map(onset)
+            if isinstance(measure_num_raw, np.ndarray):
+                measure_num_raw = measure_num_raw.item()
+            measure_num = int(measure_num_raw)
+        except Exception:
+            measure_num = 0
+
+        raw_id = getattr(note, "id", None) or getattr(note, "xml_id", None)
+        xml_id = _clean_xml_id_value(raw_id)
+        voice = _format_voice_label(part_label_str, getattr(note, "voice", None))
+        row: Dict[str, Any] = {
+            "Measure": measure_num,
+            "Local Onset": float(onset - measure_start),
+            "Global Onset": onset,
+            "Duration": duration,
+            "Pitch": _midi_to_pitch_name(midi),
+            "MIDI": midi,
+            "Voice": voice,
+        }
+        if include_xml_ids:
+            row["xml_id"] = xml_id
+        if parse_enharmonic:
+            spelled = None
+            if raw_id is not None:
+                spelled = id_to_spelling.get(raw_id)
+            if spelled is None and xml_id is not None:
+                spelled = id_to_spelling.get(xml_id)
+            row["Pitch Enharmonic"] = spelled or row["Pitch"]
+        rows.append(row)
+
+    if not rows:
+        return pd.DataFrame()
+
+    df_part = pd.DataFrame(rows)
+    if include_note_attachments:
+        attachments = _part_note_attachments_by_xml_id(part, use_tied_notes=False)
         id_series = df_part["xml_id"] if "xml_id" in df_part.columns else None
         for col in _NOTE_ATTACHMENT_COLUMNS:
             if id_series is None or not attachments:
@@ -1404,6 +1549,7 @@ def _part_to_rows(
     parse_enharmonic: bool = False,
     include_xml_ids: bool = False,
     include_note_attachments: bool = False,
+    collapse_tied_pitch_events: bool = True,
 ) -> List[Dict[str, Any]]:
     """
     Thin backward-compatible wrapper around _part_to_dataframe.
@@ -1413,6 +1559,7 @@ def _part_to_rows(
         parse_enharmonic=parse_enharmonic,
         include_xml_ids=include_xml_ids,
         include_note_attachments=include_note_attachments,
+        collapse_tied_pitch_events=collapse_tied_pitch_events,
     )
     if df.empty:
         return []
@@ -1545,6 +1692,7 @@ def partitura_score_to_dataframe(
     parse_enharmonic: bool = False,
     include_xml_ids: bool = False,
     include_note_attachments: bool = False,
+    collapse_tied_pitch_events: bool = True,
 ) -> pd.DataFrame:
     """
     Convert a partitura Score into a CAMAT-compatible dataframe.
@@ -1556,6 +1704,7 @@ def partitura_score_to_dataframe(
             parse_enharmonic=parse_enharmonic,
             include_xml_ids=include_xml_ids,
             include_note_attachments=include_note_attachments,
+            collapse_tied_pitch_events=collapse_tied_pitch_events,
         )
         if not part_df.empty:
             frames.append(part_df)
@@ -1624,6 +1773,367 @@ def _partitura_measure_offsets(score) -> List[float]:
         seen.add(key)
         offsets.append(start_quarter)
     return sorted(offsets)
+
+
+def _mei_local_name(tag: Any) -> str:
+    raw = str(tag)
+    return raw.rsplit("}", 1)[-1] if "}" in raw else raw
+
+
+def _mei_xml_id(el: Any) -> Optional[str]:
+    if el is None:
+        return None
+    raw = el.attrib.get("{http://www.w3.org/XML/1998/namespace}id") or el.attrib.get("xml:id")
+    return _normalize_xml_ref(raw)
+
+
+def _mei_duration_to_quarters(
+    el: Any,
+    *,
+    inherited_dur: Optional[str] = None,
+    inherited_dots: Optional[str] = None,
+    fallback: Optional[float] = None,
+) -> Optional[float]:
+    dur_raw = el.attrib.get("dur") or inherited_dur
+    if dur_raw is None:
+        return fallback
+    token = str(dur_raw).strip().lower()
+    base_map = {
+        "maxima": 32.0,
+        "long": 16.0,
+        "longa": 16.0,
+        "breve": 8.0,
+        "brevis": 8.0,
+        "1": 4.0,
+        "2": 2.0,
+        "4": 1.0,
+        "8": 0.5,
+        "16": 0.25,
+        "32": 0.125,
+        "64": 0.0625,
+        "128": 0.03125,
+        "256": 0.015625,
+    }
+    if token in base_map:
+        base = base_map[token]
+    else:
+        try:
+            denom = float(token)
+        except Exception:
+            return fallback
+        if denom <= 0:
+            return fallback
+        base = 4.0 / denom
+
+    dots_raw = el.attrib.get("dots")
+    if dots_raw is None:
+        dots_raw = inherited_dots
+    try:
+        dots = int(float(dots_raw)) if dots_raw is not None else 0
+    except Exception:
+        dots = 0
+    multiplier = 1.0
+    add = 0.5
+    for _ in range(max(0, dots)):
+        multiplier += add
+        add *= 0.5
+    return base * multiplier
+
+
+def _extract_mei_symbolic_note_timing(
+    mei_path: str,
+) -> Tuple[Dict[str, Dict[str, float]], List[float]]:
+    """
+    Extract source-MEI note timing from symbolic durations.
+
+    This intentionally covers the common-notation constructs CAMAT currently
+    compares against Verovio: measures, staves, layers, beams, tuplets, chords,
+    notes, rests, spaces, and mRests. It lets the Partitura backend avoid known
+    importer timing drift while keeping Partitura's pitch/spelling parsing.
+    """
+    if Path(mei_path).suffix.lower() != ".mei":
+        return {}, []
+
+    try:
+        import xml.etree.ElementTree as ET
+
+        root = ET.parse(mei_path).getroot()
+    except Exception:
+        return {}, []
+
+    timing: Dict[str, Dict[str, float]] = {}
+    measure_offsets: List[float] = []
+    current_offset = 0.0
+    regular_span = 4.0
+
+    def _children_named(el: Any, name: str) -> List[Any]:
+        return [child for child in list(el) if _mei_local_name(child.tag) == name]
+
+    def _walk_timed(
+        el: Any,
+        cursor: float,
+        *,
+        inherited_dur: Optional[str] = None,
+        inherited_dots: Optional[str] = None,
+        duration_scale: float = 1.0,
+    ) -> float:
+        name = _mei_local_name(el.tag)
+
+        if name in {"beam", "bTrem", "fTrem"}:
+            for child in list(el):
+                cursor = _walk_timed(
+                    child,
+                    cursor,
+                    inherited_dur=inherited_dur,
+                    inherited_dots=inherited_dots,
+                    duration_scale=duration_scale,
+                )
+            return cursor
+
+        if name == "tuplet":
+            scale = duration_scale
+            try:
+                num = float(el.attrib.get("num", ""))
+                numbase = float(el.attrib.get("numbase", ""))
+                if num > 0 and numbase > 0:
+                    scale *= numbase / num
+            except Exception:
+                pass
+            for child in list(el):
+                cursor = _walk_timed(
+                    child,
+                    cursor,
+                    inherited_dur=el.attrib.get("dur") or inherited_dur,
+                    inherited_dots=el.attrib.get("dots") or inherited_dots,
+                    duration_scale=scale,
+                )
+            return cursor
+
+        if name == "chord":
+            dur = _mei_duration_to_quarters(
+                el,
+                inherited_dur=inherited_dur,
+                inherited_dots=inherited_dots,
+                fallback=0.0,
+            )
+            dur = float(dur or 0.0) * duration_scale
+            for note in _children_named(el, "note"):
+                nid = _mei_xml_id(note)
+                if nid:
+                    note_dur = _mei_duration_to_quarters(
+                        note,
+                        inherited_dur=el.attrib.get("dur") or inherited_dur,
+                        inherited_dots=el.attrib.get("dots") or inherited_dots,
+                        fallback=dur / duration_scale if duration_scale else dur,
+                    )
+                    timing[nid] = {
+                        "Measure": float(len(measure_offsets)),
+                        "Local Onset": float(cursor),
+                        "Global Onset": float(current_offset + cursor),
+                        "Duration": float(note_dur or 0.0) * duration_scale,
+                    }
+            return cursor + dur
+
+        if name == "note":
+            dur = _mei_duration_to_quarters(
+                el,
+                inherited_dur=inherited_dur,
+                inherited_dots=inherited_dots,
+                fallback=0.0,
+            )
+            dur = float(dur or 0.0) * duration_scale
+            nid = _mei_xml_id(el)
+            if nid:
+                timing[nid] = {
+                    "Measure": float(len(measure_offsets)),
+                    "Local Onset": float(cursor),
+                    "Global Onset": float(current_offset + cursor),
+                    "Duration": float(dur),
+                }
+            return cursor + dur
+
+        if name in {"rest", "space"}:
+            dur = _mei_duration_to_quarters(
+                el,
+                inherited_dur=inherited_dur,
+                inherited_dots=inherited_dots,
+                fallback=0.0,
+            )
+            return cursor + (float(dur or 0.0) * duration_scale)
+
+        if name in {"mRest", "multiRest"}:
+            dur = _mei_duration_to_quarters(
+                el,
+                inherited_dur=inherited_dur,
+                inherited_dots=inherited_dots,
+                fallback=regular_span,
+            )
+            return cursor + (float(dur or regular_span) * duration_scale)
+
+        for child in list(el):
+            cursor = _walk_timed(
+                child,
+                cursor,
+                inherited_dur=inherited_dur,
+                inherited_dots=inherited_dots,
+                duration_scale=duration_scale,
+            )
+        return cursor
+
+    for measure in root.iter():
+        if _mei_local_name(measure.tag) != "measure":
+            continue
+        measure_offsets.append(float(current_offset))
+        layer_spans: List[float] = []
+        for staff in _children_named(measure, "staff"):
+            for layer in _children_named(staff, "layer"):
+                span = _walk_timed(layer, 0.0)
+                if np.isfinite(span) and span > 0:
+                    layer_spans.append(float(span))
+        if layer_spans:
+            measure_span = max(layer_spans)
+            if measure_span > 0:
+                regular_span = measure_span
+        else:
+            measure_span = regular_span
+        current_offset += float(measure_span)
+
+    return timing, measure_offsets
+
+
+def _extract_mei_tie_next_map(mei_path: str) -> Dict[str, str]:
+    if Path(mei_path).suffix.lower() != ".mei":
+        return {}
+    try:
+        import xml.etree.ElementTree as ET
+
+        root = ET.parse(mei_path).getroot()
+    except Exception:
+        return {}
+    out: Dict[str, str] = {}
+    for el in root.iter():
+        if _mei_local_name(el.tag) != "tie":
+            continue
+        start = _normalize_xml_ref(el.attrib.get("startid"))
+        end = _normalize_xml_ref(el.attrib.get("endid"))
+        if start and end:
+            out[start] = end
+    return out
+
+
+def _apply_mei_symbolic_timing_to_pitch_df(
+    df_pitch: pd.DataFrame,
+    timing: Mapping[str, Mapping[str, float]],
+    *,
+    collapse_tied_pitch_events: bool,
+    tie_next: Optional[Mapping[str, str]] = None,
+) -> pd.DataFrame:
+    if (
+        not isinstance(df_pitch, pd.DataFrame)
+        or df_pitch.empty
+        or "xml_id" not in df_pitch.columns
+        or not timing
+    ):
+        return df_pitch
+
+    out = df_pitch.copy()
+    tie_next = tie_next or {}
+
+    def _collapsed_duration(xml_id: str, base_duration: float) -> float:
+        if not collapse_tied_pitch_events:
+            return base_duration
+        total = base_duration
+        current = xml_id
+        seen = {xml_id}
+        while current in tie_next:
+            nxt = tie_next[current]
+            if nxt in seen:
+                break
+            seen.add(nxt)
+            nxt_info = timing.get(nxt)
+            if nxt_info is None:
+                break
+            try:
+                total += float(nxt_info.get("Duration", 0.0))
+            except Exception:
+                break
+            current = nxt
+        return total
+
+    for idx, raw_id in out["xml_id"].items():
+        xml_id = _clean_xml_id_value(raw_id)
+        if not xml_id:
+            continue
+        info = timing.get(xml_id)
+        if info is None:
+            continue
+        try:
+            out.at[idx, "Measure"] = int(float(info["Measure"]))
+            out.at[idx, "Local Onset"] = float(info["Local Onset"])
+            out.at[idx, "Global Onset"] = float(info["Global Onset"])
+            out.at[idx, "Duration"] = _collapsed_duration(
+                xml_id,
+                float(info["Duration"]),
+            )
+        except Exception:
+            continue
+
+    return out
+
+
+def _count_mei_symbolic_duration_mismatches(
+    df_pitch: pd.DataFrame,
+    timing: Mapping[str, Mapping[str, float]],
+    *,
+    collapse_tied_pitch_events: bool,
+    tie_next: Optional[Mapping[str, str]] = None,
+    tolerance: float = 1e-6,
+) -> int:
+    if (
+        not isinstance(df_pitch, pd.DataFrame)
+        or df_pitch.empty
+        or "xml_id" not in df_pitch.columns
+        or "Duration" not in df_pitch.columns
+        or not timing
+    ):
+        return 0
+
+    tie_next = tie_next or {}
+
+    def _source_duration(xml_id: str, base_duration: float) -> float:
+        if not collapse_tied_pitch_events:
+            return base_duration
+        total = base_duration
+        current = xml_id
+        seen = {xml_id}
+        while current in tie_next:
+            nxt = tie_next[current]
+            if nxt in seen:
+                break
+            seen.add(nxt)
+            nxt_info = timing.get(nxt)
+            if nxt_info is None:
+                break
+            total += float(nxt_info.get("Duration", 0.0))
+            current = nxt
+        return total
+
+    mismatches = 0
+    for _, row in df_pitch.iterrows():
+        xml_id = _clean_xml_id_value(row.get("xml_id"))
+        if not xml_id:
+            continue
+        info = timing.get(xml_id)
+        if info is None:
+            continue
+        try:
+            parsed_duration = float(row.get("Duration"))
+            expected_duration = _source_duration(xml_id, float(info["Duration"]))
+        except Exception:
+            continue
+        if abs(parsed_duration - expected_duration) > tolerance:
+            mismatches += 1
+    return mismatches
 
 
 def _normalize_xml_ref(raw: Any) -> Optional[str]:
@@ -3142,7 +3652,7 @@ def parse_files_partitura(
     zoom_wheel_dim: Optional[str] = None,
     show_progress: bool = True,
     progress_desc: Optional[str] = None,
-    strip_ties: Optional[bool] = None,
+    collapse_tied_pitch_events: Optional[bool] = None,
     align_accident_schema: bool = False,
     colorize_voices: bool = False,
     palette: Optional[Union[str, Sequence[str]]] = None,
@@ -3164,6 +3674,7 @@ def parse_files_partitura(
     use_remote_cache: bool = True,
     remote_cache_dir: Optional[str] = None,
     n_jobs: int = 1,
+    **deprecated_kwargs: Any,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, pd.DataFrame], Optional[pd.DataFrame]]:
     """
     Parse multiple symbolic music files using partitura, producing CAMAT-ready dataframes.
@@ -3188,6 +3699,8 @@ def parse_files_partitura(
     - `dedupe_weaker_text_events=True` drops duplicate text-like MEI events when a
       stronger anchored copy and an unanchored copy are both present in the source.
       Set it to False to preserve the raw extracted event set.
+    - `collapse_tied_pitch_events=True` collapses tied continuations in `df_pitch`
+      into the tie-start row. Set it to False to preserve source note segments.
     - `quiet_native_warnings=True` suppresses noisy dependency stdout/stderr chatter
       and partitura-emitted `UserWarning`s during loading/conversion while
       preserving CAMAT logs.
@@ -3202,6 +3715,12 @@ def parse_files_partitura(
       sensible default based on CPU count). Display/plot work is always executed
       serially in input order to keep notebook output stable.
     """
+    collapse_tied_pitch_events = resolve_collapse_tied_pitch_events(
+        collapse_tied_pitch_events,
+        deprecated_kwargs,
+    )
+    reject_unexpected_kwargs(deprecated_kwargs, "parse_files_partitura")
+
     if use_verovio_mensural_timing:
         from .mensural_backend import parse_files_mensural
 
@@ -3227,7 +3746,7 @@ def parse_files_partitura(
             zoom_wheel_dim=zoom_wheel_dim,
             show_progress=show_progress,
             progress_desc=progress_desc,
-            strip_ties=strip_ties,
+            collapse_tied_pitch_events=collapse_tied_pitch_events,
             align_accident_schema=align_accident_schema,
             colorize_voices=colorize_voices,
             palette=palette,
@@ -3484,6 +4003,7 @@ def parse_files_partitura(
                         include_xml_ids=include_ids_this_score,
                         include_note_attachments=include_note_attachments
                         and include_ids_this_score,
+                        collapse_tied_pitch_events=collapse_tied_pitch_events,
                     )
                 # For MEI sources, derive note attachments from the XML directly
                 # because partitura's importer does not hydrate slur/fermata/
@@ -3518,6 +4038,36 @@ def parse_files_partitura(
                 with warning_ctx, output_ctx:
                     measure_offsets = _partitura_measure_offsets(score)
                 staff_to_part = _staff_index_to_part_label_map(score)
+                if (
+                    is_mei_source
+                    and not is_mensural_source
+                    and not used_verovio_conversion
+                    and include_ids_this_score
+                    and isinstance(df_raw, pd.DataFrame)
+                    and not df_raw.empty
+                ):
+                    source_timing, source_measure_offsets = _extract_mei_symbolic_note_timing(file_path)
+                    if source_timing:
+                        source_tie_next = _extract_mei_tie_next_map(file_path)
+                        timing_mismatches = _count_mei_symbolic_duration_mismatches(
+                            df_raw,
+                            source_timing,
+                            collapse_tied_pitch_events=collapse_tied_pitch_events,
+                            tie_next=source_tie_next,
+                        )
+                        if timing_mismatches > 0:
+                            df_raw = _apply_mei_symbolic_timing_to_pitch_df(
+                                df_raw,
+                                source_timing,
+                                collapse_tied_pitch_events=collapse_tied_pitch_events,
+                                tie_next=source_tie_next,
+                            )
+                            if source_measure_offsets:
+                                measure_offsets = source_measure_offsets
+                            log(
+                                "Corrected Partitura MEI timing from source symbolic durations: "
+                                f"{timing_mismatches} duration mismatch(es)."
+                            )
                 if is_mensural_source:
                     _log_measure_grid_diagnostics(
                         log,
@@ -3561,6 +4111,10 @@ def parse_files_partitura(
                     filter_zero_duration=filter_zero_duration,
                     adjust_fractional_duration=adjust_fractional_duration,
                 ).reset_index(drop=True)
+                df_processed = reanchor_to_measure_offsets(
+                    df_processed,
+                    measure_offsets,
+                )
 
                 include_ids_this_score = (want_xml_ids and "xml_id" in df_processed.columns)
                 if want_xml_ids and not include_ids_this_score and "xml_id" not in df_processed.columns:
@@ -3784,7 +4338,7 @@ def parse_files_partitura(
                             zoom_wheel_dim=zoom_wheel_dim,
                             show_progress=False,
                             progress_desc=None,
-                            strip_ties=True if strip_ties is None else bool(strip_ties),
+                            collapse_tied_pitch_events=collapse_tied_pitch_events,
                             align_accident_schema=align_accident_schema,
                             colorize_voices=colorize_voices,
                             palette=palette,

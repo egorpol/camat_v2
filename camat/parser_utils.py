@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import bisect
+import math
 from pathlib import Path
 from typing import Any, Callable, Iterable, List, Mapping, Optional, Sequence
 
@@ -9,7 +11,47 @@ __all__ = [
     "expand_file_sources",
     "format_parsed_summary",
     "print_parsed_summary",
+    "reanchor_to_measure_offsets",
+    "reject_unexpected_kwargs",
+    "resolve_collapse_tied_pitch_events",
 ]
+
+
+def reject_unexpected_kwargs(kwargs: Mapping[str, Any], function_name: str) -> None:
+    """Raise a Python-style error for unsupported compatibility kwargs."""
+    if not kwargs:
+        return
+    names = sorted(str(name) for name in kwargs)
+    if len(names) == 1:
+        raise TypeError(f"{function_name}() got an unexpected keyword argument {names[0]!r}")
+    joined = ", ".join(repr(name) for name in names)
+    raise TypeError(f"{function_name}() got unexpected keyword arguments: {joined}")
+
+
+def resolve_collapse_tied_pitch_events(
+    collapse_tied_pitch_events: Optional[bool],
+    legacy_kwargs: Optional[dict[str, Any]] = None,
+    *,
+    default: bool = True,
+) -> bool:
+    """
+    Resolve the explicit tied-pitch-row option and the deprecated strip_ties alias.
+
+    Historically, ``strip_ties`` meant "collapse tied pitch rows" rather than
+    "remove every tie annotation". The new name keeps that scope visible.
+    """
+    if legacy_kwargs is not None and "strip_ties" in legacy_kwargs:
+        legacy_value = legacy_kwargs.pop("strip_ties")
+        if collapse_tied_pitch_events is not None and bool(collapse_tied_pitch_events) != bool(legacy_value):
+            raise ValueError(
+                "Received both collapse_tied_pitch_events and deprecated strip_ties "
+                "with conflicting values."
+            )
+        collapse_tied_pitch_events = bool(legacy_value)
+
+    if collapse_tied_pitch_events is None:
+        return bool(default)
+    return bool(collapse_tied_pitch_events)
 
 
 def expand_file_sources(
@@ -85,6 +127,103 @@ def expand_file_sources(
             expanded.append(source)
 
     return expanded
+
+
+def _finite_float(value: Any) -> Optional[float]:
+    try:
+        number = float(value)
+    except Exception:
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _regular_span_from_offsets(offsets: Sequence[float]) -> Optional[float]:
+    spans = [
+        round(float(b) - float(a), 9)
+        for a, b in zip(offsets, offsets[1:])
+        if math.isfinite(float(a)) and math.isfinite(float(b)) and float(b) > float(a)
+    ]
+    if not spans:
+        return None
+    counts: dict[float, int] = {}
+    for span in spans:
+        counts[span] = counts.get(span, 0) + 1
+    return max(counts, key=lambda span: (counts[span], span))
+
+
+def reanchor_to_measure_offsets(
+    df: pd.DataFrame,
+    measure_offsets: Sequence[Any],
+    *,
+    onset_col: str = "Global Onset",
+    measure_col: str = "Measure",
+    local_onset_col: str = "Local Onset",
+    regular_span: Optional[float] = None,
+    right_align_initial_pickup: bool = True,
+    eps: float = 1e-9,
+) -> pd.DataFrame:
+    """
+    Recompute measure number and local onset from a shared measure-offset grid.
+
+    CAMAT treats ``measure_offsets`` as the authoritative encoded timeline for
+    notebook analysis. This avoids leaking backend-specific measure labels into
+    ``df_pitch`` when a source has pickup or repeated MEI measure numbers.
+    Source labels such as MEI ``@n`` remain available in event metadata.
+    """
+    if not isinstance(df, pd.DataFrame) or df.empty or onset_col not in df.columns:
+        return df
+
+    offsets = sorted({
+        round(number, 9)
+        for value in measure_offsets
+        for number in [_finite_float(value)]
+        if number is not None
+    })
+    if not offsets:
+        return df
+
+    regular = _finite_float(regular_span)
+    if regular is None or regular <= 0:
+        regular = _regular_span_from_offsets(offsets)
+
+    first_span: Optional[float] = None
+    if len(offsets) > 1:
+        first_span = offsets[1] - offsets[0]
+    pickup_local_shift = 0.0
+    if (
+        right_align_initial_pickup
+        and regular is not None
+        and regular > 0
+        and first_span is not None
+        and first_span > 0
+        and first_span < regular - eps
+        and offsets[0] < 0
+    ):
+        pickup_local_shift = float(regular - first_span)
+
+    out = df.copy()
+    measures: list[Any] = []
+    locals_: list[float] = []
+    for raw_onset in out[onset_col].tolist():
+        onset = _finite_float(raw_onset)
+        if onset is None:
+            measures.append(pd.NA)
+            locals_.append(float("nan"))
+            continue
+        idx = bisect.bisect_right(offsets, onset + eps) - 1
+        if idx < 0:
+            idx = 0
+        if idx >= len(offsets):
+            idx = len(offsets) - 1
+        local = float(onset - offsets[idx])
+        if idx == 0 and pickup_local_shift:
+            local += pickup_local_shift
+        measures.append(idx + 1)
+        locals_.append(local)
+
+    out[measure_col] = pd.Series(measures, index=out.index, dtype="Int64")
+    out[local_onset_col] = locals_
+    return out
 
 
 def format_parsed_summary(

@@ -16,6 +16,10 @@ The `music21` backend is retained for legacy compatibility. It can still parse
 common-notation files and now exposes the same high-level result shape
 (`df_pitch` and `df_events`), but it should be treated as a secondary option.
 
+The `verovio` backend is experimental for common-notation MEI:
+`parse_files(..., parsing_backend="verovio")`. It exists to develop native
+Verovio parsing while comparing output against Partitura.
+
 ## Contents
 
 - [Tutorial](tutorial.md)

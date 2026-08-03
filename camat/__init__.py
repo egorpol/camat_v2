@@ -3,6 +3,7 @@ __version__ = "0.1.11"
 from .pattern_search import run_pattern_search
 from .parser_registry import get_parse_files, list_parsers, parse_files_quiet
 from .mensural_backend import parse_files_mensural
+from .verovio_backend import parse_files_verovio
 from .verovio_render import (
     get_toolkit as vrv_get_toolkit,
     vrv_set_options,
@@ -96,6 +97,7 @@ __all__ = [
     'list_parsers',
     'parse_files_quiet',
     'parse_files_mensural',
+    'parse_files_verovio',
     'vrv_get_toolkit',
     'vrv_set_options',
     'vrv_guess_input_from',

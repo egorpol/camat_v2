@@ -14,6 +14,10 @@ from .music_utils import (
     get_file_path,
     is_cached_download,
 )
+from .parser_utils import (
+    reject_unexpected_kwargs,
+    resolve_collapse_tied_pitch_events,
+)
 from .partitura_backend import (
     _EVENT_DF_COLUMNS,
     _align_event_voices_to_pitch_df,
@@ -503,7 +507,7 @@ def parse_files_mensural(
     zoom_wheel_dim: Optional[str] = None,
     show_progress: bool = True,
     progress_desc: Optional[str] = None,
-    strip_ties: Optional[bool] = None,
+    collapse_tied_pitch_events: Optional[bool] = None,
     align_accident_schema: bool = False,
     colorize_voices: bool = False,
     palette: Optional[Union[str, Sequence[str]]] = None,
@@ -524,6 +528,7 @@ def parse_files_mensural(
     use_remote_cache: bool = True,
     remote_cache_dir: Optional[str] = None,
     n_jobs: int = 1,
+    **deprecated_kwargs: Any,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, pd.DataFrame], Optional[pd.DataFrame]]:
     """
     Parse mensural MEI directly on the original Verovio/source timeline.
@@ -532,8 +537,13 @@ def parse_files_mensural(
     notebook/API compatibility; options related to partitura conversion are
     intentionally ignored here.
     """
+    collapse_tied_pitch_events = resolve_collapse_tied_pitch_events(
+        collapse_tied_pitch_events,
+        deprecated_kwargs,
+    )
+    reject_unexpected_kwargs(deprecated_kwargs, "parse_files_mensural")
     del (
-        strip_ties,
+        collapse_tied_pitch_events,
         normalize_mensural_durations,
         inject_missing_meter_signature,
         default_meter_count,
