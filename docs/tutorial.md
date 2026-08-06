@@ -35,6 +35,21 @@ Use `music21` only when you specifically need the legacy parser behavior or
 want a fallback implementation. The `music21` backend is still supported for
 common-notation files, but it is not the recommended first choice.
 
+For experimental native Verovio common-notation MEI parsing, use:
+
+```python
+from camat.parser_registry import parse_files
+
+results, dfs_by_name, last_df = parse_files(
+    ["path/to/score.mei"],
+    parsing_backend="verovio",
+    backend="none",
+)
+```
+
+This backend currently supports MEI only and is developed against Partitura as
+the parity reference.
+
 ## Timeline / Rap Humdrum Parsing
 
 For MCFlow-style rap Humdrum timelines, use the dedicated `timeline` backend:

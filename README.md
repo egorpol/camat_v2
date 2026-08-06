@@ -17,6 +17,7 @@ pip install camat
 ## What Is Included
 
 - Parsing helpers for `partitura` and `music21` backends.
+- Experimental Verovio-backed common-notation MEI parsing.
 - Timeline/rap Humdrum parsing with rhythm-only duration and onset-position summaries.
 - Pattern search and similarity utilities.
 - Piano-roll and overlay visualization helpers.
@@ -32,6 +33,12 @@ alignment with the rest of the parsing pipeline.
 The `music21` backend is kept as a legacy-compatible alternative. It can now
 emit `df_pitch` and `df_events` for common-notation files as well, but it
 should be treated as a fallback implementation rather than the default parser.
+
+An experimental Verovio-backed MEI parser is available as
+`parse_files(..., parsing_backend="verovio")` or `"vrv"`. It is intended for
+native Verovio parity work against Partitura and currently supports
+common-notation MEI only; Partitura remains the recommended backend until the
+parity harness is fully stable.
 
 For MCFlow-style rap Humdrum timelines, use `parse_files(...,
 parsing_backend="timeline")`. This returns `df_timeline` rows with stable MEI

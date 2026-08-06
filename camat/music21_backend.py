@@ -13,6 +13,10 @@ from .music_utils import (  # type: ignore
     get_measure_offsets,
     canonicalize_pitch_name,
 )
+from .parser_utils import (
+    reject_unexpected_kwargs,
+    resolve_collapse_tied_pitch_events,
+)
 
 try:  # pragma: no cover - optional dependency (progress bar)
     from tqdm.auto import tqdm as _tqdm
@@ -362,7 +366,7 @@ def parse_files(
     zoom_wheel_dim: Optional[str] = None,
     show_progress: bool = True,
     progress_desc: Optional[str] = None,
-    strip_ties: bool = True,
+    collapse_tied_pitch_events: Optional[bool] = None,
     align_accident_schema: bool = False,
     colorize_voices: bool = False,
     palette: Optional[Union[str, Sequence[str]]] = None,
@@ -371,6 +375,7 @@ def parse_files(
     allow_music21_fallback: bool = True,
     dedupe_weaker_text_events: bool = True,
     quiet_native_warnings: bool = False,
+    **deprecated_kwargs: Any,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, pd.DataFrame], Optional[pd.DataFrame]]:
     """
     Parse multiple symbolic music files using music21.
@@ -387,6 +392,11 @@ def parse_files(
     - allow_music21_fallback
     - quiet_native_warnings
     """
+    collapse_tied_pitch_events = resolve_collapse_tied_pitch_events(
+        collapse_tied_pitch_events,
+        deprecated_kwargs,
+    )
+    reject_unexpected_kwargs(deprecated_kwargs, "parse_files")
     del try_verovio_mei_conversion, allow_music21_fallback, quiet_native_warnings
 
     results: List[Dict[str, Any]] = []
@@ -419,7 +429,7 @@ def parse_files(
                 from music21 import pitch as pitch_module  # lazy import
 
                 score = _converter.parse(file_path)
-                if strip_ties:
+                if collapse_tied_pitch_events:
                     try:
                         score = score.stripTies(inPlace=False)
                     except Exception:

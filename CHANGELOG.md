@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Added an experimental Verovio-backed common-notation MEI parser via `parse_files(..., parsing_backend="verovio")` and the `"vrv"` alias. The first milestone preserves CAMAT's `df_pitch` / `df_events` result shape for MEI sources, keeps Partitura as the parity reference, and adds `scripts/test_verovio_common_parser.py` as the structural comparison harness for the three current notebook MEI fixtures.
+
+### Changed
+
+- Normalized `df_pitch.Measure` and `df_pitch.Local Onset` against CAMAT's shared `measure_offsets` grid after parsing, so Partitura and Verovio outputs use the same encoded-measure ordinal and right-aligned initial-pickup convention instead of leaking backend-specific measure labels.
+- Replaced the ambiguous `strip_ties` parser option with `collapse_tied_pitch_events`, which controls only whether tied continuations are collapsed in `df_pitch`; MEI tie rows remain part of the complete `df_events` event parse. The deprecated `strip_ties` keyword is still accepted as a compatibility alias.
+- Made Partitura parsing honor `collapse_tied_pitch_events=False` by building `df_pitch` from source note segments instead of Partitura's tied-note `note_array()` view, allowing untied Verovio/Partitura comparisons to align.
+- Aligned the Verovio backend's collapsed tied-note handling with Partitura for note-level MEI tie continuations (`tie="m"` / `tie="t"`), including orphan continuation rows without explicit `<tie startid="..." endid="...">` links.
+- Corrected common-notation MEI note timing in the Partitura backend from source symbolic durations when Partitura's importer drifts, fixing the Mozart fugue double-dotted duration at `d1e26843` and the resulting one-quarter onset shift.
+
+## [0.1.11] - 2026-07-07
+
+### Added
+
+- Added MuseScore-native `.mscz` / `.mscx` support to the Verovio conversion workflow via an optional MuseScore Studio/CLI export step: MuseScore sources are converted to intermediate MusicXML, then passed through the existing Verovio-to-MEI pipeline. The conversion report now records the intermediate MusicXML path and emits a clear optional-dependency message when MuseScore is unavailable.
+
+### Fixed
+
+- Restored the NumPy `row_stack` alias before importing Partitura so Partitura 1.9.0 can run under newer NumPy builds that no longer expose `np.row_stack`.
+
 ## [0.1.10] - 2026-06-07
 
 ### Added

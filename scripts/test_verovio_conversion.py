@@ -11,10 +11,11 @@ If your shell exposes a py310 launcher, this should also work:
 The script downloads the configured test sources, converts non-MEI inputs to
 MEI in a subprocess, passes existing MEI through unchanged, writes generated
 MEI files under converted_mei/, and emits a compact JSON report plus a terminal
-summary. It supports plain and compressed MusicXML, textual Humdrum/Kern, and
-an opt-in MIDI fallback through music21 -> MusicXML -> Verovio. The subprocess
-boundary is intentional: Verovio is native code, and this keeps a single
-failing score from taking down the whole test run.
+summary. It supports plain and compressed MusicXML, textual Humdrum/Kern,
+MuseScore-native files through MuseScore -> MusicXML -> Verovio, and an opt-in
+MIDI fallback through music21 -> MusicXML -> Verovio. The subprocess boundary
+is intentional: Verovio is native code, and this keeps a single failing score
+from taking down the whole test run.
 """
 from __future__ import annotations
 
@@ -25,8 +26,10 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
+import threading
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
@@ -51,6 +54,48 @@ DEFAULT_SOURCES: List[str] = [
 ]
 
 XML_ID_ATTR = "{http://www.w3.org/XML/1998/namespace}id"
+MUSESCORE_REQUIRED_MESSAGE = (
+    "MSCZ input requires MuseScore Studio/CLI. Please install MuseScore or convert "
+    "the file to MusicXML/MXL/MEI before using CAMAT."
+)
+MUSESCORE_EXTENSIONS = {".mscz", ".mscx", ".musescore", ".mscore", ".ms"}
+_MUSESCORE_LOCK = threading.Lock()
+
+MUSESCORE_EXPORT_CHILD = r"""
+import json
+import pathlib
+import subprocess
+import sys
+
+musescore_bin = sys.argv[1]
+source_path = pathlib.Path(sys.argv[2])
+target_path = pathlib.Path(sys.argv[3])
+target_path.parent.mkdir(parents=True, exist_ok=True)
+
+cmd = [
+    musescore_bin,
+    "-o",
+    str(target_path),
+    str(source_path),
+    "-f",
+]
+proc = subprocess.run(
+    cmd,
+    capture_output=True,
+    text=True,
+    check=False,
+)
+ok = proc.returncode == 0 and target_path.exists() and target_path.stat().st_size > 0
+print(json.dumps({
+    "ok": ok,
+    "returncode": proc.returncode,
+    "stdout": proc.stdout,
+    "stderr": proc.stderr,
+    "command": cmd,
+    "output": str(target_path),
+}))
+raise SystemExit(0 if ok else 1)
+"""
 
 CONVERT_CHILD = r"""
 import base64
@@ -143,16 +188,41 @@ def _source_extension(path: Path) -> str:
 
 
 def _is_binary_score_source(path: Path) -> bool:
-    return _source_extension(path) in {".mxl", ".mid", ".midi"}
+    return _source_extension(path) in {".mxl", ".mid", ".midi", ".mscz"}
 
 
 def _guess_source_format(path: Path, source_text: Optional[str]) -> Optional[str]:
     ext = _source_extension(path)
+    if ext in MUSESCORE_EXTENSIONS:
+        return "musescore"
     if ext == ".mxl":
         return "musicxml-zip"
     if ext in {".mid", ".midi"}:
         return "midi"
     return vrv_guess_input_from(str(path), source_text)
+
+
+def _find_musescore_executable() -> str:
+    configured = os.environ.get("MUSESCORE_BIN")
+    candidates = [
+        configured,
+        "musescore4",
+        "mscore4",
+        "musescore",
+        "mscore",
+        "MuseScore-Studio",
+        "MuseScore",
+    ]
+    for candidate in candidates:
+        if not candidate:
+            continue
+        resolved = shutil.which(candidate)
+        if resolved:
+            return resolved
+        candidate_path = Path(candidate).expanduser()
+        if candidate_path.exists() and os.access(candidate_path, os.X_OK):
+            return str(candidate_path)
+    raise RuntimeError(MUSESCORE_REQUIRED_MESSAGE)
 
 
 def _resolve_n_jobs(n_jobs: int, item_count: int) -> int:
@@ -253,6 +323,56 @@ def _midi_to_musicxml_path(source_path: Path, output_dir: Path) -> Path:
     return musicxml_path
 
 
+def _musescore_to_musicxml_path(source_path: Path, output_dir: Path, timeout: int) -> Path:
+    musescore_bin = _find_musescore_executable()
+    intermediate_dir = output_dir / "_intermediate_musicxml"
+    intermediate_dir.mkdir(parents=True, exist_ok=True)
+    target = intermediate_dir / f"{_safe_stem(str(source_path))}_{_sha12(str(source_path.resolve()))}.musicxml"
+
+    cmd = [
+        sys.executable,
+        "-c",
+        MUSESCORE_EXPORT_CHILD,
+        musescore_bin,
+        str(source_path),
+        str(target),
+    ]
+    with _MUSESCORE_LOCK:
+        proc = None
+        for _attempt in range(2):
+            proc = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                check=False,
+            )
+            if proc.returncode == 0:
+                break
+    assert proc is not None
+    if proc.returncode != 0:
+        child_info: Dict[str, Any] = {}
+        try:
+            child_info = json.loads((proc.stdout or "{}").strip().splitlines()[-1])
+        except Exception:
+            child_info = {}
+        if child_info:
+            detail = str(child_info.get("stderr") or child_info.get("stdout") or "").strip()
+        else:
+            detail = (proc.stderr or proc.stdout or "").strip()
+        failed_cmd = child_info.get("command") or cmd
+        raise RuntimeError(
+            f"{MUSESCORE_REQUIRED_MESSAGE} MuseScore command failed "
+            f"(returncode={child_info.get('returncode', proc.returncode)}, command={' '.join(failed_cmd)}"
+            f"{', stderr=' + detail if detail else ''})"
+        )
+    if not target.exists() or target.stat().st_size == 0:
+        raise RuntimeError(
+            f"{MUSESCORE_REQUIRED_MESSAGE} MuseScore did not produce MusicXML for source: {source_path}"
+        )
+    return target
+
+
 def _shorten(value: str, max_len: int = 74) -> str:
     if len(value) <= max_len:
         return value
@@ -278,12 +398,13 @@ def _convert_one(
         "overwritten": False,
         "message": None,
         "error": None,
+        "intermediate_musicxml": None,
     }
     try:
         source_path = _fetch_source(source, output_dir / "_sources", timeout)
         source_text = None if _is_binary_score_source(source_path) else source_path.read_text(encoding="utf-8", errors="ignore")
         input_from = _guess_source_format(source_path, source_text)
-        if input_from not in {"mei", "musicxml", "musicxml-zip", "humdrum", "midi"}:
+        if input_from not in {"mei", "musicxml", "musicxml-zip", "humdrum", "midi", "musescore"}:
             raise ValueError(f"Could not infer Verovio inputFrom for {source}")
 
         if input_from == "mei":
@@ -308,6 +429,10 @@ def _convert_one(
         musicxml_intermediate: Optional[Path] = None
         if input_from == "midi":
             musicxml_intermediate = _midi_to_musicxml_path(source_path, output_dir)
+            child_source_path = musicxml_intermediate
+            child_input_from = "musicxml"
+        elif input_from == "musescore":
+            musicxml_intermediate = _musescore_to_musicxml_path(source_path, output_dir, timeout)
             child_source_path = musicxml_intermediate
             child_input_from = "musicxml"
 
@@ -354,6 +479,8 @@ def _convert_one(
                 "message": (
                     "Converted MIDI to MusicXML with music21, then converted with Verovio."
                     if input_from == "midi"
+                    else "Converted MuseScore source to MusicXML with MuseScore, then converted with Verovio."
+                    if input_from == "musescore"
                     else "Converted with Verovio."
                 ),
                 "intermediate_musicxml": str(musicxml_intermediate.resolve()) if musicxml_intermediate else None,
