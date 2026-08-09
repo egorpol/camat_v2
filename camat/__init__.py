@@ -1,4 +1,4 @@
-__version__ = "0.1.11"
+__version__ = "0.1.12"
 
 from .pattern_search import run_pattern_search
 from .parser_registry import get_parse_files, list_parsers, parse_files_quiet

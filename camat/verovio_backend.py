@@ -32,9 +32,13 @@ from .partitura_backend import (
     _extract_mei_note_attachments,
     _format_voice_label,
     _mei_event_merge_key,
+    _mei_initial_meter_span,
+    _mei_measure_meter_spans,
+    _mei_music_measures,
     _midi_to_pitch_name,
     _normalize_xml_ref,
     _other_mei_events_to_dataframe,
+    _source_staff_index_to_part_label_map_from_mei,
     _source_to_name,
 )
 from .quiet_utils import suppress_native_output
@@ -75,11 +79,13 @@ def _mei_accid_to_suffix(raw: Any) -> str:
         return ""
     mapping = {
         "s": "#",
+        "ns": "#",
         "ss": "##",
         "x": "##",
         "xs": "###",
         "ts": "###",
         "f": "b",
+        "nf": "b",
         "ff": "bb",
         "tf": "bbb",
         "n": "",
@@ -98,11 +104,13 @@ def _mei_accid_to_alter(raw: Any) -> Optional[int]:
         return None
     mapping = {
         "s": 1,
+        "ns": 1,
         "ss": 2,
         "x": 2,
         "xs": 3,
         "ts": 3,
         "f": -1,
+        "nf": -1,
         "ff": -2,
         "tf": -3,
         "n": 0,
@@ -221,43 +229,6 @@ def _mei_duration_quarters(el: Any) -> Optional[float]:
     return total
 
 
-def _source_staff_index_to_part_label_map_from_mei(root: Any) -> Dict[str, str]:
-    mapping: Dict[str, str] = {}
-    staff_defs = [el for el in root.iter() if _local_name(el.tag) == "staffDef"]
-    for idx, staff_def in enumerate(staff_defs, start=1):
-        staff_n = _first_token(staff_def.attrib.get("n")) or str(idx)
-        if staff_n in mapping:
-            continue
-        label_text = None
-        for child in list(staff_def):
-            if _local_name(child.tag) != "label":
-                continue
-            text = " ".join(" ".join(child.itertext()).split())
-            if text:
-                label_text = text
-                break
-        mapping[str(staff_n)] = str(label_text or f"P{staff_n}").strip()
-    return mapping
-
-
-def _infer_meter_span(root: Any) -> Optional[float]:
-    for el in root.iter():
-        if _local_name(el.tag) not in {"scoreDef", "staffDef", "meterSig"}:
-            continue
-        count = el.attrib.get("meter.count") or el.attrib.get("count")
-        unit = el.attrib.get("meter.unit") or el.attrib.get("unit")
-        if count is None or unit is None:
-            continue
-        try:
-            count_f = float(str(count).strip().split("+")[0])
-            unit_f = float(unit)
-            if count_f > 0 and unit_f > 0:
-                return count_f * (4.0 / unit_f)
-        except Exception:
-            continue
-    return None
-
-
 def _midi_quarter_scale(root: Any, tk: Any) -> float:
     for el in root.iter():
         if _local_name(el.tag) not in {"note", "chord"}:
@@ -343,6 +314,7 @@ def _midi_time_duration_quarters(
     scale: float,
     fallback_duration: Optional[float] = None,
     timemap: Optional[Mapping[str, Tuple[float, Optional[float]]]] = None,
+    quiet_native_warnings: bool = False,
 ) -> Tuple[Optional[float], Optional[float], Optional[int]]:
     if not xml_id:
         return None, fallback_duration, None
@@ -350,10 +322,11 @@ def _midi_time_duration_quarters(
     if timemap is not None and norm_id in timemap:
         onset, duration = timemap[norm_id]
         return onset, duration if duration is not None else fallback_duration, None
-    try:
-        midi = tk.getMIDIValuesForElement(xml_id)
-    except Exception:
-        midi = {}
+    with suppress_native_output(enabled=quiet_native_warnings):
+        try:
+            midi = tk.getMIDIValuesForElement(xml_id)
+        except Exception:
+            midi = {}
     if not isinstance(midi, dict):
         midi = {}
 
@@ -536,41 +509,45 @@ def _verovio_common_mei_dataframes(
     scale = _MIDI_MS_PER_QUARTER_FALLBACK
     with suppress_native_output(enabled=quiet_native_warnings):
         timemap = _verovio_timemap_timing(tk)
-    meter_span = _infer_meter_span(root)
-
     rows: List[Dict[str, Any]] = []
     timed_rows: List[Dict[str, Any]] = []
     missing_timed_ids = 0
     measure_onsets_unshifted: Dict[int, List[float]] = {}
     measure_ends_unshifted: Dict[int, List[float]] = {}
 
-    measure_elements = [el for el in root.iter() if _local_name(el.tag) == "measure"]
+    measure_elements = _mei_music_measures(root)
+    initial_meter_span = _mei_initial_meter_span(root)
+    meter_spans = _mei_measure_meter_spans(
+        root,
+        measure_elements,
+        fallback=initial_meter_span,
+    )
     active_measure_index: Dict[int, int] = {}
     for pre_idx, pre_measure_el in enumerate(measure_elements, start=1):
-        has_timed_id = False
+        has_timed_content = False
         for pre_staff in [el for el in pre_measure_el.iter() if _local_name(el.tag) == "staff"]:
             pre_layers = [child for child in list(pre_staff) if _local_name(child.tag) == "layer"] or [pre_staff]
             for pre_layer in pre_layers:
-                for pre_timed_el, _pre_mult in _iter_layer_timed_children(pre_layer):
-                    if _xml_id(pre_timed_el):
-                        has_timed_id = True
-                        break
-                    if _local_name(pre_timed_el.tag) == "chord" and any(
-                        _xml_id(ch) for ch in list(pre_timed_el) if _local_name(ch.tag) == "note"
-                    ):
-                        has_timed_id = True
-                        break
-                if has_timed_id:
+                for _ in _iter_layer_timed_children(pre_layer):
+                    has_timed_content = True
                     break
-            if has_timed_id:
+                if has_timed_content:
+                    break
+            if has_timed_content:
                 break
-        if has_timed_id:
+        if has_timed_content:
             active_measure_index[pre_idx] = len(active_measure_index) + 1
 
     measure_start_unshifted = 0.0
+    previous_meter_span: Optional[float] = None
     for measure_index, measure_el in enumerate(measure_elements, start=1):
         if measure_index not in active_measure_index:
             continue
+        meter_span = meter_spans.get(id(measure_el), initial_meter_span)
+        meter_changed = (
+            previous_meter_span is not None
+            and abs(float(meter_span) - float(previous_meter_span)) > 1e-6
+        )
         measure_num = _measure_number(measure_el, active_measure_index[measure_index])
         layer_end_positions: List[float] = []
         staff_elements = [el for el in list(measure_el) if _local_name(el.tag) == "staff"]
@@ -607,6 +584,7 @@ def _verovio_common_mei_dataframes(
                         scale=scale,
                         fallback_duration=fallback_duration,
                         timemap=timemap,
+                        quiet_native_warnings=quiet_native_warnings,
                     )
                     del fallback_onset
                     duration_q = fallback_duration if fallback_duration is not None else fallback_duration_from_vrv
@@ -641,8 +619,6 @@ def _verovio_common_mei_dataframes(
 
                     for note_el in note_elements:
                         note_id = _xml_id(note_el)
-                        if not note_id:
-                            continue
                         note_onset = onset_q
                         note_duration = duration_q
                         note_pitch = None
@@ -654,15 +630,26 @@ def _verovio_common_mei_dataframes(
                             child_duration_fallback = _mei_duration_quarters(note_el)
                             if child_duration_fallback is not None:
                                 child_duration_fallback = float(child_duration_fallback) * float(duration_multiplier)
+                            symbolic_child_duration = (
+                                child_duration_fallback
+                                if child_duration_fallback is not None
+                                else duration_q
+                            )
                             child_onset, child_duration, child_pitch = _midi_time_duration_quarters(
                                 tk,
                                 note_id,
                                 scale=scale,
-                                fallback_duration=child_duration_fallback or duration_q,
+                                fallback_duration=symbolic_child_duration,
                                 timemap=timemap,
+                                quiet_native_warnings=quiet_native_warnings,
                             )
                             del child_onset
-                            if child_duration is not None:
+                            # Verovio playback timing can be approximate for
+                            # tuplets. Prefer exact source-MEI symbolic values
+                            # whenever the chord or note supplies them.
+                            if symbolic_child_duration is not None:
+                                note_duration = symbolic_child_duration
+                            elif child_duration is not None:
                                 note_duration = child_duration
                             if note_pitch is None and child_pitch is not None:
                                 note_pitch = child_pitch
@@ -692,10 +679,42 @@ def _verovio_common_mei_dataframes(
                     if duration_q is not None and np.isfinite(float(duration_q)):
                         cursor += max(0.0, float(duration_q))
                 layer_end_positions.append(cursor)
-        measure_span = max(layer_end_positions) if layer_end_positions else 0.0
+        actual_measure_span = max(layer_end_positions) if layer_end_positions else 0.0
+        regular_measure_span = float(meter_span or 0.0)
+        # Humdrum-to-MEI conversion uses an unnumbered measure for short
+        # transition/anacrusis fragments even when it omits @metcon="false".
+        is_irregular = (
+            str(measure_el.attrib.get("metcon", "")).strip().lower() == "false"
+            or not str(measure_el.attrib.get("n", "")).strip()
+        )
+        is_initial_pickup = (
+            len(active_measure_index) > 0
+            and active_measure_index[measure_index] == 1
+            and regular_measure_span > 0
+            and 0 < actual_measure_span < regular_measure_span
+        )
+        is_section_boundary = str(measure_el.attrib.get("right", "")).strip().lower() in {
+            "dbl",
+            "end",
+        }
+        content_defines_span = (
+            is_irregular
+            or is_initial_pickup
+            or is_section_boundary
+            or actual_measure_span > regular_measure_span + 1e-6
+            or (
+                meter_changed
+                and 0 < actual_measure_span < regular_measure_span - 1e-6
+            )
+        )
+        if content_defines_span and actual_measure_span > 0:
+            measure_span = actual_measure_span
+        else:
+            measure_span = regular_measure_span or actual_measure_span
         if (not np.isfinite(measure_span)) or measure_span <= 0:
-            measure_span = float(meter_span or 0.0)
+            measure_span = actual_measure_span
         measure_start_unshifted += max(0.0, float(measure_span))
+        previous_meter_span = meter_span
 
     first_span = 0.0
     if measure_onsets_unshifted:
@@ -704,7 +723,24 @@ def _verovio_common_mei_dataframes(
         ends = measure_ends_unshifted.get(first_idx, [])
         if starts and ends:
             first_span = max(0.0, float(max(ends) - min(starts)))
-    pickup_shift = -first_span if meter_span and first_span and first_span < (meter_span - 1e-6) else 0.0
+    first_measure_el = next(
+        (
+            measure_el
+            for idx, measure_el in enumerate(measure_elements, start=1)
+            if active_measure_index.get(idx) == 1
+        ),
+        None,
+    )
+    first_meter_span = (
+        meter_spans.get(id(first_measure_el), initial_meter_span)
+        if first_measure_el is not None
+        else initial_meter_span
+    )
+    pickup_shift = (
+        -first_span
+        if first_meter_span and first_span and first_span < (first_meter_span - 1e-6)
+        else 0.0
+    )
 
     measure_offsets: List[float] = []
     measure_start_by_index: Dict[int, float] = {}
@@ -734,9 +770,9 @@ def _verovio_common_mei_dataframes(
         if (
             measure_idx == min(measure_start_by_index.keys(), default=measure_idx)
             and pickup_shift < 0
-            and meter_span
+            and first_meter_span
         ):
-            return float(max(0.0, meter_span + local - first_span))
+            return float(max(0.0, first_meter_span + local - first_span))
         return float(local)
 
     df_pitch = pd.DataFrame(rows)
@@ -761,7 +797,8 @@ def _verovio_common_mei_dataframes(
     if not df_pitch.empty:
         df_pitch = df_pitch.sort_values(["Global Onset", "MIDI"], kind="stable").reset_index(drop=True)
         if include_xml_ids and "xml_id" in df_pitch.columns:
-            df_pitch = df_pitch.drop_duplicates("xml_id", keep="first").reset_index(drop=True)
+            duplicate_id = df_pitch["xml_id"].notna() & df_pitch["xml_id"].duplicated(keep="first")
+            df_pitch = df_pitch[~duplicate_id].reset_index(drop=True)
     df_pitch = df_pitch[expected]
 
     timed_expected = [
@@ -895,11 +932,11 @@ def parse_files_verovio(
     **deprecated_kwargs: Any,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, pd.DataFrame], Optional[pd.DataFrame]]:
     """
-    Experimental common-notation MEI parser backed by Verovio and source MEI.
+    Common-notation MEI parser backed by Verovio and source MEI.
 
-    The first milestone intentionally supports MEI sources only. Partitura-like
-    kwargs are accepted for notebook compatibility; options specific to other
-    backends are ignored.
+    This backend intentionally supports MEI sources only. Convert other score
+    formats to MEI before parsing. Partitura-like kwargs are accepted for
+    notebook compatibility; options specific to other backends are ignored.
     """
     collapse_tied_pitch_events = resolve_collapse_tied_pitch_events(
         collapse_tied_pitch_events,
@@ -1130,7 +1167,7 @@ def parse_files_verovio(
                     "measure_offsets": measure_offsets,
                     "barline_events": barline_events,
                     "parser_backend": "verovio",
-                    "experimental": True,
+                    "experimental": False,
                 }
                 if return_plots:
                     result_entry["plot"] = plot_obj

@@ -7,12 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.12] - 2026-08-09
+
 ### Added
 
-- Added an experimental Verovio-backed common-notation MEI parser via `parse_files(..., parsing_backend="verovio")` and the `"vrv"` alias. The first milestone preserves CAMAT's `df_pitch` / `df_events` result shape for MEI sources, keeps Partitura as the parity reference, and adds `scripts/test_verovio_common_parser.py` as the structural comparison harness for the three current notebook MEI fixtures.
+- Added an installed-wheel release test pipeline for Python 3.11 through 3.14,
+  including fresh local virtual environments, offline package smoke fixtures,
+  a GitHub Actions compatibility matrix, and a publishing gate that requires
+  all supported Python versions to pass before a tagged release is built.
+- Raised the minimum supported Python version to 3.11 so every supported
+  interpreter can install a current Verovio wheel.
+- Added a Verovio-backed common-notation MEI parser via `parse_files(..., parsing_backend="verovio")` and the `"vrv"` alias. It preserves CAMAT's `df_pitch` / `df_events` result shape for MEI sources, keeps Partitura as the parity reference, and includes `scripts/test_verovio_common_parser.py` as its structural comparison harness.
 
 ### Changed
 
+- Made the Verovio MEI parser the registry default. Partitura remains the
+  ground-truth backend for parity testing, while non-MEI analysis sources are
+  expected to be converted to MEI first.
+- Generalized the converter's music21 bridge from MIDI-only input to any format
+  music21 can read: unsupported source -> MusicXML -> Verovio -> MEI. Verovio
+  still performs the final conversion, and conversion reports now record the
+  selected route.
 - Normalized `df_pitch.Measure` and `df_pitch.Local Onset` against CAMAT's shared `measure_offsets` grid after parsing, so Partitura and Verovio outputs use the same encoded-measure ordinal and right-aligned initial-pickup convention instead of leaking backend-specific measure labels.
 - Replaced the ambiguous `strip_ties` parser option with `collapse_tied_pitch_events`, which controls only whether tied continuations are collapsed in `df_pitch`; MEI tie rows remain part of the complete `df_events` event parse. The deprecated `strip_ties` keyword is still accepted as a compatibility alias.
 - Made Partitura parsing honor `collapse_tied_pitch_events=False` by building `df_pitch` from source note segments instead of Partitura's tied-note `note_array()` view, allowing untied Verovio/Partitura comparisons to align.

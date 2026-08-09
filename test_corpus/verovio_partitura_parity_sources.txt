@@ -1,0 +1,27 @@
+# Curated common-notation MEI sources for Verovio / Partitura parser parity.
+#
+# Keep this list smaller and more diverse than mei_test_copora_links.txt. Add a
+# source when it represents a distinct encoding family or parser construct,
+# not merely another movement from an already-covered corpus.
+
+# MEI sample encodings: schema/version and large-score coverage.
+https://raw.githubusercontent.com/music-encoding/sample-encodings/main/MEI_5.0/Music/Complete_examples/Bach-JS_Ein_feste_Burg.mei
+https://raw.githubusercontent.com/music-encoding/sample-encodings/main/MEI_3.0/Music/Complete_examples/Mozart_Fuge_G_minor.mei
+https://raw.githubusercontent.com/music-encoding/sample-encodings/main/MEI_5.1/Music/Complete_examples/Bach-JS_BrandenburgConcert_No4_I_BWV1049.mei
+https://raw.githubusercontent.com/music-encoding/sample-encodings/main/MEI_5.1/Music/Complete_examples/Brahms_StringQuartet_Op51_No1.mei
+https://raw.githubusercontent.com/music-encoding/sample-encodings/main/MEI_5.1/Music/Complete_examples/Chopin_Etude_Op10_No9.mei
+
+# Rich modern Henle/TROMPA encoding.
+https://raw.githubusercontent.com/trompamusic-encodings/Beethoven_Op31_No3_HenleUrtext/refs/heads/master/Beethoven_Op31_No3_3-HenleUrtext.mei
+
+# Independent modern-edition families.
+test_corpus/dmeref_46d-001_1485.mei
+https://raw.githubusercontent.com/SEILSdataset/SEILSdataset/master/SEILSdataset/SEILS_with_annotations/Marenzio/marenzio_mentrelaura_mn.mei
+
+# Focused diagnostics: unusual accidentals and source notes without xml:id.
+https://raw.githubusercontent.com/music-encoding/sample-encodings/main/MEI_5.1/Musical-features/snippets/special_features.mei
+https://raw.githubusercontent.com/BeethovensWerkstatt/data/dev/data/module2/works/BRA2_Adagio.mei
+
+# Regression for Partitura onset drift around undurated <space> placeholders.
+# CAMAT corrects the imported timeline from the source MEI's symbolic meter.
+https://raw.githubusercontent.com/music-encoding/sample-encodings/main/MEI_5.1/Music/Complete_examples/Schumann_Song_Op48_No1.mei

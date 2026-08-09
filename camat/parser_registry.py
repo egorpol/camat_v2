@@ -41,10 +41,10 @@ def normalize_backend_name(name: str | None) -> str:
     Resolution order:
       1) Provided name
       2) Environment variable CAMAT_PARSER
-      3) Fallback to "music21"
+      3) Fallback to "verovio"
     """
     if not name:
-        name = os.environ.get("CAMAT_PARSER", "") or "music21"
+        name = os.environ.get("CAMAT_PARSER", "") or "verovio"
     key = str(name).strip().lower()
     return _SYNONYMS.get(key, key)
 
@@ -59,7 +59,7 @@ def get_parse_files(backend: str | None = None) -> Callable:
     Return the backend-specific parse_files callable without importing unused backends.
 
     Example:
-        parse_files = get_parse_files("music21")
+        parse_files = get_parse_files("verovio")
         results, dfs_by_name, last_df = parse_files([...])
     """
     name = normalize_backend_name(backend)
@@ -107,7 +107,7 @@ def parse_files(file_sources, *,
         from camat.parser_registry import parse_files
         results, dfs_by_name, last_df = parse_files(
             FILE_SOURCES,
-            parsing_backend='partitura',  # or 'music21' (optional; env default applies)
+            parsing_backend='verovio',    # optional; this is the registry default
             backend='bokeh',              # plotting backend is forwarded to the concrete parser
             print_parsed_summary=True,    # auto-print a quick summary (bool or mapping of kwargs)
             **other_kwargs

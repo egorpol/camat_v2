@@ -1787,6 +1787,159 @@ def _mei_xml_id(el: Any) -> Optional[str]:
     return _normalize_xml_ref(raw)
 
 
+def _mei_music_measures(root: Any) -> List[Any]:
+    """Return performed-score measures, excluding header incipits/examples."""
+    music_nodes = [el for el in root.iter() if _mei_local_name(el.tag) == "music"]
+    if music_nodes:
+        body_nodes = [
+            el
+            for music in music_nodes
+            for el in music.iter()
+            if _mei_local_name(el.tag) == "body"
+        ]
+        search_roots = body_nodes or music_nodes
+        measures = [
+            el
+            for search_root in search_roots
+            for el in search_root.iter()
+            if _mei_local_name(el.tag) == "measure"
+        ]
+        if measures:
+            return measures
+    return [el for el in root.iter() if _mei_local_name(el.tag) == "measure"]
+
+
+def _source_staff_index_to_part_label_map_from_mei(root: Any) -> Dict[str, str]:
+    """Return canonical performed-score part labels keyed by MEI staff number."""
+    music_nodes = [el for el in root.iter() if _mei_local_name(el.tag) == "music"]
+    body_nodes = [
+        el
+        for music in music_nodes
+        for el in music.iter()
+        if _mei_local_name(el.tag) == "body"
+    ]
+    search_roots = body_nodes or music_nodes or [root]
+    staff_defs = [
+        el
+        for search_root in search_roots
+        for el in search_root.iter()
+        if _mei_local_name(el.tag) == "staffDef"
+    ]
+
+    mapping: Dict[str, str] = {}
+    for idx, staff_def in enumerate(staff_defs, start=1):
+        staff_n = str(staff_def.attrib.get("n") or idx).strip()
+        if not staff_n or staff_n in mapping:
+            continue
+        label_text = None
+        for child in list(staff_def):
+            if _mei_local_name(child.tag) != "label":
+                continue
+            text = " ".join(" ".join(child.itertext()).split())
+            if text:
+                label_text = text
+                break
+        mapping[staff_n] = str(label_text or _mei_xml_id(staff_def) or f"P{staff_n}").strip()
+    return mapping
+
+
+def _mei_initial_meter_span(root: Any, fallback: float = 4.0) -> float:
+    """Read the initial performed-score meter as a quarter-note span."""
+    music_nodes = [el for el in root.iter() if _mei_local_name(el.tag) == "music"]
+    search_roots = music_nodes or [root]
+    for search_root in search_roots:
+        for el in search_root.iter():
+            if _mei_local_name(el.tag) not in {"scoreDef", "staffDef", "meterSig"}:
+                continue
+            count = el.attrib.get("meter.count") or el.attrib.get("count")
+            unit = el.attrib.get("meter.unit") or el.attrib.get("unit")
+            if count is None or unit is None:
+                continue
+            try:
+                count_f = sum(float(token) for token in str(count).split("+") if token.strip())
+                unit_f = float(unit)
+            except Exception:
+                continue
+            if count_f > 0 and unit_f > 0:
+                return float(count_f * (4.0 / unit_f))
+    return float(fallback)
+
+
+def _mei_measure_meter_spans(
+    root: Any,
+    measures: Optional[Sequence[Any]] = None,
+    *,
+    fallback: float = 4.0,
+) -> Dict[int, float]:
+    """Map performed MEI measures to the meter active at their start.
+
+    MEI represents mid-score meter changes with a ``scoreDef`` between two
+    measures (and commonly repeats the same ``meterSig`` in every staffDef).
+    Looking up only the first meter therefore produces a drifting measure grid.
+    The map is keyed by ``id(measure)`` so callers can retain their existing
+    ElementTree elements without relying on source ``xml:id`` availability.
+    """
+
+    target_measures = list(measures) if measures is not None else _mei_music_measures(root)
+    if not target_measures:
+        return {}
+    target_ids = {id(measure) for measure in target_measures}
+
+    music_nodes = [el for el in root.iter() if _mei_local_name(el.tag) == "music"]
+    body_nodes = [
+        el
+        for music in music_nodes
+        for el in music.iter()
+        if _mei_local_name(el.tag) == "body"
+    ]
+    search_roots = body_nodes or music_nodes or [root]
+
+    def _span_from_element(el: Any) -> Optional[float]:
+        count = el.attrib.get("meter.count") or el.attrib.get("count")
+        unit = el.attrib.get("meter.unit") or el.attrib.get("unit")
+        if count is None or unit is None:
+            return None
+        try:
+            count_f = sum(float(token) for token in str(count).split("+") if token.strip())
+            unit_f = float(unit)
+        except Exception:
+            return None
+        if count_f <= 0 or unit_f <= 0:
+            return None
+        return float(count_f * (4.0 / unit_f))
+
+    active_span = float(fallback)
+    spans: Dict[int, float] = {}
+    for search_root in search_roots:
+        for el in search_root.iter():
+            name = _mei_local_name(el.tag)
+            if name in {"scoreDef", "staffDef", "meterSig"}:
+                declared_span = _span_from_element(el)
+                if declared_span is not None:
+                    active_span = declared_span
+                continue
+            if name != "measure" or id(el) not in target_ids:
+                continue
+
+            # A definition embedded at the beginning of a measure applies to
+            # that measure. The iterator will encounter it again afterward,
+            # keeping the value active for subsequent measures as well.
+            for descendant in el.iter():
+                if _mei_local_name(descendant.tag) not in {"scoreDef", "staffDef", "meterSig"}:
+                    continue
+                declared_span = _span_from_element(descendant)
+                if declared_span is not None:
+                    active_span = declared_span
+                    break
+            spans[id(el)] = float(active_span)
+
+    # Defensive fallback for unusual documents whose performed measures are
+    # outside the first music/body subtree selected above.
+    for measure in target_measures:
+        spans.setdefault(id(measure), float(active_span or fallback))
+    return spans
+
+
 def _mei_duration_to_quarters(
     el: Any,
     *,
@@ -1842,7 +1995,7 @@ def _mei_duration_to_quarters(
 
 def _extract_mei_symbolic_note_timing(
     mei_path: str,
-) -> Tuple[Dict[str, Dict[str, float]], List[float]]:
+) -> Tuple[Dict[str, Dict[str, Any]], List[float]]:
     """
     Extract source-MEI note timing from symbolic durations.
 
@@ -1861,13 +2014,47 @@ def _extract_mei_symbolic_note_timing(
     except Exception:
         return {}, []
 
-    timing: Dict[str, Dict[str, float]] = {}
+    timing: Dict[str, Dict[str, Any]] = {}
+    idless_note_order = 0
     measure_offsets: List[float] = []
     current_offset = 0.0
-    regular_span = 4.0
+    measures = _mei_music_measures(root)
+    initial_meter_span = _mei_initial_meter_span(root)
+    meter_spans = _mei_measure_meter_spans(
+        root,
+        measures,
+        fallback=initial_meter_span,
+    )
+    regular_span = initial_meter_span
+    previous_regular_span: Optional[float] = None
 
     def _children_named(el: Any, name: str) -> List[Any]:
         return [child for child in list(el) if _mei_local_name(child.tag) == name]
+
+    def _store_note_timing(
+        note: Any,
+        *,
+        cursor: float,
+        duration: float,
+        staff_n: Optional[str],
+        layer_n: Optional[str],
+    ) -> None:
+        nonlocal idless_note_order
+        nid = _mei_xml_id(note)
+        source_idless = not bool(nid)
+        if source_idless:
+            idless_note_order += 1
+            nid = f"__camat_internal_idless_note_{idless_note_order:08d}"
+        timing[str(nid)] = {
+            "Measure": float(len(measure_offsets)),
+            "Local Onset": float(cursor),
+            "Global Onset": float(current_offset + cursor),
+            "Duration": float(duration),
+            "staff_n": staff_n,
+            "layer_n": layer_n,
+            "_source_idless": source_idless,
+            "_source_order": idless_note_order if source_idless else -1,
+        }
 
     def _walk_timed(
         el: Any,
@@ -1876,6 +2063,8 @@ def _extract_mei_symbolic_note_timing(
         inherited_dur: Optional[str] = None,
         inherited_dots: Optional[str] = None,
         duration_scale: float = 1.0,
+        staff_n: Optional[str] = None,
+        layer_n: Optional[str] = None,
     ) -> float:
         name = _mei_local_name(el.tag)
 
@@ -1887,6 +2076,8 @@ def _extract_mei_symbolic_note_timing(
                     inherited_dur=inherited_dur,
                     inherited_dots=inherited_dots,
                     duration_scale=duration_scale,
+                    staff_n=staff_n,
+                    layer_n=layer_n,
                 )
             return cursor
 
@@ -1906,6 +2097,8 @@ def _extract_mei_symbolic_note_timing(
                     inherited_dur=el.attrib.get("dur") or inherited_dur,
                     inherited_dots=el.attrib.get("dots") or inherited_dots,
                     duration_scale=scale,
+                    staff_n=staff_n,
+                    layer_n=layer_n,
                 )
             return cursor
 
@@ -1918,20 +2111,19 @@ def _extract_mei_symbolic_note_timing(
             )
             dur = float(dur or 0.0) * duration_scale
             for note in _children_named(el, "note"):
-                nid = _mei_xml_id(note)
-                if nid:
-                    note_dur = _mei_duration_to_quarters(
-                        note,
-                        inherited_dur=el.attrib.get("dur") or inherited_dur,
-                        inherited_dots=el.attrib.get("dots") or inherited_dots,
-                        fallback=dur / duration_scale if duration_scale else dur,
-                    )
-                    timing[nid] = {
-                        "Measure": float(len(measure_offsets)),
-                        "Local Onset": float(cursor),
-                        "Global Onset": float(current_offset + cursor),
-                        "Duration": float(note_dur or 0.0) * duration_scale,
-                    }
+                note_dur = _mei_duration_to_quarters(
+                    note,
+                    inherited_dur=el.attrib.get("dur") or inherited_dur,
+                    inherited_dots=el.attrib.get("dots") or inherited_dots,
+                    fallback=dur / duration_scale if duration_scale else dur,
+                )
+                _store_note_timing(
+                    note,
+                    cursor=cursor,
+                    duration=float(note_dur or 0.0) * duration_scale,
+                    staff_n=staff_n,
+                    layer_n=layer_n,
+                )
             return cursor + dur
 
         if name == "note":
@@ -1942,14 +2134,13 @@ def _extract_mei_symbolic_note_timing(
                 fallback=0.0,
             )
             dur = float(dur or 0.0) * duration_scale
-            nid = _mei_xml_id(el)
-            if nid:
-                timing[nid] = {
-                    "Measure": float(len(measure_offsets)),
-                    "Local Onset": float(cursor),
-                    "Global Onset": float(current_offset + cursor),
-                    "Duration": float(dur),
-                }
+            _store_note_timing(
+                el,
+                cursor=cursor,
+                duration=dur,
+                staff_n=staff_n,
+                layer_n=layer_n,
+            )
             return cursor + dur
 
         if name in {"rest", "space"}:
@@ -1977,26 +2168,57 @@ def _extract_mei_symbolic_note_timing(
                 inherited_dur=inherited_dur,
                 inherited_dots=inherited_dots,
                 duration_scale=duration_scale,
+                staff_n=staff_n,
+                layer_n=layer_n,
             )
         return cursor
 
-    for measure in root.iter():
-        if _mei_local_name(measure.tag) != "measure":
-            continue
+    for measure_index, measure in enumerate(measures):
+        regular_span = meter_spans.get(id(measure), regular_span)
+        meter_changed = (
+            previous_regular_span is not None
+            and abs(float(regular_span) - float(previous_regular_span)) > 1e-6
+        )
         measure_offsets.append(float(current_offset))
         layer_spans: List[float] = []
-        for staff in _children_named(measure, "staff"):
-            for layer in _children_named(staff, "layer"):
-                span = _walk_timed(layer, 0.0)
+        for staff_index, staff in enumerate(_children_named(measure, "staff"), start=1):
+            staff_n = str(staff.attrib.get("n") or staff_index).strip()
+            for layer_index, layer in enumerate(_children_named(staff, "layer"), start=1):
+                layer_n = str(layer.attrib.get("n") or layer_index).strip()
+                span = _walk_timed(
+                    layer,
+                    0.0,
+                    staff_n=staff_n,
+                    layer_n=layer_n,
+                )
                 if np.isfinite(span) and span > 0:
                     layer_spans.append(float(span))
-        if layer_spans:
-            measure_span = max(layer_spans)
-            if measure_span > 0:
-                regular_span = measure_span
+        actual_span = max(layer_spans) if layer_spans else 0.0
+        # Humdrum-to-MEI conversion uses an unnumbered measure for short
+        # transition/anacrusis fragments even when it omits @metcon="false".
+        # Treating those as a full bar shifts every later onset.
+        is_irregular = (
+            str(measure.attrib.get("metcon", "")).strip().lower() == "false"
+            or not str(measure.attrib.get("n", "")).strip()
+        )
+        is_initial_pickup = measure_index == 0 and 0 < actual_span < regular_span
+        is_section_boundary = str(measure.attrib.get("right", "")).strip().lower() in {
+            "dbl",
+            "end",
+        }
+        content_defines_span = (
+            is_irregular
+            or is_initial_pickup
+            or is_section_boundary
+            or actual_span > regular_span + 1e-6
+            or (meter_changed and 0 < actual_span < regular_span - 1e-6)
+        )
+        if content_defines_span and actual_span > 0:
+            measure_span = actual_span
         else:
             measure_span = regular_span
         current_offset += float(measure_span)
+        previous_regular_span = regular_span
 
     return timing, measure_offsets
 
@@ -2081,22 +2303,164 @@ def _apply_mei_symbolic_timing_to_pitch_df(
     return out
 
 
-def _count_mei_symbolic_duration_mismatches(
+def _apply_mei_idless_symbolic_timing_to_pitch_df(
+    df_pitch: pd.DataFrame,
+    timing: Mapping[str, Mapping[str, Any]],
+    *,
+    staff_to_part: Mapping[str, str],
+) -> pd.DataFrame:
+    """Correct and anonymize Partitura rows generated from idless MEI notes.
+
+    Partitura assigns transient ids to source notes without ``xml:id``. Match
+    those rows within each canonical voice by stable musical order, apply the
+    source-symbolic timing, and restore ``NA`` so CAMAT does not expose a
+    backend-generated identifier as if it came from the MEI document.
+    """
+    if (
+        not isinstance(df_pitch, pd.DataFrame)
+        or df_pitch.empty
+        or "xml_id" not in df_pitch.columns
+        or not timing
+    ):
+        return df_pitch
+
+    idless_infos = [
+        dict(info)
+        for info in timing.values()
+        if bool(info.get("_source_idless"))
+    ]
+    if not idless_infos:
+        return df_pitch
+
+    source_ids = {
+        str(xml_id)
+        for xml_id, info in timing.items()
+        if not bool(info.get("_source_idless"))
+    }
+    out = df_pitch.copy()
+    candidate_indices = [
+        idx
+        for idx, raw_id in out["xml_id"].items()
+        if (_clean_xml_id_value(raw_id) or "") not in source_ids
+    ]
+    if not candidate_indices:
+        return out
+
+    source_groups: Dict[str, List[Dict[str, Any]]] = {}
+    for info in idless_infos:
+        staff_n = str(info.get("staff_n") or "").strip()
+        layer_n = str(info.get("layer_n") or "1").strip() or "1"
+        part_label = str(staff_to_part.get(staff_n, f"P{staff_n}")).strip()
+        voice = _format_voice_label(part_label, layer_n)
+        source_groups.setdefault(voice, []).append(info)
+
+    parsed_groups: Dict[str, List[Any]] = {}
+    for idx in candidate_indices:
+        voice = str(out.at[idx, "Voice"]).strip()
+        parsed_groups.setdefault(voice, []).append(idx)
+
+    for key, infos in source_groups.items():
+        indices = parsed_groups.get(key, [])
+        if len(indices) != len(infos):
+            continue
+        infos.sort(
+            key=lambda info: (
+                float(info.get("Global Onset", 0.0)),
+                int(info.get("_source_order", 0)),
+            )
+        )
+        indices.sort(
+            key=lambda idx: (
+                float(out.at[idx, "Global Onset"]),
+                float(out.at[idx, "MIDI"]) if "MIDI" in out.columns else 0.0,
+                int(idx) if isinstance(idx, (int, np.integer)) else 0,
+            )
+        )
+        for idx, info in zip(indices, infos):
+            try:
+                out.at[idx, "Measure"] = int(float(info["Measure"]))
+                out.at[idx, "Local Onset"] = float(info["Local Onset"])
+                out.at[idx, "Global Onset"] = float(info["Global Onset"])
+                out.at[idx, "Duration"] = float(info["Duration"])
+                out.at[idx, "xml_id"] = pd.NA
+            except Exception:
+                continue
+    return out
+
+
+def _apply_mei_source_voice_labels_to_pitch_df(
+    df_pitch: pd.DataFrame,
+    timing: Mapping[str, Mapping[str, Any]],
+    *,
+    staff_to_part: Mapping[str, str],
+) -> pd.DataFrame:
+    """Derive note voices from source staff/layer membership, keyed by xml:id."""
+    if (
+        not isinstance(df_pitch, pd.DataFrame)
+        or df_pitch.empty
+        or "xml_id" not in df_pitch.columns
+        or "Voice" not in df_pitch.columns
+    ):
+        return df_pitch
+    out = df_pitch.copy()
+    for idx, raw_id in out["xml_id"].items():
+        xml_id = _clean_xml_id_value(raw_id)
+        info = timing.get(xml_id or "")
+        if not info or bool(info.get("_source_idless")):
+            continue
+        staff_n = str(info.get("staff_n") or "").strip()
+        if not staff_n:
+            continue
+        layer_n = str(info.get("layer_n") or "1").strip() or "1"
+        part_label = str(staff_to_part.get(staff_n, f"P{staff_n}")).strip()
+        out.at[idx, "Voice"] = _format_voice_label(part_label, layer_n)
+    return out
+
+
+def _remap_pitch_part_labels(
+    df_pitch: pd.DataFrame,
+    parsed_staff_to_part: Mapping[str, str],
+    source_staff_to_part: Mapping[str, str],
+) -> pd.DataFrame:
+    """Replace importer-generated part labels with canonical source labels."""
+    if not isinstance(df_pitch, pd.DataFrame) or df_pitch.empty or "Voice" not in df_pitch:
+        return df_pitch
+    replacements = {
+        str(parsed_staff_to_part[staff_n]).strip(): str(source_label).strip()
+        for staff_n, source_label in source_staff_to_part.items()
+        if staff_n in parsed_staff_to_part
+        and str(parsed_staff_to_part[staff_n]).strip() != str(source_label).strip()
+    }
+    if not replacements:
+        return df_pitch
+    out = df_pitch.copy()
+    for idx, raw_voice in out["Voice"].items():
+        voice = str(raw_voice)
+        for old_label, new_label in replacements.items():
+            prefix = f"{old_label} - Voice "
+            if voice.startswith(prefix):
+                out.at[idx, "Voice"] = f"{new_label} - Voice {voice[len(prefix):]}"
+                break
+    return out
+
+
+def _count_mei_symbolic_timing_mismatches(
     df_pitch: pd.DataFrame,
     timing: Mapping[str, Mapping[str, float]],
     *,
     collapse_tied_pitch_events: bool,
     tie_next: Optional[Mapping[str, str]] = None,
+    onset_shift: float = 0.0,
     tolerance: float = 1e-6,
-) -> int:
+) -> Tuple[int, int]:
     if (
         not isinstance(df_pitch, pd.DataFrame)
         or df_pitch.empty
         or "xml_id" not in df_pitch.columns
-        or "Duration" not in df_pitch.columns
+        or not {"Duration", "Global Onset"}.issubset(df_pitch.columns)
         or not timing
     ):
-        return 0
+        return 0, 0
 
     tie_next = tie_next or {}
 
@@ -2118,7 +2482,8 @@ def _count_mei_symbolic_duration_mismatches(
             current = nxt
         return total
 
-    mismatches = 0
+    duration_mismatches = 0
+    onset_mismatches = 0
     for _, row in df_pitch.iterrows():
         xml_id = _clean_xml_id_value(row.get("xml_id"))
         if not xml_id:
@@ -2129,11 +2494,15 @@ def _count_mei_symbolic_duration_mismatches(
         try:
             parsed_duration = float(row.get("Duration"))
             expected_duration = _source_duration(xml_id, float(info["Duration"]))
+            parsed_onset = float(row.get("Global Onset"))
+            expected_onset = float(info["Global Onset"]) + float(onset_shift)
         except Exception:
             continue
         if abs(parsed_duration - expected_duration) > tolerance:
-            mismatches += 1
-    return mismatches
+            duration_mismatches += 1
+        if abs(parsed_onset - expected_onset) > tolerance:
+            onset_mismatches += 1
+    return duration_mismatches, onset_mismatches
 
 
 def _normalize_xml_ref(raw: Any) -> Optional[str]:
@@ -4038,6 +4407,23 @@ def parse_files_partitura(
                 with warning_ctx, output_ctx:
                     measure_offsets = _partitura_measure_offsets(score)
                 staff_to_part = _staff_index_to_part_label_map(score)
+                if is_mei and isinstance(df_raw, pd.DataFrame) and not df_raw.empty:
+                    try:
+                        import xml.etree.ElementTree as ET
+
+                        source_root = ET.parse(file_path).getroot()
+                        source_staff_to_part = _source_staff_index_to_part_label_map_from_mei(
+                            source_root
+                        )
+                    except Exception:
+                        source_staff_to_part = {}
+                    if source_staff_to_part:
+                        df_raw = _remap_pitch_part_labels(
+                            df_raw,
+                            staff_to_part,
+                            source_staff_to_part,
+                        )
+                        staff_to_part = source_staff_to_part
                 if (
                     is_mei_source
                     and not is_mensural_source
@@ -4048,25 +4434,73 @@ def parse_files_partitura(
                 ):
                     source_timing, source_measure_offsets = _extract_mei_symbolic_note_timing(file_path)
                     if source_timing:
-                        source_tie_next = _extract_mei_tie_next_map(file_path)
-                        timing_mismatches = _count_mei_symbolic_duration_mismatches(
+                        df_raw = _apply_mei_source_voice_labels_to_pitch_df(
                             df_raw,
                             source_timing,
-                            collapse_tied_pitch_events=collapse_tied_pitch_events,
-                            tie_next=source_tie_next,
+                            staff_to_part=staff_to_part,
                         )
-                        if timing_mismatches > 0:
+                        idless_note_count = sum(
+                            1
+                            for info in source_timing.values()
+                            if bool(info.get("_source_idless"))
+                        )
+                        source_tie_next = _extract_mei_tie_next_map(file_path)
+                        anchor_shift = 0.0
+                        if source_measure_offsets and measure_offsets:
+                            anchor_shift = float(measure_offsets[0]) - float(
+                                source_measure_offsets[0]
+                            )
+                            if not np.isfinite(anchor_shift):
+                                anchor_shift = 0.0
+                        duration_mismatches, onset_mismatches = (
+                            _count_mei_symbolic_timing_mismatches(
+                                df_raw,
+                                source_timing,
+                                collapse_tied_pitch_events=collapse_tied_pitch_events,
+                                tie_next=source_tie_next,
+                                onset_shift=anchor_shift,
+                            )
+                        )
+                        if duration_mismatches > 0 or onset_mismatches > 0 or idless_note_count > 0:
+                            # Source-symbolic timing is constructed from zero,
+                            # whereas Partitura right-aligns an initial pickup
+                            # before zero. Preserve that authoritative anchor
+                            # when correcting durations/onsets; otherwise the
+                            # correction itself silently changes pickup
+                            # semantics for only those scores that happen to
+                            # contain a duration mismatch.
+                            if source_measure_offsets and measure_offsets:
+                                if abs(anchor_shift) > 1e-9:
+                                    source_timing = {
+                                        note_id: {
+                                            **values,
+                                            "Global Onset": float(values["Global Onset"])
+                                            + anchor_shift,
+                                        }
+                                        for note_id, values in source_timing.items()
+                                    }
+                                    source_measure_offsets = [
+                                        float(offset) + anchor_shift
+                                        for offset in source_measure_offsets
+                                    ]
                             df_raw = _apply_mei_symbolic_timing_to_pitch_df(
                                 df_raw,
                                 source_timing,
                                 collapse_tied_pitch_events=collapse_tied_pitch_events,
                                 tie_next=source_tie_next,
                             )
+                            df_raw = _apply_mei_idless_symbolic_timing_to_pitch_df(
+                                df_raw,
+                                source_timing,
+                                staff_to_part=staff_to_part,
+                            )
                             if source_measure_offsets:
                                 measure_offsets = source_measure_offsets
                             log(
                                 "Corrected Partitura MEI timing from source symbolic durations: "
-                                f"{timing_mismatches} duration mismatch(es)."
+                                f"{duration_mismatches} duration mismatch(es), "
+                                f"{onset_mismatches} onset mismatch(es), "
+                                f"{idless_note_count} idless note(s)."
                             )
                 if is_mensural_source:
                     _log_measure_grid_diagnostics(

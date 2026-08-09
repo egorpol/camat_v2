@@ -8,17 +8,15 @@ CAMAT is a Python toolkit for symbolic music parsing, analysis, pattern search, 
 
 ## Backend Guidance
 
-For common music notation, prefer the `partitura` backend. It is the primary
-parser in CAMAT and has the strongest support for MEI, `xml_id` tracking,
-explicit event extraction, and backend parity across the notebook workflows.
+For common music notation, CAMAT defaults to the `verovio` backend and treats
+MEI as the analysis format. Calling `parse_files(...)` without selecting a
+backend therefore parses common-notation MEI with Verovio.
 
-The `music21` backend is retained for legacy compatibility. It can still parse
-common-notation files and now exposes the same high-level result shape
-(`df_pitch` and `df_events`), but it should be treated as a secondary option.
+Partitura remains the reference backend for parser parity tests. Music21 is
+retained for compatibility and as an import bridge in the conversion workflow.
 
-The `verovio` backend is experimental for common-notation MEI:
-`parse_files(..., parsing_backend="verovio")`. It exists to develop native
-Verovio parsing while comparing output against Partitura.
+Convert non-MEI inputs first. Verovio-native formats convert directly; other
+music21-readable formats follow `music21 -> MusicXML -> Verovio -> MEI`.
 
 ## Contents
 

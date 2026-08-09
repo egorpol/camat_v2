@@ -1,21 +1,21 @@
 """Probe Verovio conversion from common source formats to MEI.
 
-Run from the repository root, preferably in the Python 3.10 environment:
+Run from the repository root, preferably in the Python 3.11 environment:
 
-    conda run -n py310 python scripts/test_verovio_conversion.py
+    conda run -n py311 python scripts/test_verovio_conversion.py
 
-If your shell exposes a py310 launcher, this should also work:
+If your shell exposes a py311 launcher, this should also work:
 
-    py310 scripts/test_verovio_conversion.py
+    py311 scripts/test_verovio_conversion.py
 
 The script downloads the configured test sources, converts non-MEI inputs to
 MEI in a subprocess, passes existing MEI through unchanged, writes generated
 MEI files under converted_mei/, and emits a compact JSON report plus a terminal
-summary. It supports plain and compressed MusicXML, textual Humdrum/Kern,
-MuseScore-native files through MuseScore -> MusicXML -> Verovio, and an opt-in
-MIDI fallback through music21 -> MusicXML -> Verovio. The subprocess boundary
-is intentional: Verovio is native code, and this keeps a single failing score
-from taking down the whole test run.
+summary. Formats supported by Verovio are converted directly. MuseScore-native
+files use MuseScore -> MusicXML -> Verovio; any other format that music21 can
+read uses music21 -> MusicXML -> Verovio. Verovio therefore always performs the
+final MEI conversion. The subprocess boundary is intentional: Verovio is native
+code, and this keeps a single failing score from taking down the whole test run.
 """
 from __future__ import annotations
 
@@ -59,6 +59,18 @@ MUSESCORE_REQUIRED_MESSAGE = (
     "the file to MusicXML/MXL/MEI before using CAMAT."
 )
 MUSESCORE_EXTENSIONS = {".mscz", ".mscx", ".musescore", ".mscore", ".ms"}
+NATIVE_VEROVIO_INPUTS = {
+    "abc",
+    "cmme.xml",
+    "darms",
+    "esac",
+    "humdrum",
+    "mei",
+    "musicxml",
+    "musicxml-zip",
+    "pae",
+    "volpiano",
+}
 _MUSESCORE_LOCK = threading.Lock()
 
 MUSESCORE_EXPORT_CHILD = r"""
@@ -199,6 +211,8 @@ def _guess_source_format(path: Path, source_text: Optional[str]) -> Optional[str
         return "musicxml-zip"
     if ext in {".mid", ".midi"}:
         return "midi"
+    # Unknown formats are deliberately left unknown here. _convert_one routes
+    # them through music21 rather than guessing a Verovio inputFrom value.
     return vrv_guess_input_from(str(path), source_text)
 
 
@@ -299,27 +313,28 @@ def _mei_stats(path: Path) -> Dict[str, Any]:
     }
 
 
-def _midi_to_musicxml_path(source_path: Path, output_dir: Path) -> Path:
+def _music21_to_musicxml_path(source_path: Path, output_dir: Path) -> Path:
     try:
         from music21 import converter  # type: ignore
     except Exception as exc:
         raise ImportError(
-            "MIDI fallback requires music21. Install it or convert MIDI to MusicXML before running Verovio."
+            "This source format requires music21. Install it or convert the source "
+            "to MusicXML before running Verovio."
         ) from exc
 
     intermediate_dir = output_dir / "_intermediate_musicxml"
     intermediate_dir.mkdir(parents=True, exist_ok=True)
     target = intermediate_dir / f"{_safe_stem(str(source_path))}_{_sha12(str(source_path.resolve()))}.musicxml"
 
-    # Run music21 in the parent process so MIDI parsing/export errors are reported
-    # directly. Verovio still runs in the child process below.
+    # Run music21 in the parent process so import/export errors are reported
+    # directly. Verovio still performs the final MEI conversion below.
     score = converter.parse(str(source_path))
     if hasattr(score, "makeNotation"):
         score.makeNotation(inPlace=True)
     written = score.write("musicxml", fp=str(target))
     musicxml_path = Path(written) if written else target
     if not musicxml_path.exists() or musicxml_path.stat().st_size == 0:
-        raise RuntimeError(f"music21 did not produce a MusicXML file for MIDI source: {source_path}")
+        raise RuntimeError(f"music21 did not produce a MusicXML file for source: {source_path}")
     return musicxml_path
 
 
@@ -399,15 +414,16 @@ def _convert_one(
         "message": None,
         "error": None,
         "intermediate_musicxml": None,
+        "conversion_route": None,
     }
     try:
         source_path = _fetch_source(source, output_dir / "_sources", timeout)
         source_text = None if _is_binary_score_source(source_path) else source_path.read_text(encoding="utf-8", errors="ignore")
         input_from = _guess_source_format(source_path, source_text)
-        if input_from not in {"mei", "musicxml", "musicxml-zip", "humdrum", "midi", "musescore"}:
-            raise ValueError(f"Could not infer Verovio inputFrom for {source}")
+        if input_from is None:
+            input_from = "music21"
 
-        if input_from == "mei":
+        if input_from == "mei" and _source_extension(source_path) == ".mei":
             stats = _mei_stats(source_path)
             record.update(
                 {
@@ -419,6 +435,7 @@ def _convert_one(
                     "overwritten": False,
                     "svg_ok": None,
                     "message": "MEI source was not converted because it is already MEI.",
+                    "conversion_route": "mei-pass-through",
                     **stats,
                 }
             )
@@ -427,14 +444,18 @@ def _convert_one(
         child_source_path = source_path
         child_input_from = input_from
         musicxml_intermediate: Optional[Path] = None
-        if input_from == "midi":
-            musicxml_intermediate = _midi_to_musicxml_path(source_path, output_dir)
-            child_source_path = musicxml_intermediate
-            child_input_from = "musicxml"
-        elif input_from == "musescore":
+        if input_from == "musescore":
             musicxml_intermediate = _musescore_to_musicxml_path(source_path, output_dir, timeout)
             child_source_path = musicxml_intermediate
             child_input_from = "musicxml"
+            conversion_route = "musescore-musicxml-verovio"
+        elif input_from not in NATIVE_VEROVIO_INPUTS:
+            musicxml_intermediate = _music21_to_musicxml_path(source_path, output_dir)
+            child_source_path = musicxml_intermediate
+            child_input_from = "musicxml"
+            conversion_route = "music21-musicxml-verovio"
+        else:
+            conversion_route = "verovio-direct"
 
         mei_path = _output_mei_path(
             source,
@@ -477,13 +498,14 @@ def _convert_one(
                 "converted": True,
                 "overwritten": overwritten,
                 "message": (
-                    "Converted MIDI to MusicXML with music21, then converted with Verovio."
-                    if input_from == "midi"
+                    "Converted source to MusicXML with music21, then converted to MEI with Verovio."
+                    if conversion_route == "music21-musicxml-verovio"
                     else "Converted MuseScore source to MusicXML with MuseScore, then converted with Verovio."
-                    if input_from == "musescore"
+                    if conversion_route == "musescore-musicxml-verovio"
                     else "Converted with Verovio."
                 ),
                 "intermediate_musicxml": str(musicxml_intermediate.resolve()) if musicxml_intermediate else None,
+                "conversion_route": conversion_route,
                 **child_info,
                 **stats,
             }

@@ -19,6 +19,9 @@ converted_mei/
 venv/
 ENV/
 .env
+.release-venvs/
+.release-runs/
+.release-dist/
 
 # IDE settings
 .vscode/

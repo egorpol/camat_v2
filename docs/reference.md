@@ -6,22 +6,19 @@ title: Reference
 
 ## Backend Guidance
 
-For common music notation, `partitura` is the recommended primary backend.
-Use it by default for new work.
+For common music notation, `verovio` is the default backend. CAMAT's analysis
+workflow is MEI-first, and `parse_files(...)` resolves to `verovio` unless
+`CAMAT_PARSER` or `parsing_backend` selects another backend.
 
-- `partitura` has the most complete support for MEI parsing in CAMAT.
-- It provides reliable `xml_id` extraction and explicit `df_events` output.
-- It is the reference implementation for common-notation parsing behavior.
+- `verovio` parses common-notation MEI into the shared `df_pitch` and
+  `df_events` result shape.
+- `partitura` remains the ground-truth/reference backend for parity tests.
+- `music21` remains available as a compatibility backend and conversion bridge.
 
-`music21` remains available as a legacy backend. It can still parse
-common-notation files and exposes the same top-level result structure, but it
-should be treated as a compatibility option rather than the preferred parser.
-
-`verovio` is available as an experimental common-notation MEI backend via
-`parse_files(..., parsing_backend="verovio")` or the `"vrv"` alias. It reuses
-the CAMAT result shape (`df_pitch`, `df_events`, `measure_offsets`, and
-`barline_events`) and is intended for Partitura parity testing, not as the
-default parser yet. Non-MEI inputs raise a clear error in this first milestone.
+The parser itself accepts MEI. Convert other formats first with the Verovio
+conversion workflow. Verovio-supported formats convert directly; unsupported
+music21-readable formats follow `music21 -> MusicXML -> Verovio -> MEI`, so
+Verovio always produces the final analysis file.
 
 For MCFlow-style rap Humdrum timelines, use the `timeline` backend. It emits
 `df_timeline` rows with stable MEI ids and optional rhythm-analysis columns for

@@ -242,21 +242,38 @@ def vrv_guess_input_from(source_hint: Optional[str] = None, content: Optional[st
     Guess Verovio's inputFrom option.
 
     Uses file extension from source_hint (URL or path) or lightweight content sniffing.
-    Returns one of {'mei', 'musicxml', 'musicxml-zip', 'humdrum'} when known.
+    Returns a Verovio ``inputFrom`` value when known.
     Returns None when unknown.
     """
     # 1) Extension-based
     if source_hint:
         path = source_hint.split("?")[0].split("#")[0]
-        _, ext = os.path.splitext(path.lower())
+        lower_path = path.lower()
+        _, ext = os.path.splitext(lower_path)
+        if lower_path.endswith(".cmme.xml"):
+            return "cmme.xml"
         if ext in {".mei"}:
             return "mei"
         if ext in {".mxl"}:
             return "musicxml-zip"
-        if ext in {".xml", ".musicxml"}:
+        if ext in {".musicxml"}:
             return "musicxml"
         if ext in {".krn", ".kern", ".hum"}:
             return "humdrum"
+        if ext == ".abc":
+            return "abc"
+        if ext == ".pae":
+            return "pae"
+        if ext in {".darms", ".drm"}:
+            return "darms"
+        if ext == ".esac":
+            return "esac"
+        if ext in {".volpiano", ".volp"}:
+            return "volpiano"
+        # .xml is ambiguous: it is used for both MEI and MusicXML. Defer to
+        # content sniffing instead of forcing MEI-as-.xml through MusicXML.
+        if ext == ".xml" and not content:
+            return None
 
     # 2) Content-based
     if content:
@@ -277,6 +294,8 @@ def vrv_guess_input_from(source_hint: Optional[str] = None, content: Optional[st
         if head.startswith("!!") or head.startswith("!!humdrum") or "\t" in head:
             # Many humdrum files are tab-separated with global comments (!!)
             return "humdrum"
+        if re.search(r"(?m)^\s*x:\s*\S+", head) and re.search(r"(?m)^\s*k:\s*\S+", head):
+            return "abc"
 
     return None
 
@@ -316,7 +335,8 @@ def vrv_load_data(
 ) -> int:
     """
     Load a score string into Verovio. Returns page count.
-    Set input_from to one of {'mei', 'musicxml', 'humdrum'}; if None, attempts to guess from content.
+    Set input_from to a Verovio-supported input format; if None, attempts to
+    guess from content.
     Use vrv_load_from_file or vrv_load_from_url for compressed MusicXML (.mxl).
     """
     inferred = input_from or vrv_guess_input_from(None, data) or "musicxml"
@@ -374,15 +394,17 @@ def vrv_convert_to_mei(
     timeout: int = 30,
 ) -> str:
     """
-    Convert a score (MusicXML, compressed MusicXML, Humdrum, or MEI) to MEI using the global Verovio toolkit.
+    Convert a Verovio-supported score format to MEI using the global Verovio toolkit.
 
     This is a thin convenience wrapper around the existing vrv_load_* helpers plus
     vrv_get_mei():
 
     - When is_url=True, 'source' is treated as a remote URL and loaded via vrv_load_from_url.
     - Otherwise, 'source' is treated as a local file path and loaded via vrv_load_from_file.
-    - input_from can be one of {'mei', 'musicxml', 'musicxml-zip', 'humdrum'}; when omitted, the type
-      is auto-detected from the file extension or content.
+    - When ``input_from`` is omitted, the type is auto-detected from the file
+      extension or content. This helper only covers formats Verovio can load
+      directly; the corpus converter handles other music21-readable formats by
+      exporting MusicXML before this Verovio step.
 
     The converted MEI is returned as a string, and the score remains loaded in the toolkit
     so that subsequent calls to vrv_render_page / vrv_render_all_pages operate on it.

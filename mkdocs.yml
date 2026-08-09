@@ -33,6 +33,7 @@ markdown_extensions:
 nav:
   - Home: index.md
   - Tutorial: tutorial.md
+  - Release testing: releasing.md
   - Reference:
       - Overview: reference.md
       - API:
