@@ -189,6 +189,8 @@ def _midi_from_mei_pitch(note_el: Any, alter: Optional[int] = None) -> Optional[
 
 
 def _mei_duration_quarters(el: Any) -> Optional[float]:
+    if str(getattr(el, "attrib", {}).get("grace", "")).strip():
+        return 0.0
     dur_raw = getattr(el, "attrib", {}).get("dur")
     if dur_raw is None:
         return None
@@ -370,6 +372,77 @@ def _tuplet_multiplier(el: Any) -> float:
     return float(numbase / num)
 
 
+def _mei_tuplet_span_multipliers(root: Any) -> Dict[str, float]:
+    """Return per-element metric multipliers for MEI ``tupletSpan`` ranges.
+
+    Container ``<tuplet>`` ratios are handled while walking layers.  Elements
+    already inside such a container are deliberately excluded here so an
+    equivalent ``tupletSpan`` cannot apply the same ratio twice.
+    """
+    parent_by_element = {child: parent for parent in root.iter() for child in parent}
+    element_by_id: Dict[str, Any] = {}
+    ordered_ids: List[str] = []
+    for el in root.iter():
+        if _local_name(el.tag) not in {"note", "chord", "rest", "space"}:
+            continue
+        xml_id = _xml_id(el)
+        if xml_id:
+            element_by_id[xml_id] = el
+            ordered_ids.append(xml_id)
+    position_by_id = {xml_id: idx for idx, xml_id in enumerate(ordered_ids)}
+
+    def _inside_tuplet_container(xml_id: str) -> bool:
+        current = parent_by_element.get(element_by_id.get(xml_id))
+        while current is not None:
+            if _local_name(current.tag) == "tuplet":
+                return True
+            current = parent_by_element.get(current)
+        return False
+
+    multipliers: Dict[str, float] = {}
+    for span in root.iter():
+        if _local_name(span.tag) != "tupletSpan":
+            continue
+        multiplier = _tuplet_multiplier(span)
+        if multiplier == 1.0:
+            continue
+        target_ids = {
+            normalized
+            for raw in str(span.attrib.get("plist", "")).split()
+            if (normalized := _normalize_xml_ref(raw))
+        }
+        start_id = _normalize_xml_ref(span.attrib.get("startid"))
+        end_id = _normalize_xml_ref(span.attrib.get("endid"))
+        if start_id in position_by_id and end_id in position_by_id:
+            start_idx = position_by_id[start_id]
+            end_idx = position_by_id[end_id]
+            if start_idx <= end_idx:
+                target_ids.update(ordered_ids[start_idx : end_idx + 1])
+        for target_id in target_ids:
+            if target_id not in element_by_id or _inside_tuplet_container(target_id):
+                continue
+            multipliers[target_id] = multipliers.get(target_id, 1.0) * multiplier
+    return multipliers
+
+
+def _timed_element_tuplet_span_multiplier(
+    timed_el: Any,
+    multipliers: Mapping[str, float],
+) -> float:
+    timed_id = _xml_id(timed_el)
+    if timed_id in multipliers:
+        return float(multipliers[timed_id])
+    if _local_name(timed_el.tag) != "chord":
+        return 1.0
+    child_values = {
+        float(multipliers[child_id])
+        for child in list(timed_el)
+        if _local_name(child.tag) == "note"
+        and (child_id := _xml_id(child)) in multipliers
+    }
+    return child_values.pop() if len(child_values) == 1 else 1.0
+
+
 def _iter_layer_timed_children(layer_el: Any, multiplier: float = 1.0) -> Iterable[Tuple[Any, float]]:
     for child in list(layer_el):
         tag = _local_name(child.tag)
@@ -389,6 +462,53 @@ def _extract_mei_tie_next_map(root: Any) -> Dict[str, str]:
         end_id = _normalize_xml_ref(el.attrib.get("endid"))
         if start_id and end_id:
             tie_next[start_id] = end_id
+
+    # Also support compact note/chord @tie encodings.  Open chains are keyed
+    # by staff/layer and written pitch so interleaved voices do not connect.
+    parent_by_element = {child: parent for parent in root.iter() for child in parent}
+    open_ties: Dict[Tuple[str, str, str, str], str] = {}
+
+    def _ancestor_number(el: Any, tag_name: str) -> str:
+        current = parent_by_element.get(el)
+        while current is not None:
+            if _local_name(current.tag) == tag_name:
+                return str(current.attrib.get("n", ""))
+            current = parent_by_element.get(current)
+        return ""
+
+    for note_el in root.iter():
+        if _local_name(note_el.tag) != "note":
+            continue
+        parent = parent_by_element.get(note_el)
+        raw_tie = note_el.attrib.get("tie")
+        if raw_tie is None and parent is not None and _local_name(parent.tag) == "chord":
+            raw_tie = parent.attrib.get("tie")
+        tokens = _mei_tie_tokens(raw_tie)
+        if not tokens:
+            continue
+        note_id = _xml_id(note_el)
+        if not note_id:
+            continue
+        pitch_key = (
+            str(note_el.attrib.get("pname") or note_el.attrib.get("pname.ges") or ""),
+            str(note_el.attrib.get("oct") or note_el.attrib.get("oct.ges") or ""),
+        )
+        key = (
+            _ancestor_number(note_el, "staff"),
+            _ancestor_number(note_el, "layer"),
+            pitch_key[0],
+            pitch_key[1],
+        )
+        is_start = bool(tokens & {"i", "initial", "start"})
+        is_middle = bool(tokens & {"m", "medial", "middle"})
+        is_stop = bool(tokens & {"t", "terminal", "stop"})
+        previous_id = open_ties.get(key)
+        if (is_middle or is_stop) and previous_id:
+            tie_next.setdefault(previous_id, note_id)
+        if is_start or is_middle:
+            open_ties[key] = note_id
+        if is_stop:
+            open_ties.pop(key, None)
     return tie_next
 
 
@@ -399,42 +519,28 @@ def _mei_tie_tokens(raw: Any) -> set[str]:
     return {tok for tok in value.replace(",", " ").split() if tok}
 
 
-def _extract_mei_note_tie_continuation_ids(root: Any) -> set[str]:
-    continuation_ids: set[str] = set()
-    continuation_tokens = {"m", "t", "medial", "terminal"}
-    for el in root.iter():
-        tag = _local_name(el.tag)
-        if tag == "note":
-            if not (_mei_tie_tokens(el.attrib.get("tie")) & continuation_tokens):
-                continue
-            xml_id = _xml_id(el)
-            if xml_id:
-                continuation_ids.add(xml_id)
-            continue
-        if tag != "chord":
-            continue
-        if not (_mei_tie_tokens(el.attrib.get("tie")) & continuation_tokens):
-            continue
-        for child in list(el):
-            if _local_name(child.tag) != "note":
-                continue
-            xml_id = _xml_id(child)
-            if xml_id:
-                continuation_ids.add(xml_id)
-    return continuation_ids
+def _apply_tied_duration_semantics(
+    df_pitch: pd.DataFrame,
+    tie_next: Mapping[str, str],
+    *,
+    collapse: bool,
+) -> pd.DataFrame:
+    """Add logical/performed duration fields and optionally drop tie continuations.
 
-
-def _drop_pitch_rows_by_xml_id(df_pitch: pd.DataFrame, xml_ids: set[str]) -> pd.DataFrame:
-    if df_pitch.empty or not xml_ids or "xml_id" not in df_pitch.columns:
-        return df_pitch
-    return df_pitch[~df_pitch["xml_id"].astype(str).isin(xml_ids)].reset_index(drop=True)
-
-
-def _collapse_tied_pitch_rows(df_pitch: pd.DataFrame, tie_next: Mapping[str, str]) -> pd.DataFrame:
-    if df_pitch.empty or not tie_next or "xml_id" not in df_pitch.columns or "Duration" not in df_pitch.columns:
+    ``Duration`` always remains the encoded metric duration of the represented
+    segment.  ``Logical Duration`` is populated once per logical note: on the
+    chain head for ties, and on the row itself for untied notes.  No performed
+    duration is inferred from notation attachments.
+    """
+    if df_pitch.empty or "Duration" not in df_pitch.columns:
         return df_pitch
 
     out = df_pitch.copy()
+    out["Logical Duration"] = pd.to_numeric(out["Duration"], errors="coerce")
+    out["Performed Duration"] = pd.Series(pd.NA, index=out.index, dtype="Float64")
+    if not tie_next or "xml_id" not in out.columns:
+        return out
+
     ids = out["xml_id"].dropna().astype(str)
     row_by_id = {xml_id: idx for idx, xml_id in zip(ids.index, ids.tolist())}
     duration_by_id: Dict[str, float] = {}
@@ -446,8 +552,15 @@ def _collapse_tied_pitch_rows(df_pitch: pd.DataFrame, tie_next: Mapping[str, str
         if np.isfinite(duration):
             duration_by_id[xml_id] = duration
 
+    continuation_ids = set(tie_next.values())
     drop_ids: set[str] = set()
+    for continuation_id in continuation_ids:
+        if continuation_id in row_by_id:
+            out.at[row_by_id[continuation_id], "Logical Duration"] = pd.NA
+
     for start_id in tie_next:
+        if start_id in continuation_ids:
+            continue
         if start_id not in row_by_id:
             continue
         total = duration_by_id.get(start_id)
@@ -462,9 +575,10 @@ def _collapse_tied_pitch_rows(df_pitch: pd.DataFrame, tie_next: Mapping[str, str
             seen.add(next_id)
             if next_id in duration_by_id:
                 total += duration_by_id[next_id]
-                drop_ids.add(next_id)
+                if collapse:
+                    drop_ids.add(next_id)
             current = next_id
-        out.at[row_by_id[start_id], "Duration"] = float(total)
+        out.at[row_by_id[start_id], "Logical Duration"] = float(total)
 
     if drop_ids:
         out = out[~out["xml_id"].astype(str).isin(drop_ids)].reset_index(drop=True)
@@ -488,7 +602,7 @@ def _verovio_common_mei_dataframes(
 
     root = ET.parse(mei_path).getroot()
     tie_next = _extract_mei_tie_next_map(root)
-    tie_continuation_ids = _extract_mei_note_tie_continuation_ids(root)
+    tuplet_span_multipliers = _mei_tuplet_span_multipliers(root)
     note_explicit_alters = _extract_mei_note_explicit_alters(root)
     staff_to_part = _source_staff_index_to_part_label_map_from_mei(root)
     tk = verovio.toolkit()
@@ -566,6 +680,10 @@ def _verovio_common_mei_dataframes(
                 for timed_el, duration_multiplier in _iter_layer_timed_children(layer_el):
                     tag = _local_name(timed_el.tag)
                     timed_xml_id = _xml_id(timed_el)
+                    duration_multiplier *= _timed_element_tuplet_span_multiplier(
+                        timed_el,
+                        tuplet_span_multipliers,
+                    )
                     fallback_duration = _mei_duration_quarters(timed_el)
                     if fallback_duration is None and tag == "chord":
                         for note_child in list(timed_el):
@@ -628,6 +746,8 @@ def _verovio_common_mei_dataframes(
                             note_pitch = midi_pitch
                         if tag == "chord":
                             child_duration_fallback = _mei_duration_quarters(note_el)
+                            if str(timed_el.attrib.get("grace", "")).strip():
+                                child_duration_fallback = 0.0
                             if child_duration_fallback is not None:
                                 child_duration_fallback = float(child_duration_fallback) * float(duration_multiplier)
                             symbolic_child_duration = (
@@ -824,9 +944,11 @@ def _verovio_common_mei_dataframes(
             df_pitch,
             _extract_mei_note_attachments(mei_path),
         )
-    if collapse_tied_pitch_events:
-        df_pitch = _collapse_tied_pitch_rows(df_pitch, tie_next)
-        df_pitch = _drop_pitch_rows_by_xml_id(df_pitch, tie_continuation_ids)
+    df_pitch = _apply_tied_duration_semantics(
+        df_pitch,
+        tie_next,
+        collapse=collapse_tied_pitch_events,
+    )
 
     return df_pitch, timed_df, staff_to_part, measure_offsets, load_info, missing_timed_ids
 

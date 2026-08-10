@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Added explicit `Logical Duration` and nullable `Performed Duration` columns
+  to Verovio-backed `df_pitch` output. `Logical Duration` is recorded once per
+  logical note and sums every segment in a tie chain exactly once, while
+  `Performed Duration` remains unset until a separate empirical or rule-based
+  performance model supplies it.
+- Added `duration_semantics_examples.ipynb`, an offline tutorial showing how to
+  render the local example score, parse metric segments with
+  `collapse_tied_pitch_events=False`, parse logical notes with
+  `collapse_tied_pitch_events=True`, inspect duration-neutral note metadata,
+  attach optional performed durations, and build distributions for an
+  explicitly selected duration concept.
+- Added an offline duration-semantics MEI fixture, focused pytest coverage, and
+  `scripts/diagnose_duration_semantics.py` for dotted notes, container and span
+  tuplets, grace notes, explicit and attribute-encoded tie chains, attachment
+  metadata, and collapsed/uncollapsed duration invariants.
+
+### Changed
+
+- Defined Verovio `df_pitch.Duration` consistently as the metric duration of
+  the represented encoded segment, including dots and tuplet ratios. Collapsing
+  tied pitch events now removes continuation rows without overwriting the chain
+  head's segment duration; the complete tie-chain value is available separately
+  in `Logical Duration`.
+- Added an explicit `duration_column` selector to `build_duration_counts(...)`
+  and `display_duration_distribution(...)`, and exposed logical/performed
+  duration fields in piano-roll hover data.
+- Expanded MEI note-attachment extraction so compact note/chord `@tie`
+  encodings populate `tied`, and every note covered by a `tupletSpan` is marked
+  as `start`, `member`, or `stop` rather than only marking its endpoints.
+
+### Fixed
+
+- Fixed Verovio grace-note timing so grace notes have zero metric duration and
+  do not advance the encoded layer cursor.
+- Fixed `tupletSpan` timing so `num`/`numbase` ratios are included in metric
+  duration, while avoiding a second ratio application when notes are already
+  inside an equivalent `<tuplet>` container.
+- Fixed collapsed multi-segment and compact `@tie` chains so continuation
+  durations are summed exactly once and uncollapsed rows retain their original
+  segment durations.
+
 ## [0.1.12] - 2026-08-09
 
 ### Added

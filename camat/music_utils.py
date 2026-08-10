@@ -328,7 +328,8 @@ def draw_piano_roll(
         When backend == 'bokeh', add a HoverTool with configurable fields. Default True.
     hover_fields : Sequence[str], optional
         List of fields to show in the hover tooltip (bokeh only). Supported keys:
-        ['pitch', 'midi', 'voice', 'measure', 'global_onset', 'local_onset', 'duration', 'xml_id'].
+        ['pitch', 'midi', 'voice', 'measure', 'global_onset', 'local_onset',
+        'duration', 'logical_duration', 'performed_duration', 'xml_id'].
         Defaults to a sensible ordering when None.
     pitch_labels : bool
         Whether to use pitch names on the y-axis when supported.
@@ -683,6 +684,14 @@ def draw_piano_roll(
             source_data["xml_id"] = xml_id_col
         if "Pitch Enharmonic" in df.columns:
             source_data["pitch_enharmonic"] = df["Pitch Enharmonic"].fillna("").tolist()
+        if "Logical Duration" in df.columns:
+            source_data["logical_duration"] = pd.to_numeric(
+                df["Logical Duration"], errors="coerce"
+            ).to_numpy(dtype=float, na_value=np.nan)
+        if "Performed Duration" in df.columns:
+            source_data["performed_duration"] = pd.to_numeric(
+                df["Performed Duration"], errors="coerce"
+            ).to_numpy(dtype=float, na_value=np.nan)
 
         # Normalize zoom dimension options
         def _norm_dim(val: Optional[str]) -> str:
@@ -738,6 +747,8 @@ def draw_piano_roll(
                     "global_onset": ("Global Onset", "@global_onset"),
                     "local_onset": ("Local Onset", "@local_onset"),
                     "duration": ("Duration", "@duration"),
+                    "logical_duration": ("Logical Duration", "@logical_duration"),
+                    "performed_duration": ("Performed Duration", "@performed_duration"),
                     "pitch_enharmonic": ("Pitch (Enharmonic)", "@pitch_enharmonic"),
                 }
                 default_order = ["pitch", "pitch_enharmonic", "voice", "measure", "xml_id", "global_onset", "local_onset", "duration", "midi"]
@@ -881,7 +892,17 @@ def filter_and_adjust_durations(
         df_processed = df
 
     if adjust_fractional_duration:
-        round_cols = [c for c in ("Duration", "Local Onset", "Global Onset") if c in df_processed.columns]
+        round_cols = [
+            c
+            for c in (
+                "Duration",
+                "Logical Duration",
+                "Performed Duration",
+                "Local Onset",
+                "Global Onset",
+            )
+            if c in df_processed.columns
+        ]
         if round_cols:
             # Ensure we don't mutate the caller's frame when no filter ran.
             if df_processed is df:

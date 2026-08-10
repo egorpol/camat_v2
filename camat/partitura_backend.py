@@ -1077,6 +1077,13 @@ def _extract_mei_note_attachments(mei_path: str) -> Dict[str, Dict[str, Any]]:
         return out
 
     parent_map = {child: parent for parent in root.iter() for child in parent}
+    ordered_note_ids = [
+        note_id
+        for candidate in root.iter()
+        if _lname(candidate.tag) == "note"
+        and (note_id := _xid(candidate)) is not None
+    ]
+    note_position = {note_id: index for index, note_id in enumerate(ordered_note_ids)}
     attachments: Dict[str, Dict[str, Any]] = {}
 
     def _bucket(nid: str) -> Dict[str, Any]:
@@ -1142,6 +1149,20 @@ def _extract_mei_note_attachments(mei_path: str) -> Dict[str, Dict[str, Any]]:
                 _mark(nid, "ornaments", el.attrib["ornam"])
             if el.attrib.get("fermata"):
                 _mark(nid, "fermata", True)
+            tie_attr = el.attrib.get("tie")
+            if tie_attr is None and parent_tag == "chord" and parent is not None:
+                tie_attr = parent.attrib.get("tie")
+            tie_tokens = {
+                token
+                for token in str(tie_attr or "").lower().replace(",", " ").split()
+                if token
+            }
+            if tie_tokens & {"i", "initial", "start"}:
+                _mark(nid, "tied", "start")
+            if tie_tokens & {"m", "medial", "middle"}:
+                _mark(nid, "tied", "middle")
+            if tie_tokens & {"t", "terminal", "stop"}:
+                _mark(nid, "tied", "stop")
             # Children like <artic>, <trill>, <mordent>, <turn>, <ornam>.
             for child in el:
                 ctag = _lname(child.tag)
@@ -1199,16 +1220,23 @@ def _extract_mei_note_attachments(mei_path: str) -> Dict[str, Dict[str, Any]]:
         elif tag == "tupletSpan":
             startid = el.attrib.get("startid")
             endid = el.attrib.get("endid")
+            sid = startid.lstrip("#").strip() if startid else ""
+            eid = endid.lstrip("#").strip() if endid else ""
+            if sid in note_position and eid in note_position:
+                start_position = note_position[sid]
+                end_position = note_position[eid]
+                if start_position < end_position:
+                    for member_id in ordered_note_ids[start_position + 1 : end_position]:
+                        _mark(member_id, "tuplet", "member")
             if startid:
-                sid = startid.lstrip("#").strip()
                 if sid:
                     _mark(sid, "tuplet", "start")
             if endid:
-                eid = endid.lstrip("#").strip()
                 if eid:
                     _mark(eid, "tuplet", "stop")
             for pid in _ids_from_plist(el.attrib.get("plist")):
-                _mark(pid, "tuplet", "member")
+                if pid not in {sid, eid}:
+                    _mark(pid, "tuplet", "member")
 
     if cache_key is not None:
         if len(_NOTE_ATTACHMENTS_CACHE) >= _NOTE_ATTACHMENTS_CACHE_MAX:

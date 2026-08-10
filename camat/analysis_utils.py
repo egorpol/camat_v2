@@ -1298,13 +1298,17 @@ def build_duration_counts(
     drop_zero: bool = True,
     round_decimals: Optional[int] = 4,
     normalize: bool = False,
+    duration_column: Optional[str] = None,
 ) -> Tuple[pd.DataFrame, str]:
-    # Detect duration column
-    duration_col = None
-    for candidate in ['Duration', 'duration', 'durations', 'Durations']:
-        if candidate in df.columns:
-            duration_col = candidate
-            break
+    # Use an explicitly selected duration concept, or retain legacy detection.
+    duration_col = duration_column
+    if duration_col is not None and duration_col not in df.columns:
+        raise ValueError(f"Duration column {duration_col!r} is not present in the DataFrame.")
+    if duration_col is None:
+        for candidate in ['Duration', 'duration', 'durations', 'Durations']:
+            if candidate in df.columns:
+                duration_col = candidate
+                break
     
     if duration_col is None:
         raise ValueError("No duration column found. Checked: 'Duration', 'duration', 'durations', 'Durations'.")
@@ -1430,6 +1434,7 @@ def display_duration_distribution(
     source_labels: Optional[Sequence[str]] = None,
     normalize: bool = False,
     float_format: Optional[str] = None,
+    duration_column: Optional[str] = None,
 ) -> Union[pd.DataFrame, Mapping[str, pd.DataFrame]]:
     """
     Build and display a duration distribution table and plot from a DataFrame.
@@ -1458,6 +1463,9 @@ def display_duration_distribution(
     float_format : str or None
         Optional Python-style float format for displayed values, e.g. '.3f'.
         Shorthand like '3f' is also accepted and treated as '.3f'.
+    duration_column : str or None
+        Explicit duration concept to analyze, for example ``'Duration'`` for
+        metric segments or ``'Logical Duration'`` for tied logical notes.
 
     Returns
     -------
@@ -1485,6 +1493,7 @@ def display_duration_distribution(
             drop_zero,
             round_decimals,
             normalize=bool(normalize),
+            duration_column=duration_column,
         )
 
         if show_table:
@@ -1541,6 +1550,7 @@ def display_duration_distribution(
             drop_zero,
             round_decimals,
             normalize=bool(normalize),
+            duration_column=duration_column,
         )
         if display_col is None:
             display_col = display_col_i
