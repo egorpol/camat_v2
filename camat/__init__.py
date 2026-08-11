@@ -1,7 +1,12 @@
-__version__ = "0.1.12"
+__version__ = "0.1.13"
 
 from .pattern_search import run_pattern_search
-from .parser_registry import get_parse_files, list_parsers, parse_files_quiet
+from .parser_registry import (
+    get_parse_files,
+    list_parsers,
+    parse_files,
+    parse_files_quiet,
+)
 from .mensural_backend import parse_files_mensural
 from .verovio_backend import parse_files_verovio
 from .verovio_render import (
@@ -95,6 +100,7 @@ __all__ = [
     'run_pattern_search',
     'get_parse_files',
     'list_parsers',
+    'parse_files',
     'parse_files_quiet',
     'parse_files_mensural',
     'parse_files_verovio',

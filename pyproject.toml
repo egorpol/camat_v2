@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "camat"
-version = "0.1.12"
+version = "0.1.13"
 description = "CAMAT: tools for symbolic music parsing, analysis, and rendering."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -41,6 +41,9 @@ include-package-data = false
 
 [tool.setuptools.packages.find]
 include = ["camat*"]
+
+[tool.setuptools.package-data]
+camat = ["examples/*.mei"]
 
 [tool.setuptools.dynamic]
 dependencies = { file = ["requirements.txt"] }

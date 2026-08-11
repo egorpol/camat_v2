@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from importlib.metadata import version as distribution_version
+from importlib.resources import files
 import os
 from pathlib import Path
 import xml.etree.ElementTree as ET
@@ -15,6 +16,7 @@ from camat.parser_registry import normalize_backend_name, parse_files
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
 MEI_FIXTURE = FIXTURES / "basic.mei"
 MUSICXML_FIXTURE = FIXTURES / "basic.musicxml"
+DURATION_FIXTURE = FIXTURES / "duration_semantics.mei"
 
 SAMPLE_TIMELINE = """!!!OTL: Release smoke test
 **recip\t**lyrics\t**ipa\t**stress
@@ -48,6 +50,10 @@ def test_wheel_is_installed_and_public_api_is_complete() -> None:
     )
     assert distribution_version("camat") == camat.__version__
     assert all(hasattr(camat, name) for name in camat.__all__)
+    assert camat.parse_files is parse_files
+    packaged_example = files("camat").joinpath("examples", "duration_semantics.mei")
+    assert packaged_example.is_file()
+    assert packaged_example.read_bytes() == DURATION_FIXTURE.read_bytes()
 
 
 def test_parser_registry_and_default_verovio_mei_parser() -> None:

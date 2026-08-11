@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mei xmlns="http://www.music-encoding.org/ns/mei" meiversion="5.0">
+  <meiHead>
+    <fileDesc>
+      <titleStmt><title>CAMAT duration semantics regression</title></titleStmt>
+      <pubStmt><p>Generated test fixture</p></pubStmt>
+    </fileDesc>
+  </meiHead>
+  <music>
+    <body>
+      <mdiv>
+        <score>
+          <scoreDef meter.count="4" meter.unit="4">
+            <staffGrp>
+              <staffDef n="1" lines="5" clef.shape="G" clef.line="2"/>
+            </staffGrp>
+          </scoreDef>
+          <section>
+            <measure n="1" xml:id="duration-measure-1">
+              <staff n="1"><layer n="1">
+                <note xml:id="dotted" pname="c" oct="4" dur="4" dots="1"
+                      artic="stacc" fermata="above" ornam="trill">
+                  <bend/>
+                </note>
+                <tuplet xml:id="triplet" num="3" numbase="2">
+                  <note xml:id="triplet-1" pname="d" oct="4" dur="8"/>
+                  <note xml:id="triplet-2" pname="e" oct="4" dur="8"/>
+                  <note xml:id="triplet-3" pname="f" oct="4" dur="8"/>
+                </tuplet>
+                <note xml:id="grace" pname="g" oct="4" dur="8" grace="unacc"/>
+                <note xml:id="measure-1-tail" pname="a" oct="4" dur="4" dots="1"/>
+              </layer></staff>
+              <slur startid="#dotted" endid="#triplet-1"/>
+            </measure>
+            <measure n="2" xml:id="duration-measure-2">
+              <staff n="1"><layer n="1">
+                <beam>
+                  <note xml:id="quintuplet-1" pname="g" oct="4" dur="8"/>
+                  <note xml:id="quintuplet-2" pname="a" oct="4" dur="8"/>
+                  <note xml:id="quintuplet-3" pname="b" oct="4" dur="8"/>
+                  <note xml:id="quintuplet-4" pname="c" oct="5" dur="8"/>
+                  <note xml:id="quintuplet-5" pname="d" oct="5" dur="8"/>
+                </beam>
+                <rest xml:id="measure-2-rest-half" dur="2"/>
+                <rest xml:id="measure-2-rest-eighth" dur="8"/>
+              </layer></staff>
+              <tupletSpan startid="#quintuplet-1" endid="#quintuplet-5"
+                          num="5" numbase="3"/>
+            </measure>
+            <measure n="3" xml:id="duration-measure-3">
+              <staff n="1"><layer n="1">
+                <note xml:id="tie-a" pname="e" oct="5" dur="4"/>
+                <note xml:id="tie-b" pname="e" oct="5" dur="8"/>
+                <note xml:id="tie-c" pname="e" oct="5" dur="8" dots="1"/>
+                <rest xml:id="measure-3-tail" dur="4" dots="1"/>
+              </layer></staff>
+              <tie startid="#tie-a" endid="#tie-b"/>
+              <tie startid="#tie-b" endid="#tie-c"/>
+            </measure>
+            <measure n="4" xml:id="duration-measure-4">
+              <staff n="1"><layer n="1">
+                <note xml:id="attr-tie-a" pname="f" oct="5" dur="2" tie="i"/>
+                <note xml:id="attr-tie-b" pname="f" oct="5" dur="2" tie="t"/>
+              </layer></staff>
+            </measure>
+          </section>
+        </score>
+      </mdiv>
+    </body>
+  </music>
+</mei>

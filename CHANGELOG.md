@@ -7,8 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.13] - 2026-08-11
+
 ### Added
 
+- Exposed the backend-dispatching `parse_files(...)` function directly from
+  `camat`, while retaining `camat.parser_registry.parse_files` as the original
+  import path.
+- Bundled the duration-semantics MEI example as package data so
+  `duration_semantics_examples.ipynb` can run from a fresh wheel installation
+  without relying on the repository's `tests/fixtures` directory.
 - Added explicit `Logical Duration` and nullable `Performed Duration` columns
   to Verovio-backed `df_pitch` output. `Logical Duration` is recorded once per
   logical note and sums every segment in a tie chain exactly once, while
