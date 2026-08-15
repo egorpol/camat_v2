@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Added an optional `highlight_style="mei-friend"` treatment to Verovio
+  annotation rendering, using mei-friend's familiar blue selection color and
+  short pulse animation. The pulse color can be customized with `pulse_color`.
+- Added `vrv_crop_svg_to_ids(...)` and `vrv_crop_svgs_to_ids(...)` for visual
+  Verovio excerpts that can start or end within a measure while retaining the
+  selected staves and omitting pages without selected elements.
+- Added `vrv_mask_mei_to_ids(...)` and `vrv_render_selection_excerpt(...)` for
+  rendering selected source notes on otherwise blank staves. Unselected events
+  become duration-preserving MEI spaces, partial beams are safely unwrapped,
+  and the previously loaded Verovio score is restored after rendering.
+- Added `vrv_render_symbolic_selection(...)`, which accepts a `df_pitch`
+  selection directly, uses its `xml_id` values to retain source-MEI notation,
+  and keeps the selected staff's clef, key signature, and meter in the rendered
+  excerpt. Inline clef/key/meter changes active at the selection are promoted
+  into its opening context, and the helper can also return the generated
+  standalone excerpt MEI.
+
+### Fixed
+
+- Scoped annotation highlight CSS to a unique attribute on each rendered SVG,
+  preventing repeated MEI/SVG ids from applying one notebook cell's selection
+  highlights to other cell outputs. High-level annotation helpers no longer
+  persist their highlight rules in the shared Verovio toolkit, and the
+  annotation notebook now reloads the source score at the start of each
+  independent render cell to avoid carrying annotations between cells.
+
 ## [0.1.13] - 2026-08-11
 
 ### Added

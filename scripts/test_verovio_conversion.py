@@ -537,7 +537,23 @@ def convert_sources(
             verbose=show_progress,
         )
     else:
-        source_list = [str(source).strip() for source in sources if str(source).strip()]
+        source_root = (
+            Path(source_base_dir).resolve()
+            if source_base_dir is not None
+            else Path.cwd().resolve()
+        )
+        source_list = []
+        for raw_source in sources:
+            source = str(raw_source).strip()
+            if not source:
+                continue
+            if source.startswith(("http://", "https://")):
+                source_list.append(source)
+                continue
+            source_path = Path(source)
+            if not source_path.is_absolute():
+                source_path = source_root / source_path
+            source_list.append(str(source_path.resolve()))
     effective_n_jobs = _resolve_n_jobs(n_jobs, len(source_list))
     stamp = _timestamp_label(timestamp)
 

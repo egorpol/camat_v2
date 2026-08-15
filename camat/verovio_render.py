@@ -4,6 +4,7 @@ import base64
 import io
 import os
 import re
+import uuid
 import warnings
 import json
 import hashlib
@@ -36,10 +37,15 @@ __all__ = [
     "vrv_timemap",
     "vrv_get_mei",
     "vrv_set_mei",
+    "vrv_mask_mei_to_ids",
+    "vrv_render_selection_excerpt",
+    "vrv_render_symbolic_selection",
     "vrv_insert_annot",
     "vrv_has_mei_export",
     "vrv_set_additional_css",
     "vrv_highlight_ids",
+    "vrv_crop_svg_to_ids",
+    "vrv_crop_svgs_to_ids",
     "vrv_debug_info",
     "vrv_process_annotations",
     "vrv_quiet",
@@ -501,6 +507,534 @@ def vrv_set_mei(mei_xml: str) -> int:
     return pages
 
 
+def vrv_mask_mei_to_ids(mei_xml: str, ids: List[str]) -> str:
+    """
+    Return an MEI score in which only the selected notes remain visible.
+
+    Measures containing no selected ids are removed. Within retained measures,
+    unselected notes and rests become invisible ``<space>`` / ``<mSpace>``
+    events carrying the original duration attributes and ids. This preserves
+    the selected notes' original temporal positions without displaying the
+    surrounding music. Partially retained beams are unwrapped so Verovio can
+    render the mixture of visible notes and invisible spaces safely.
+    """
+    try:
+        from xml.etree import ElementTree as ET  # type: ignore
+    except Exception as exc:  # pragma: no cover
+        raise RuntimeError("xml.etree.ElementTree is required to mask MEI") from exc
+
+    try:
+        ET.register_namespace("", MEI_NS)
+        ET.register_namespace("xml", XML_NS)
+        root = ET.fromstring(mei_xml)
+    except Exception as exc:
+        raise ValueError("mei_xml is not well-formed XML") from exc
+
+    selected_ids = {value.lstrip("#") for value in ids if value}
+    if not selected_ids:
+        raise ValueError("ids must contain at least one MEI xml:id")
+
+    xml_id_key = f"{{{XML_NS}}}id"
+    parent_map = {child: parent for parent in root.iter() for child in parent}
+    selected_nodes = [
+        element
+        for element in root.iter()
+        if element.get(xml_id_key) in selected_ids
+        and _xml_local_name(element.tag) == "note"
+    ]
+    found_ids = {element.get(xml_id_key) for element in selected_nodes}
+    missing_ids = sorted(selected_ids - found_ids)
+    if missing_ids:
+        preview = ", ".join(missing_ids[:5])
+        suffix = " ..." if len(missing_ids) > 5 else ""
+        raise ValueError(f"Selected note ids not found in MEI: {preview}{suffix}")
+
+    selected_measures = set()
+    selected_staff_numbers: set[str] = set()
+    selected_layer_keys: set[Tuple[str, str]] = set()
+    for node in selected_nodes:
+        current = node
+        staff_number = "1"
+        layer_number = "1"
+        while current is not None:
+            local_name = _xml_local_name(current.tag)
+            if local_name == "layer":
+                layer_number = current.get("n", "1")
+            elif local_name == "staff":
+                staff_number = current.get("n", "1")
+            if _xml_local_name(current.tag) == "measure":
+                selected_measures.add(current)
+                break
+            current = parent_map.get(current)
+        selected_staff_numbers.add(staff_number)
+        selected_layer_keys.add((staff_number, layer_number))
+    if not selected_measures:
+        raise ValueError("Selected ids are not contained in MEI measures")
+
+    # Promote the notation context active at the first selected event. Inline
+    # clef/key/meter changes can live in an earlier measure that will be removed,
+    # so relying only on the work's opening scoreDef can produce the wrong staff.
+    selected_score = None
+    current = selected_nodes[0]
+    while current is not None:
+        if _xml_local_name(current.tag) == "score":
+            selected_score = current
+            break
+        current = parent_map.get(current)
+
+    if selected_score is not None:
+        score_order = list(selected_score.iter())
+        order_index = {element: index for index, element in enumerate(score_order)}
+        first_selected_index = min(order_index[node] for node in selected_nodes)
+        opening_score_def = next(
+            (
+                element
+                for element in score_order
+                if _xml_local_name(element.tag) == "scoreDef"
+            ),
+            None,
+        )
+
+        active_score_context: Dict[str, str] = {}
+        active_clefs: Dict[str, Dict[str, str]] = {}
+
+        def ancestor_staff_number(element) -> Optional[str]:
+            ancestor = element
+            while ancestor is not None and ancestor is not selected_score:
+                if _xml_local_name(ancestor.tag) == "staff":
+                    return ancestor.get("n", "1")
+                ancestor = parent_map.get(ancestor)
+            return None
+
+        for element in score_order[: first_selected_index + 1]:
+            local_name = _xml_local_name(element.tag)
+            if local_name == "scoreDef":
+                for name in (
+                    "meter.count",
+                    "meter.unit",
+                    "meter.sym",
+                    "keysig",
+                    "key.mode",
+                ):
+                    value = element.get(name)
+                    if value is not None:
+                        active_score_context[name] = value
+            elif local_name == "meterSig":
+                for source_name, target_name in (
+                    ("count", "meter.count"),
+                    ("unit", "meter.unit"),
+                    ("sym", "meter.sym"),
+                ):
+                    value = element.get(source_name)
+                    if value is not None:
+                        active_score_context[target_name] = value
+            elif local_name == "keySig":
+                for source_name, target_name in (("sig", "keysig"), ("mode", "key.mode")):
+                    value = element.get(source_name)
+                    if value is not None:
+                        active_score_context[target_name] = value
+            elif local_name == "staffDef":
+                staff_number = element.get("n", "1")
+                clef_context = active_clefs.setdefault(staff_number, {})
+                for name in ("shape", "line", "dis", "dis.place"):
+                    value = element.get(f"clef.{name}")
+                    if value is not None:
+                        clef_context[name] = value
+            elif local_name == "clef":
+                staff_number = element.get("staff") or ancestor_staff_number(element)
+                if staff_number:
+                    staff_number = str(staff_number).split()[0]
+                    clef_context = active_clefs.setdefault(staff_number, {})
+                    for name in ("shape", "line", "dis", "dis.place"):
+                        value = element.get(name)
+                        if value is not None:
+                            clef_context[name] = value
+
+        if opening_score_def is not None:
+            opening_score_def.attrib.update(active_score_context)
+            for staff_def in opening_score_def.iter():
+                if _xml_local_name(staff_def.tag) != "staffDef":
+                    continue
+                staff_number = staff_def.get("n", "1")
+                for name, value in active_clefs.get(staff_number, {}).items():
+                    staff_def.set(f"clef.{name}", value)
+
+    for measure in list(root.iter()):
+        if _xml_local_name(measure.tag) != "measure" or measure in selected_measures:
+            continue
+        parent = parent_map.get(measure)
+        if parent is not None:
+            parent.remove(measure)
+
+    # Remove unselected staves and voices entirely. Their timing is irrelevant
+    # to the isolated symbolic excerpt and leaving their staffDefs behind can
+    # produce empty systems or a dangling brace at the crop boundary.
+    for measure in selected_measures:
+        for staff in [
+            element for element in list(measure) if _xml_local_name(element.tag) == "staff"
+        ]:
+            staff_number = staff.get("n", "1")
+            if staff_number not in selected_staff_numbers:
+                measure.remove(staff)
+                continue
+            for layer in [
+                element for element in list(staff) if _xml_local_name(element.tag) == "layer"
+            ]:
+                if (staff_number, layer.get("n", "1")) not in selected_layer_keys:
+                    staff.remove(layer)
+
+    for staff_def in [
+        element for element in root.iter() if _xml_local_name(element.tag) == "staffDef"
+    ]:
+        if staff_def.get("n", "1") in selected_staff_numbers:
+            continue
+        staff_group = parent_map.get(staff_def)
+        if staff_group is not None:
+            staff_group.remove(staff_def)
+    for staff_group in [
+        element for element in root.iter() if _xml_local_name(element.tag) == "staffGrp"
+    ]:
+        remaining_staff_defs = [
+            element
+            for element in staff_group.iter()
+            if _xml_local_name(element.tag) == "staffDef"
+        ]
+        if len(remaining_staff_defs) <= 1:
+            staff_group.attrib.pop("symbol", None)
+            staff_group.attrib.pop("bar.thru", None)
+
+    # Page headers from the full work are not part of an isolated selection.
+    parent_map = {child: parent for parent in root.iter() for child in parent}
+    for header in list(root.iter()):
+        if _xml_local_name(header.tag) not in {"pgHead", "pgFoot"}:
+            continue
+        parent = parent_map.get(header)
+        if parent is not None:
+            parent.remove(header)
+
+    duration_attributes = {
+        "dur",
+        "dots",
+        "dur.ges",
+        "num",
+        "numbase",
+        "tstamp",
+        "staff",
+        "layer",
+    }
+
+    def replacement_space(event, *, measure_space: bool = False):
+        tag = "mSpace" if measure_space else "space"
+        space = ET.Element(f"{{{MEI_NS}}}{tag}")
+        event_id = event.get(xml_id_key)
+        if event_id:
+            space.set(xml_id_key, event_id)
+        for name in duration_attributes:
+            value = event.get(name)
+            if value is not None:
+                space.set(name, value)
+        if not space.get("dur"):
+            for descendant in event.iter():
+                value = descendant.get("dur")
+                if value:
+                    space.set("dur", value)
+                    dots = descendant.get("dots")
+                    if dots:
+                        space.set("dots", dots)
+                    break
+        return space
+
+    parent_map = {child: parent for parent in root.iter() for child in parent}
+
+    # Chords are simultaneous events: retain selected pitches in a partial chord,
+    # or replace the whole unselected chord with one duration-equivalent space.
+    chord_notes = set()
+    for chord in [element for element in root.iter() if _xml_local_name(element.tag) == "chord"]:
+        notes = [child for child in list(chord) if _xml_local_name(child.tag) == "note"]
+        chord_notes.update(notes)
+        visible_notes = [note for note in notes if note.get(xml_id_key) in selected_ids]
+        if visible_notes:
+            for note in notes:
+                if note not in visible_notes:
+                    chord.remove(note)
+            continue
+        parent = parent_map.get(chord)
+        if parent is None:
+            continue
+        index = list(parent).index(chord)
+        parent.remove(chord)
+        parent.insert(index, replacement_space(chord))
+
+    parent_map = {child: parent for parent in root.iter() for child in parent}
+    for event in list(root.iter()):
+        local_name = _xml_local_name(event.tag)
+        if local_name == "note" and event not in chord_notes:
+            if event.get(xml_id_key) in selected_ids:
+                continue
+            parent = parent_map.get(event)
+            if parent is None:
+                continue
+            index = list(parent).index(event)
+            parent.remove(event)
+            # Grace notes occupy no metric time, so no compensating space is needed.
+            if event.get("grace") is None:
+                parent.insert(index, replacement_space(event))
+        elif local_name in {"rest", "mRest"}:
+            parent = parent_map.get(event)
+            if parent is None:
+                continue
+            index = list(parent).index(event)
+            parent.remove(event)
+            parent.insert(index, replacement_space(event, measure_space=local_name == "mRest"))
+
+    # A beam containing spaces is no longer a meaningful visible beam. Promote
+    # its children in place; complete beams made entirely of selected notes stay.
+    parent_map = {child: parent for parent in root.iter() for child in parent}
+    for beam in [element for element in root.iter() if _xml_local_name(element.tag) == "beam"]:
+        has_space = any(
+            _xml_local_name(descendant.tag) in {"space", "mSpace"}
+            for descendant in beam.iter()
+        )
+        if not has_space:
+            continue
+        parent = parent_map.get(beam)
+        if parent is None:
+            continue
+        index = list(parent).index(beam)
+        children = list(beam)
+        parent.remove(beam)
+        for offset, child in enumerate(children):
+            parent.insert(index + offset, child)
+
+    # A tupletSpan whose endpoints became spaces may no longer engrave its ratio.
+    # When its endpoints are now siblings (commonly after partial-beam unwrapping),
+    # convert the covered event range into an equivalent temporary <tuplet>.
+    parent_map = {child: parent for parent in root.iter() for child in parent}
+    by_id = {element.get(xml_id_key): element for element in root.iter() if element.get(xml_id_key)}
+    for span in [
+        element for element in root.iter() if _xml_local_name(element.tag) == "tupletSpan"
+    ]:
+        span_parent = parent_map.get(span)
+        start = by_id.get((span.get("startid") or "").lstrip("#"))
+        end = by_id.get((span.get("endid") or "").lstrip("#"))
+        if start is None or end is None or parent_map.get(start) is not parent_map.get(end):
+            continue
+        event_parent = parent_map.get(start)
+        if event_parent is None:
+            continue
+        siblings = list(event_parent)
+        start_index = siblings.index(start)
+        end_index = siblings.index(end)
+        if end_index < start_index:
+            start_index, end_index = end_index, start_index
+        covered_events = siblings[start_index : end_index + 1]
+        contains_selection = any(
+            descendant.get(xml_id_key) in selected_ids
+            and _xml_local_name(descendant.tag) == "note"
+            for event in covered_events
+            for descendant in event.iter()
+        )
+        if not contains_selection:
+            if span_parent is not None:
+                span_parent.remove(span)
+            continue
+
+        tuplet = ET.Element(f"{{{MEI_NS}}}tuplet")
+        for name in (
+            "num",
+            "numbase",
+            "num.format",
+            "num.place",
+            "num.visible",
+            "bracket.place",
+            "bracket.visible",
+        ):
+            value = span.get(name)
+            if value is not None:
+                tuplet.set(name, value)
+        span_id = span.get(xml_id_key)
+        if span_id:
+            tuplet.set(xml_id_key, span_id)
+        for event in covered_events:
+            event_parent.remove(event)
+            tuplet.append(event)
+        event_parent.insert(start_index, tuplet)
+        if span_parent is not None:
+            span_parent.remove(span)
+
+    # Remove visible editorial/control material that could otherwise float over
+    # the blank staff. Tuplets and tupletSpan remain because they affect duration.
+    removable_names = {
+        "annot",
+        "arpeg",
+        "dir",
+        "dynam",
+        "fermata",
+        "hairpin",
+        "harm",
+        "mordent",
+        "octave",
+        "pedal",
+        "phrase",
+        "slur",
+        "tempo",
+        "tie",
+        "trill",
+        "turn",
+        "verse",
+    }
+    parent_map = {child: parent for parent in root.iter() for child in parent}
+    for element in list(root.iter()):
+        if _xml_local_name(element.tag) not in removable_names:
+            continue
+        parent = parent_map.get(element)
+        if parent is not None:
+            parent.remove(element)
+
+    for note in root.iter(f"{{{MEI_NS}}}note"):
+        # Keep source-local notation such as accidentals, dots, stems,
+        # articulations, fermatas, and ornaments. Only drop relationship
+        # shorthand that can point to notes removed from the excerpt.
+        for attribute in ("slur", "tie"):
+            note.attrib.pop(attribute, None)
+
+    return ET.tostring(root, encoding="unicode")
+
+
+def vrv_render_selection_excerpt(
+    ids: List[str],
+    *,
+    mei_xml: Optional[str] = None,
+    x_padding: float = 350,
+    y_padding: float = 250,
+    output_scale: float = 1.25,
+    highlight_color: Optional[str] = None,
+    highlight_style: str = "solid",
+    pulse_color: str = "#0e4bad",
+    display: bool = True,
+    include_staff_context: bool = True,
+) -> List[str]:
+    """
+    Render selected notes on otherwise blank staves and restore toolkit state.
+
+    The source notes retain their pitch and encoded-duration attributes in a
+    temporary masked MEI; surrounding time-bearing events become invisible
+    spaces. The rendered pages are then cropped to the selected span, including
+    selections that begin or end within a measure. The score previously loaded
+    in the shared toolkit is restored before this function returns, even when
+    rendering fails.
+    """
+    original_mei = vrv_get_mei()
+    source_mei = mei_xml if mei_xml is not None else original_mei
+    masked_mei = vrv_mask_mei_to_ids(source_mei, ids)
+
+    try:
+        vrv_set_mei(masked_mei)
+        pages = vrv_render_all_pages()
+        if highlight_color is not None:
+            pages = [
+                vrv_inject_highlight_css(
+                    svg,
+                    ids,
+                    color=highlight_color,
+                    shape_only=True,
+                    highlight_style=highlight_style,
+                    pulse_color=pulse_color,
+                )
+                for svg in pages
+            ]
+        excerpt_pages = vrv_crop_svgs_to_ids(
+            pages,
+            ids,
+            x_padding=x_padding,
+            y_padding=y_padding,
+            output_scale=output_scale,
+            include_staff_context=include_staff_context,
+        )
+    finally:
+        vrv_set_mei(original_mei)
+
+    if display:
+        for svg in excerpt_pages:
+            vrv_display_svg(svg)
+    return excerpt_pages
+
+
+def _vrv_ids_from_selection(selection: Any) -> List[str]:
+    """Extract normalized MEI pointers from a DataFrame-like object or id list."""
+    if isinstance(selection, (list, tuple, set)):
+        raw_ids = list(selection)
+    elif hasattr(selection, "columns"):
+        columns = list(selection.columns)
+        normalized = {
+            re.sub(r"[^a-z0-9]", "", str(column).lower()): column for column in columns
+        }
+        xml_id_column = normalized.get("xmlid")
+        if xml_id_column is None:
+            raise ValueError("selection DataFrame must contain an xml_id column")
+        raw_ids = list(selection[xml_id_column])
+    else:
+        raise TypeError("selection must be a DataFrame-like object or a list of ids")
+
+    ids: List[str] = []
+    seen: set[str] = set()
+    for value in raw_ids:
+        if value is None:
+            continue
+        text = str(value).strip()
+        if not text or text.lower() in {"nan", "<na>", "none"}:
+            continue
+        pointer = text if text.startswith("#") else f"#{text}"
+        if pointer not in seen:
+            seen.add(pointer)
+            ids.append(pointer)
+    if not ids:
+        raise ValueError("selection contains no usable MEI xml_id values")
+    return ids
+
+
+def vrv_render_symbolic_selection(
+    selection: Any,
+    *,
+    mei_xml: Optional[str] = None,
+    x_padding: float = 200,
+    y_padding: float = 300,
+    output_scale: float = 1.25,
+    highlight_color: Optional[str] = None,
+    highlight_style: str = "solid",
+    pulse_color: str = "#0e4bad",
+    display: bool = True,
+    return_mei: bool = False,
+):
+    """
+    Render a DataFrame selection as a source-faithful symbolic MEI excerpt.
+
+    The DataFrame contributes its ``xml_id`` selection; the source MEI supplies
+    the notation semantics. Unselected events become duration-preserving spaces,
+    while the crop retains the beginning of each selected staff so Verovio's
+    clef, key signature, and meter remain visible. Pass the unmodified source
+    MEI explicitly when the toolkit's current score has already been annotated.
+
+    Returns SVG pages, or ``(excerpt_mei, svg_pages)`` when ``return_mei=True``.
+    """
+    ids = _vrv_ids_from_selection(selection)
+    source_mei = mei_xml if mei_xml is not None else vrv_get_mei()
+    excerpt_mei = vrv_mask_mei_to_ids(source_mei, ids)
+    pages = vrv_render_selection_excerpt(
+        ids,
+        mei_xml=source_mei,
+        x_padding=x_padding,
+        y_padding=y_padding,
+        output_scale=output_scale,
+        highlight_color=highlight_color,
+        highlight_style=highlight_style,
+        pulse_color=pulse_color,
+        display=display,
+        include_staff_context=True,
+    )
+    return (excerpt_mei, pages) if return_mei else pages
+
+
 def vrv_insert_annot(
     text: Optional[str] = None,
     *,
@@ -928,6 +1462,9 @@ def vrv_inject_highlight_css(
     shape_only: bool = True,
     include_rects: bool = False,
     extra_shape_selectors: Optional[List[str]] = None,
+    highlight_style: str = "solid",
+    pulse_color: str = "#0e4bad",
+    scope_id: Optional[str] = None,
 ) -> str:
     """
     Inject an inline <style> block to color-highlight the given ids inside a single SVG string.
@@ -935,7 +1472,26 @@ def vrv_inject_highlight_css(
       Rectangles are optionally included if include_rects is True.
     - When shape_only is False, target shapes plus text/tspan, still avoiding rects unless include_rects is True.
     - extra_shape_selectors can be used for page-local selectors such as beam polygons.
+    - highlight_style="mei-friend" adds mei-friend's short blue selection pulse.
+
+    Every rule is scoped to a unique attribute on this SVG. This is important in
+    notebooks, where several inline Verovio SVGs can contain the same MEI ids;
+    unscoped ``#id`` rules otherwise recolor matching notes in other cell outputs.
     """
+    if highlight_style not in {"solid", "mei-friend"}:
+        raise ValueError("highlight_style must be 'solid' or 'mei-friend'")
+
+    safe_scope_id = re.sub(
+        r"[^A-Za-z0-9_-]", "-", scope_id or f"camat-vrv-{uuid.uuid4().hex}"
+    )
+    scope_attribute = f'data-camat-vrv-scope="{safe_scope_id}"'
+    svg_open = re.search(r"<svg\b[^>]*>", svg_text)
+    if svg_open and scope_attribute not in svg_open.group(0):
+        opening_tag = svg_open.group(0)
+        scoped_opening_tag = opening_tag[:-1] + f" {scope_attribute}>"
+        svg_text = svg_text[: svg_open.start()] + scoped_opening_tag + svg_text[svg_open.end() :]
+
+    root_selector = f'svg[{scope_attribute}]'
     shape_tags = ["path", "polygon", "ellipse", "circle", "line", "use"]
     if include_rects:
         shape_tags.append("rect")
@@ -978,8 +1534,28 @@ def vrv_inject_highlight_css(
     if not shape_selectors:
         return svg_text
 
-    style_rules = f"{', '.join(shape_selectors)} {{ fill: {color} !important; stroke: {color} !important; }}"
-    style_block = f"<style>{style_rules}</style>"
+    shape_selectors = [f"{root_selector} {selector}" for selector in shape_selectors]
+    reset_text_selectors = [f"{root_selector} {selector}" for selector in reset_text_selectors]
+
+    animation_rule = ""
+    animation_css = ""
+    if highlight_style == "mei-friend":
+        animation_name = f"camatVrvPulse-{safe_scope_id}"
+        animation_rule = f" animation: {animation_name} 0.6s ease;"
+        animation_css = (
+            f"@keyframes {animation_name} {{"
+            "0% { fill: #121212; stroke: #121212; }"
+            f"20% {{ fill: {pulse_color}; stroke: {pulse_color}; }}"
+            f"100% {{ fill: {color}; stroke: {color}; }}"
+            "}"
+        )
+
+    important = "" if highlight_style == "mei-friend" else " !important"
+    style_rules = (
+        f"{', '.join(shape_selectors)} "
+        f"{{ fill: {color}{important}; stroke: {color}{important};{animation_rule} }}"
+    )
+    style_block = f"<style>{animation_css}{style_rules}</style>"
 
     if shape_only and reset_text_selectors:
         reset_rules = f"{', '.join(reset_text_selectors)} {{ fill: initial !important; stroke: initial !important; }}"
@@ -996,6 +1572,235 @@ def vrv_inject_highlight_css(
     return style_block + svg_text
 
 
+def _vrv_svg_translate(transform: Optional[str]) -> Tuple[float, float]:
+    """Return the first SVG translate(x[, y]) pair in a transform string."""
+    if not transform:
+        return 0.0, 0.0
+    match = re.search(
+        r"translate\(\s*(-?(?:\d+(?:\.\d*)?|\.\d+))"
+        r"(?:[\s,]+(-?(?:\d+(?:\.\d*)?|\.\d+)))?\s*\)",
+        transform,
+    )
+    if not match:
+        return 0.0, 0.0
+    return float(match.group(1)), float(match.group(2) or 0.0)
+
+
+def _vrv_svg_number(value: Optional[str]) -> Optional[float]:
+    if value is None:
+        return None
+    match = re.match(r"\s*(-?(?:\d+(?:\.\d*)?|\.\d+))", value)
+    return float(match.group(1)) if match else None
+
+
+def _vrv_crop_svg_to_ids_or_none(
+    svg_text: str,
+    ids: List[str],
+    *,
+    x_padding: float,
+    y_padding: float,
+    output_scale: float,
+    include_staff_context: bool,
+) -> Optional[str]:
+    """Crop one Verovio SVG, returning None when none of the ids are present."""
+    try:
+        from xml.etree import ElementTree as ET  # type: ignore
+    except Exception as exc:  # pragma: no cover
+        raise RuntimeError("xml.etree.ElementTree is required to crop SVG output") from exc
+
+    try:
+        ET.register_namespace("", "http://www.w3.org/2000/svg")
+        ET.register_namespace("xlink", "http://www.w3.org/1999/xlink")
+        root = ET.fromstring(_ensure_svg(svg_text))
+    except Exception as exc:
+        raise ValueError("svg_text is not well-formed SVG XML") from exc
+
+    parent_map = {child: parent for parent in root.iter() for child in parent}
+    by_id = {element.get("id"): element for element in root.iter() if element.get("id")}
+    targets = [by_id.get(value.lstrip("#")) for value in ids]
+    targets = [target for target in targets if target is not None]
+    if not targets:
+        return None
+
+    definition_svg = None
+    current = targets[0]
+    while current is not None:
+        if _xml_local_name(current.tag) == "svg" and "definition-scale" in set(
+            current.get("class", "").split()
+        ):
+            definition_svg = current
+            break
+        current = parent_map.get(current)
+    if definition_svg is None:
+        definition_svg = next(
+            (
+                element
+                for element in root.iter()
+                if _xml_local_name(element.tag) == "svg" and element.get("viewBox")
+            ),
+            None,
+        )
+    if definition_svg is None:
+        raise ValueError("Could not find Verovio's inner SVG viewBox")
+
+    view_box_values = [float(value) for value in definition_svg.get("viewBox", "").split()]
+    if len(view_box_values) != 4:
+        raise ValueError("Verovio SVG has an invalid viewBox")
+    view_x, view_y, view_width, view_height = view_box_values
+
+    def translated_rect(rect) -> Optional[Tuple[float, float, float, float]]:
+        x = _vrv_svg_number(rect.get("x"))
+        y = _vrv_svg_number(rect.get("y"))
+        width = _vrv_svg_number(rect.get("width"))
+        height = _vrv_svg_number(rect.get("height"))
+        if None in {x, y, width, height}:
+            return None
+        node = rect
+        while node is not None and node is not definition_svg:
+            translate_x, translate_y = _vrv_svg_translate(node.get("transform"))
+            x += translate_x
+            y += translate_y
+            node = parent_map.get(node)
+        return x, y, x + width, y + height
+
+    target_boxes: List[Tuple[float, float, float, float]] = []
+    context_boxes: List[Tuple[float, float, float, float]] = []
+    staff_boxes: List[Tuple[float, float, float, float]] = []
+    for target in targets:
+        bbox = by_id.get(f"bbox-{target.get('id')}")
+        bbox_rects = list(bbox.iter()) if bbox is not None else list(target.iter())
+        for element in bbox_rects:
+            if _xml_local_name(element.tag) != "rect":
+                continue
+            bounds = translated_rect(element)
+            if bounds is not None:
+                target_boxes.append(bounds)
+
+        ancestor = target
+        while ancestor is not None:
+            ancestor_classes = set(ancestor.get("class", "").split())
+            if "tuplet" in ancestor_classes:
+                for descendant in ancestor.iter():
+                    descendant_classes = set(descendant.get("class", "").split())
+                    if not descendant_classes.intersection({"tupletNum", "tupletBracket"}):
+                        continue
+                    for element in descendant.iter():
+                        if _xml_local_name(element.tag) != "rect":
+                            continue
+                        bounds = translated_rect(element)
+                        if bounds is not None:
+                            context_boxes.append(bounds)
+            if "staff" in ancestor_classes:
+                staff_bbox = by_id.get(f"bbox-{ancestor.get('id')}")
+                if staff_bbox is not None:
+                    for element in staff_bbox.iter():
+                        if _xml_local_name(element.tag) != "rect":
+                            continue
+                        bounds = translated_rect(element)
+                        if bounds is not None:
+                            staff_boxes.append(bounds)
+                break
+            ancestor = parent_map.get(ancestor)
+
+    if not target_boxes:
+        return None
+
+    horizontal_boxes = target_boxes + context_boxes
+    if include_staff_context and staff_boxes:
+        crop_x0 = min(box[0] for box in staff_boxes) - x_padding
+    else:
+        crop_x0 = min(box[0] for box in horizontal_boxes) - x_padding
+    crop_x1 = max(box[2] for box in horizontal_boxes) + x_padding
+    vertical_boxes = target_boxes + context_boxes + staff_boxes
+    crop_y0 = min(box[1] for box in vertical_boxes) - y_padding
+    crop_y1 = max(box[3] for box in vertical_boxes) + y_padding
+
+    crop_x0 = max(view_x, crop_x0)
+    crop_y0 = max(view_y, crop_y0)
+    crop_x1 = min(view_x + view_width, crop_x1)
+    crop_y1 = min(view_y + view_height, crop_y1)
+    crop_width = max(1.0, crop_x1 - crop_x0)
+    crop_height = max(1.0, crop_y1 - crop_y0)
+    definition_svg.set(
+        "viewBox", f"{crop_x0:g} {crop_y0:g} {crop_width:g} {crop_height:g}"
+    )
+    definition_svg.set("overflow", "hidden")
+    root.set("overflow", "hidden")
+
+    outer_width = _vrv_svg_number(root.get("width"))
+    outer_height = _vrv_svg_number(root.get("height"))
+    if outer_width is not None and view_width > 0:
+        root.set("width", f"{crop_width * outer_width / view_width * output_scale:g}px")
+    if outer_height is not None and view_height > 0:
+        root.set("height", f"{crop_height * outer_height / view_height * output_scale:g}px")
+
+    return ET.tostring(root, encoding="unicode")
+
+
+def vrv_crop_svg_to_ids(
+    svg_text: str,
+    ids: List[str],
+    *,
+    x_padding: float = 250,
+    y_padding: float = 250,
+    output_scale: float = 1.0,
+    include_staff_context: bool = False,
+) -> str:
+    """
+    Crop a rendered Verovio SVG to the visual span of selected MEI/SVG ids.
+
+    The horizontal bounds follow the selected glyphs, so the excerpt may start
+    and end within a measure. The vertical bounds retain the selected staves.
+    This changes only the SVG viewport; it does not fabricate a partial-measure
+    MEI document or alter the score's musical semantics.
+    """
+    if output_scale <= 0:
+        raise ValueError("output_scale must be greater than zero")
+    cropped = _vrv_crop_svg_to_ids_or_none(
+        svg_text,
+        ids,
+        x_padding=float(x_padding),
+        y_padding=float(y_padding),
+        output_scale=float(output_scale),
+        include_staff_context=bool(include_staff_context),
+    )
+    if cropped is None:
+        raise ValueError("None of the selected ids occur in this SVG")
+    return cropped
+
+
+def vrv_crop_svgs_to_ids(
+    svg_pages: List[str],
+    ids: List[str],
+    *,
+    x_padding: float = 250,
+    y_padding: float = 250,
+    output_scale: float = 1.0,
+    include_staff_context: bool = False,
+) -> List[str]:
+    """Crop all matching pages and omit pages containing no selected ids."""
+    if output_scale <= 0:
+        raise ValueError("output_scale must be greater than zero")
+    cropped_pages = [
+        cropped
+        for svg in svg_pages
+        if (
+            cropped := _vrv_crop_svg_to_ids_or_none(
+                svg,
+                ids,
+                x_padding=float(x_padding),
+                y_padding=float(y_padding),
+                output_scale=float(output_scale),
+                include_staff_context=bool(include_staff_context),
+            )
+        )
+        is not None
+    ]
+    if not cropped_pages:
+        raise ValueError("None of the selected ids occur in the supplied SVG pages")
+    return cropped_pages
+
+
 def vrv_insert_annot_plist(
     *,
     custom_plist: Optional[List[str]] = None,
@@ -1006,6 +1811,8 @@ def vrv_insert_annot_plist(
     include_derived_ids: bool = False,
     shape_only: bool = True,
     highlight_color: str = "#ffcccc",
+    highlight_style: str = "solid",
+    pulse_color: str = "#0e4bad",
     include_rects: bool = False,
     pages: Optional[List[int]] = None,
     display: bool = True,
@@ -1015,8 +1822,7 @@ def vrv_insert_annot_plist(
     High-level convenience:
     - Determine target ids (from plist_annot_config or custom_plist or auto).
     - Insert one or multiple clean <annot> plist entries into MEI (idempotent per xml_id).
-    - Apply highlight CSS (shape-only or broad) via toolkit (svgAdditionalCSS).
-    - Re-render and inject inline CSS for notebook display.
+    - Inject output-scoped highlight CSS so repeated notebook renders remain independent.
 
     Returns list of final SVG strings when return_svgs=True; otherwise None.
     """
@@ -1082,10 +1888,8 @@ def vrv_insert_annot_plist(
             highlight_ids.append(base)
     highlight_ids = _dedupe_preserve_order(highlight_ids)
 
-    # 5) Apply toolkit CSS (take effect on subsequent renders)
-    vrv_highlight_ids(highlight_ids, color=highlight_color, shape_only=shape_only, include_rects=include_rects)
-
-    # 6) Re-render and inject inline CSS for notebook display
+    # 5) Render and inject output-scoped CSS for notebook display. Do not set
+    # svgAdditionalCSS on the shared toolkit: those rules persist into later cells.
     pages_list = pages or list(range(1, get_toolkit().getPageCount() + 1))
     final_svgs: List[str] = []
     for p in pages_list:
@@ -1099,6 +1903,8 @@ def vrv_insert_annot_plist(
                 shape_only=shape_only,
                 include_rects=include_rects,
                 extra_shape_selectors=beam_selectors,
+                highlight_style=highlight_style,
+                pulse_color=pulse_color,
             )
         )
 
@@ -1161,6 +1967,8 @@ def vrv_process_annotations(
     annotations: List[Dict[str, Any]],
     *,
     highlight_color: str = "#ffcccc",
+    highlight_style: str = "solid",
+    pulse_color: str = "#0e4bad",
     shape_only: bool = True,
     include_rects: bool = False,
     display: bool = True,
@@ -1173,6 +1981,11 @@ def vrv_process_annotations(
         - Standard MEI annot attributes: text, type, staff, layer, tstamp, tstamp2, etc.
         - 'plist': List of XML IDs to link to (for plist annotations).
         - 'xml_id': Optional specific XML ID for the annotation element.
+
+    highlight_style: ``"solid"`` for the existing static highlight, or
+        ``"mei-friend"`` for mei-friend's blue pulse treatment. Highlight CSS
+        is scoped to each returned SVG so duplicate ids in other notebook cells
+        are not affected.
     
     This function will:
     1. Insert all annotations into the MEI.
@@ -1202,14 +2015,12 @@ def vrv_process_annotations(
     # Deduplicate targets
     unique_targets = _dedupe_preserve_order(all_plist_targets)
 
-    # 2. & 3. Resolve IDs, Highlight, and Render
+    # 2. & 3. Resolve IDs, highlight, and render
     # We can reuse logic similar to vrv_insert_annot_plist but adapted
     
     # Map to actual SVG ids (page 1) - we assume page 1 for resolution for now, 
     # or we could resolve per page if needed, but _vrv_resolve_svg_ids defaults to page 1.
     # For multi-page scores, this might need more robust handling if IDs are on later pages.
-    # However, vrv_highlight_ids sets global CSS which applies to all pages.
-    
     first_svg = vrv_render_page(1)
     resolved = _vrv_resolve_svg_ids_in_svg(
         first_svg,
@@ -1226,19 +2037,12 @@ def vrv_process_annotations(
             highlight_ids.append(base)
     highlight_ids = _dedupe_preserve_order(highlight_ids)
 
-    # Apply toolkit CSS
-    vrv_highlight_ids(highlight_ids, color=highlight_color, shape_only=shape_only, include_rects=include_rects)
-
-    # Render all pages and inject CSS
+    # Render all pages and inject output-scoped CSS. In particular, do not set
+    # svgAdditionalCSS on the shared toolkit: it would persist into later cells.
     pages_count = get_toolkit().getPageCount()
     final_svgs: List[str] = []
     for p in range(1, pages_count + 1):
         svg = first_svg if p == 1 else vrv_render_page(p)
-        # Inject CSS for notebook display (since vrv_highlight_ids only affects toolkit state for future renders, 
-        # but we just rendered. Actually vrv_highlight_ids sets svgAdditionalCSS which IS used in vrv_render_page.
-        # BUT vrv_inject_highlight_css is for INLINE css injection if we want to be sure or if we are manipulating existing SVGs.
-        # The existing vrv_insert_annot_plist does BOTH: sets toolkit options AND injects inline. 
-        # Let's follow that pattern for consistency.
         beam_selectors = _vrv_collect_beam_shape_selectors(svg, highlight_ids)
         svg = vrv_inject_highlight_css(
             svg,
@@ -1247,6 +2051,8 @@ def vrv_process_annotations(
             shape_only=shape_only,
             include_rects=include_rects,
             extra_shape_selectors=beam_selectors,
+            highlight_style=highlight_style,
+            pulse_color=pulse_color,
         )
         final_svgs.append(svg)
 

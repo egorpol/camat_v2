@@ -34,7 +34,8 @@ Convert non-MEI sources before parsing. Verovio-native inputs are converted
 directly; other music21-readable formats go through
 `music21 -> MusicXML -> Verovio -> MEI`. MuseScore-native files use MuseScore
 for the MusicXML export. The conversion workflow is available in
-`scripts/test_verovio_conversion.py` and `testing_verovio_conversion.ipynb`.
+`docs/guides/formats.md` and `notebooks/camat_formats.ipynb`. The corpus
+probe remains `scripts/test_verovio_conversion.py`.
 
 The `partitura` backend remains the ground-truth/reference implementation for
 parser parity tests. The `music21` backend remains available for compatibility
@@ -48,11 +49,13 @@ ids and optional rhythm-analysis columns suitable for timeline MEI rendering.
 This repo includes an MkDocs project in `docs/` and a Read the Docs config in
 `.readthedocs.yaml`.
 
-Local preview:
+Local preview (install the docs extras into the same environment that can
+import `camat`, then call MkDocs as a module so you do not pick up a bare
+`mkdocs` on `PATH` that is missing Material):
 
 ```bash
 pip install -r docs/requirements.txt
-mkdocs serve
+python -m mkdocs serve
 ```
 
 Then open `http://127.0.0.1:8000/`.

@@ -27,11 +27,18 @@ markdown_extensions:
   - toc:
       permalink: true
   - tables
-  - fenced_code
   - footnotes
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
 
 nav:
   - Home: index.md
+  - Guides:
+      - File formats: guides/formats.md
+      - Batch conversion: guides/batch-conversion.md
   - Tutorial: tutorial.md
   - Release testing: releasing.md
   - Reference:

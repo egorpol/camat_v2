@@ -71,15 +71,15 @@ def expand_file_sources(
     - Comment lines (starting with ``#``) and empty lines are ignored.
     - Relative paths are resolved against ``base_dir`` or the current working
       directory when ``base_dir`` is omitted.
-    - All other entries are returned unchanged.
+    - URLs are returned unchanged. Local paths are returned as absolute paths.
 
     Parameters
     ----------
     sources : Iterable[str]
         URLs or local paths to parse.
     base_dir : str | Path, optional
-        Base directory for resolving relative `.txt` paths. Defaults to
-        ``Path.cwd()`` when omitted.
+        Base directory for resolving relative `.txt` paths and relative entries
+        contained in those files. Defaults to ``Path.cwd()`` when omitted.
     verbose : bool
         If True (default), log expansion progress and warnings.
     logger : callable, optional
@@ -91,8 +91,16 @@ def expand_file_sources(
         Flat list of expanded sources.
     """
     expanded: List[str] = []
-    root = Path(base_dir).resolve() if base_dir is not None else Path.cwd()
+    root = Path(base_dir).resolve() if base_dir is not None else Path.cwd().resolve()
     log = logger or print
+
+    def normalize_entry(value: str) -> str:
+        if value.startswith(("http://", "https://")):
+            return value
+        path = Path(value)
+        if not path.is_absolute():
+            path = root / path
+        return str(path.resolve())
 
     for raw_source in sources:
         source = str(raw_source).strip()
@@ -116,7 +124,7 @@ def expand_file_sources(
                     for line in handle:
                         line = line.strip()
                         if line and not line.startswith("#"):
-                            expanded.append(line)
+                            expanded.append(normalize_entry(line))
                 if verbose:
                     added = len(expanded) - before
                     log(f"  Added {added} source(s)")
@@ -124,7 +132,7 @@ def expand_file_sources(
                 if verbose:
                     log(f"Warning: txt file not found: {txt_path}")
         else:
-            expanded.append(source)
+            expanded.append(normalize_entry(source))
 
     return expanded
 
