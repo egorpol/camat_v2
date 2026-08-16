@@ -90,6 +90,10 @@ from .parser_utils import (
     format_parsed_summary,
     print_parsed_summary,
 )
+from .conversion import (
+    convert_sources,
+    print_conversion_summary,
+)
 from .mensural_utils import (
     DEFAULT_MENSURAL_DURATION_MAP,
     inject_default_meter_signature_in_mei_text,
@@ -180,6 +184,8 @@ __all__ = [
     'expand_file_sources',
     'format_parsed_summary',
     'print_parsed_summary',
+    'convert_sources',
+    'print_conversion_summary',
     'DEFAULT_MENSURAL_DURATION_MAP',
     'inject_default_meter_signature_in_mei_text',
     'inject_default_meter_signature_in_mei_file',

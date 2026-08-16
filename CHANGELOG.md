@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Expanded `test_corpus/mei_test_copora_links.txt` with complete-work MEI from
+  CRIM, TROMPA encodings, Measuring Polyphony, The Beggar's Opera, and iFolk,
+  and added a MkDocs [Test sources](docs/guides/sources.md) page that documents
+  every corpus.
 - Added an optional `highlight_style="mei-friend"` treatment to Verovio
   annotation rendering, using mei-friend's familiar blue selection color and
   short pulse animation. The pulse color can be customized with `pulse_color`.
@@ -26,8 +30,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   into its opening context, and the helper can also return the generated
   standalone excerpt MEI.
 
+### Changed
+
+- Promoted mixed-format conversion from the repository test script to the
+  supported `camat.conversion` package API. `convert_sources(...)` is now
+  importable directly from `camat`, and installed environments provide the
+  `camat-convert` command; the former script path remains a compatibility
+  entry point.
+- Renamed `test_corpus/test_corpus_links.txt` to
+  `test_corpus/non_mei_test_copora_links.txt` and dropped the overlapping MEI
+  sample-encoding URLs already covered by `mei_test_copora_links.txt`.
+- Cleared checked-in scores from `test_corpus/`. That directory now holds URL
+  manifests only.
+- Added CC0 OpenScore and official MuseScore demo files to
+  `test_corpus/non_mei_test_copora_links.txt` for the MuseScore conversion
+  path.
+- Added quantized score MIDI from ASAP and complete Playford dances from
+  the Nottingham Music Database to
+  `test_corpus/non_mei_test_copora_links.txt` for the music21 conversion
+  path.
+
+### Removed
+
+- Removed local MusicXML, MuseScore, MIDI, and MEI files from `test_corpus/`,
+  plus `small_corpus.txt` and `verovio_only_regression_sources.txt`.
+
 ### Fixed
 
+- Expanded music21 MIDI post-quantization through straight 32nd notes while
+  retaining triplet grids. Sequential ornaments such as the G4/F4 figures in
+  the BWV 846 Fugue no longer collapse into simultaneous 16th-note chords.
+- Reconstructed staggered MIDI overlaps as music21 voices with visible gap
+  rests before MusicXML export. This preserves delayed voices such as the BWV
+  846 Prelude's lower-staff sixteenth rest followed by E4 when Verovio creates
+  MEI.
+- Made batch-conversion output names source-unique so same-basename inputs such
+  as ASAP's `midi_score.mid` files cannot overwrite one another, and added
+  source/output SHA-256 plus byte-size provenance to conversion reports.
 - Scoped annotation highlight CSS to a unique attribute on each rendered SVG,
   preventing repeated MEI/SVG ids from applying one notebook cell's selection
   highlights to other cell outputs. High-level annotation helpers no longer

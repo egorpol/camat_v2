@@ -4,7 +4,15 @@
 [![Python versions](https://img.shields.io/pypi/pyversions/camat.svg)](https://pypi.org/project/camat/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](https://github.com/egorpol/camat_v2/blob/main/LICENSE)
 
-CAMAT is a Python toolkit for symbolic music parsing, analysis, pattern search, and score rendering.
+CAMAT is an MEI-centered toolbox for editorial and analytical work with
+symbolic music. The broader project covers edition-building, format conversion,
+Python representations, DataFrame and matrix analysis, pattern search, and
+score rendering.
+
+This repository contains conversion, parsing, representation, analysis, and
+rendering code. Edition-building and corpus-production tools currently live in
+the separate [`camat_corpus`](https://github.com/egorpol/camat_corpus)
+repository; the projects are intended to be joined later.
 
 Supports Python 3.11+
 
@@ -16,11 +24,15 @@ pip install camat
 
 ## What Is Included
 
+- Conversion routes from symbolic formats to analysis MEI.
 - Verovio-backed common-notation MEI parsing (the default parser).
 - Compatibility parsers for `partitura` and `music21`.
 - Timeline/rap Humdrum parsing with rhythm-only duration and onset-position summaries.
+- Note and event DataFrames linked to the source MEI through `xml:id`.
+- DataFrame distributions and piano-roll views.
+- Binary pitch/time matrices with optional source-row provenance.
 - Pattern search and similarity utilities.
-- Piano-roll and overlay visualization helpers.
+- Match overlay helpers.
 - Verovio-based rendering utilities.
 
 ## Parser Guidance
@@ -35,7 +47,9 @@ directly; other music21-readable formats go through
 `music21 -> MusicXML -> Verovio -> MEI`. MuseScore-native files use MuseScore
 for the MusicXML export. The conversion workflow is available in
 `docs/guides/formats.md` and `notebooks/camat_formats.ipynb`. The corpus
-probe remains `scripts/test_verovio_conversion.py`.
+converter is available as `camat.convert_sources(...)` and the installed
+`camat-convert` command; `scripts/test_verovio_conversion.py` is retained only
+as a compatibility entry point.
 
 The `partitura` backend remains the ground-truth/reference implementation for
 parser parity tests. The `music21` backend remains available for compatibility
@@ -60,6 +74,15 @@ python -m mkdocs serve
 
 Then open `http://127.0.0.1:8000/`.
 
+Public score corpora used in tests are listed in
+[Test sources](docs/guides/sources.md). The main MEI URL manifest is
+`test_corpus/mei_test_copora_links.txt`.
+
+For the four workflows and the boundary between source MEI and derived
+representations, start with [What CAMAT is](docs/overview.md). The
+[notebook roadmap](docs/notebooks.md) maps each showcase notebook to its
+workflow.
+
 ## Release Testing
 
 The release gate builds the wheel and installs it into fresh virtual
@@ -77,7 +100,8 @@ matrix commands, smoke-test coverage, and the tag-to-PyPI checklist.
 - `camat/`: package source used for PyPI distribution.
 - `CAMAT_old/`: legacy development notebooks and experiments.
 - `CHANGELOG.md`: release notes.
-- `test_corpus/`: test data and source links.
+- `test_corpus/`: URL manifests for public score corpora (no checked-in
+  scores). See [Test sources](docs/guides/sources.md).
 
 ## License
 
