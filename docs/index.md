@@ -4,23 +4,36 @@ title: CAMAT Documentation
 
 # CAMAT
 
-CAMAT is a Python toolkit for symbolic music parsing, analysis, pattern search, and score rendering.
+CAMAT is an **MEI-centered toolbox for editorial and analytical work with
+symbolic music**. It supports a path from creating or importing an MEI document
+through Python representations to analysis and score-linked results.
 
-## Backend Guidance
+## Start with the workflow, not the module
 
-For common music notation, CAMAT defaults to the `verovio` backend and treats
-MEI as the analysis format. Calling `parse_files(...)` without selecting a
-backend therefore parses common-notation MEI with Verovio.
+| Goal | Guide |
+| --- | --- |
+| create and validate an MEI edition | [Create MEI editions](guides/edition-building.md) |
+| import MusicXML, Humdrum, MIDI, MuseScore, or another format | [File formats](guides/formats.md) |
+| turn MEI into Python tables and related representations | [Parse and represent MEI](guides/parsing-representations.md) |
+| calculate distributions, binary matrices, or pattern matches | [Analyse representations](guides/analysis.md) |
 
-Partitura remains the reference backend for parser parity tests. Music21 is
-retained for compatibility and as an import bridge in the conversion workflow.
+The editorial production pipeline currently lives in the separate
+`camat_corpus` repository. Its reusable local MEI/facsimile viewer, plus
+conversion, parsing, analysis, and rendering, live here. Read [What CAMAT
+is](overview.md) for the boundaries and the complete data flow.
 
-Convert non-MEI inputs first. See [File formats](guides/formats.md) for the
-three conversion routes and the companion notebook.
+## The central rule
 
-## Contents
+MEI is the durable source document. DataFrames, piano rolls, binary matrices,
+and match results are derived representations. Keep the MEI and the identifiers
+that connect analytical results back to it.
 
-- [File formats](guides/formats.md)
-- [Batch conversion](guides/batch-conversion.md)
-- [Tutorial](tutorial.md)
-- [Reference](reference.md)
+For common music notation, `parse_files(...)` defaults to the Verovio backend
+and accepts MEI. Convert non-MEI inputs first.
+
+## Learn interactively
+
+Follow the [notebook roadmap](notebooks.md) to choose the facsimile inspection,
+single-file conversion, batch conversion, or representation example. The
+roadmap also marks the parsing and analysis tutorials that still need to be
+added.

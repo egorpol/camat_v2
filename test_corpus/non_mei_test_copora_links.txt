@@ -1,0 +1,153 @@
+# Non-MEI test corpus — raw GitHub links to Humdrum (.krn), MusicXML,
+# MuseScore (.mscz / .mscx), and MIDI (.mid). MEI sources live in
+# mei_test_copora_links.txt.
+# MuseScore conversion needs the MuseScore CLI (or MUSESCORE_BIN).
+# MIDI conversion uses music21 → MusicXML → Verovio.
+
+# ------------------------
+# kern (Humdrum .krn)
+# ------------------------
+
+# BEETHOVEN — Piano Sonatas (repository: craigsapp/beethoven-piano-sonatas)
+# Op. 106 "Hammerklavier" (B-flat major, harmonically extremely complex)
+https://raw.githubusercontent.com/craigsapp/beethoven-piano-sonatas/master/kern/sonata29-1.krn
+https://raw.githubusercontent.com/craigsapp/beethoven-piano-sonatas/master/kern/sonata29-2.krn
+https://raw.githubusercontent.com/craigsapp/beethoven-piano-sonatas/master/kern/sonata29-3.krn
+https://raw.githubusercontent.com/craigsapp/beethoven-piano-sonatas/master/kern/sonata29-4.krn
+
+# Op. 111 (C minor, 2nd movement in C major with variations)
+https://raw.githubusercontent.com/craigsapp/beethoven-piano-sonatas/master/kern/sonata32-1.krn
+https://raw.githubusercontent.com/craigsapp/beethoven-piano-sonatas/master/kern/sonata32-2.krn
+
+# Op. 110 (A-flat major)
+https://raw.githubusercontent.com/craigsapp/beethoven-piano-sonatas/master/kern/sonata31-1.krn
+https://raw.githubusercontent.com/craigsapp/beethoven-piano-sonatas/master/kern/sonata31-2.krn
+https://raw.githubusercontent.com/craigsapp/beethoven-piano-sonatas/master/kern/sonata31-3.krn
+
+# Op. 27 No. 2 "Moonlight" (C-sharp minor, 6 sharps)
+https://raw.githubusercontent.com/craigsapp/beethoven-piano-sonatas/master/kern/sonata14-1.krn
+https://raw.githubusercontent.com/craigsapp/beethoven-piano-sonatas/master/kern/sonata14-2.krn
+https://raw.githubusercontent.com/craigsapp/beethoven-piano-sonatas/master/kern/sonata14-3.krn
+
+# CHOPIN — Etudes (repository: pl-wnifc/humdrum-chopin-first-editions)
+# Note: structure based on NIFC, exact paths should be verified
+# Op. 10 No. 1 (C major, chromatic arpeggios)
+https://raw.githubusercontent.com/pl-wnifc/humdrum-chopin-first-editions/master/kern/010-1_etiuda_c-dur_op_10_nr_1.krn
+
+# Op. 10 No. 2 (A minor, chromatic runs)
+https://raw.githubusercontent.com/pl-wnifc/humdrum-chopin-first-editions/master/kern/010-2_etiuda_a-moll_op_10_nr_2.krn
+
+# Op. 25 No. 11 (A minor "Winterwind")
+https://raw.githubusercontent.com/pl-wnifc/humdrum-chopin-first-editions/master/kern/025-11_etiuda_a-moll_op_25_nr_11.krn
+
+# Op. 25 No. 12 (C minor "Ocean")
+https://raw.githubusercontent.com/pl-wnifc/humdrum-chopin-first-editions/master/kern/025-12_etiuda_c-moll_op_25_nr_12.krn
+
+# Chopin Ballades
+https://raw.githubusercontent.com/pl-wnifc/humdrum-chopin-first-editions/master/kern/023_ballada_g-moll_op_23.krn
+https://raw.githubusercontent.com/pl-wnifc/humdrum-chopin-first-editions/master/kern/052_ballada_f-moll_op_52.krn
+
+# BACH — Well-Tempered Clavier (repository: craigsapp/bach-wtc)
+# WTC I — B minor (chromatic fugue theme)
+https://raw.githubusercontent.com/craigsapp/bach-wtc/master/kern/wtc1p24.krn
+https://raw.githubusercontent.com/craigsapp/bach-wtc/master/kern/wtc1f24.krn
+
+# WTC I — G-sharp minor (5 sharps, chromatic)
+https://raw.githubusercontent.com/craigsapp/bach-wtc/master/kern/wtc1p18.krn
+https://raw.githubusercontent.com/craigsapp/bach-wtc/master/kern/wtc1f18.krn
+
+# WTC I — B-flat minor (chromatic theme)
+https://raw.githubusercontent.com/craigsapp/bach-wtc/master/kern/wtc1p22.krn
+https://raw.githubusercontent.com/craigsapp/bach-wtc/master/kern/wtc1f22.krn
+
+# WTC I — C-sharp minor (4 sharps, chromatic)
+https://raw.githubusercontent.com/craigsapp/bach-wtc/master/kern/wtc1p04.krn
+https://raw.githubusercontent.com/craigsapp/bach-wtc/master/kern/wtc1f04.krn
+
+# MOZART — Piano Sonatas (repository: craigsapp/mozart-piano-sonatas)
+# K. 457 (C minor)
+https://raw.githubusercontent.com/craigsapp/mozart-piano-sonatas/master/kern/sonata14-1.krn
+https://raw.githubusercontent.com/craigsapp/mozart-piano-sonatas/master/kern/sonata14-2.krn
+https://raw.githubusercontent.com/craigsapp/mozart-piano-sonatas/master/kern/sonata14-3.krn
+
+# K. 310 (A minor)
+https://raw.githubusercontent.com/craigsapp/mozart-piano-sonatas/master/kern/sonata08-1.krn
+https://raw.githubusercontent.com/craigsapp/mozart-piano-sonatas/master/kern/sonata08-2.krn
+https://raw.githubusercontent.com/craigsapp/mozart-piano-sonatas/master/kern/sonata08-3.krn
+
+# ------------------------
+# MusicXML (.xml)
+# ------------------------
+
+# SCHUBERT — Winterreise (MusicXML) — Schubert Winterreise Dataset v2.x
+# Song 8
+https://raw.githubusercontent.com/piasteuck/winterreise-analysis/refs/heads/main/Schubert_Winterreise_Dataset_v2-0/01_RawData/score_musicxml/Schubert_D911-08.xml
+
+# Song 20
+https://raw.githubusercontent.com/piasteuck/winterreise-analysis/refs/heads/main/Schubert_Winterreise_Dataset_v2-0/01_RawData/score_musicxml/Schubert_D911-20.xml
+
+# Song 15
+https://raw.githubusercontent.com/piasteuck/winterreise-analysis/refs/heads/main/Schubert_Winterreise_Dataset_v2-0/01_RawData/score_musicxml/Schubert_D911-15.xml
+
+# Song 7
+https://raw.githubusercontent.com/piasteuck/winterreise-analysis/refs/heads/main/Schubert_Winterreise_Dataset_v2-0/01_RawData/score_musicxml/Schubert_D911-07.xml
+
+# ------------------------
+# MuseScore (.mscz / .mscx)
+# ------------------------
+# CC0 OpenScore corpora plus a few official MuseScore demos. Prefer complete
+# works / complete movements. Skip scraped musescore.com dumps.
+
+# Official MuseScore demos (repository: musescore/MuseScore)
+# Compressed .mscz and uncompressed .mscx for the MuseScore CLI conversion path.
+https://raw.githubusercontent.com/musescore/MuseScore/main/demos/goldberg.mscz
+https://raw.githubusercontent.com/musescore/MuseScore/main/demos/Amazing_grace.mscz
+https://raw.githubusercontent.com/musescore/MuseScore/main/demos/adeste.mscx
+https://raw.githubusercontent.com/musescore/MuseScore/main/demos/Fugue_1.mscx
+
+# OpenScore Lieder (repository: OpenScore/Lieder, CC0)
+# Clara Schumann, Op. 13 No. 1
+https://raw.githubusercontent.com/OpenScore/Lieder/main/scores/Schumann%2C_Clara/6_Lieder%2C_Op.13/1_Ich_stand_in_dunklen_Träumen/lc5133602.mscx
+# Fanny Hensel, Op. 1 No. 1 "Schwanenlied"
+https://raw.githubusercontent.com/OpenScore/Lieder/main/scores/Hensel%2C_Fanny/6_Lieder%2C_Op.1/1_Schwanenlied/lc5100543.mscx
+# Schubert Winterreise D.911 No. 8 "Rückblick" (pairs with the MusicXML song 8 above)
+https://raw.githubusercontent.com/OpenScore/Lieder/main/scores/Schubert%2C_Franz/Winterreise%2C_D.911/8_Rückblick/lc5015521.mscz
+
+# OpenScore String Quartets (repository: OpenScore/StringQuartets, CC0)
+# Beethoven Große Fuge, Op. 133 (complete work)
+https://raw.githubusercontent.com/OpenScore/StringQuartets/main/scores/Beethoven%2C_Ludwig_van/Grosse_Fuge_in_B-flat_major%2C_Op.133/sq10502527.mscx
+
+# OpenScore Orchestra / Hauptstimme (repository: MarkGotham/Hauptstimme, CC0)
+# Amy Beach, Gaelic Symphony Op. 32, movement 1
+https://raw.githubusercontent.com/MarkGotham/Hauptstimme/main/data/Beach%2C_Amy/Symphony_in_E_minor_(Gaelic)%2C_Op.32/1/Beach_Op.32_1.mscz
+
+# ------------------------
+# MIDI (.mid)
+# ------------------------
+# Quantized score MIDI from GitHub trees of complete works / complete
+# movements. Prefer midi_score.mid over pianist-named performance MIDIs.
+# Skip Mutopia (LilyPond only on GitHub), craigsapp MIDI (generated by
+# `make midi`, not committed), Magenta testdata snippets, and scraped
+# classical dumps without a clear license.
+
+# ASAP aligned scores (repository: fosfrancesco/asap-dataset, CC BY-NC-SA 4.0)
+# Bach WTC I No. 1 in C major, BWV 846 (complete prelude and fugue)
+https://raw.githubusercontent.com/fosfrancesco/asap-dataset/master/Bach/Prelude/bwv_846/midi_score.mid
+https://raw.githubusercontent.com/fosfrancesco/asap-dataset/master/Bach/Fugue/bwv_846/midi_score.mid
+# Bach WTC I G-sharp minor fugue, BWV 863 (pairs with kern wtc1f18)
+https://raw.githubusercontent.com/fosfrancesco/asap-dataset/master/Bach/Fugue/bwv_863/midi_score.mid
+# Beethoven Piano Sonata No. 8 Op. 13 "Pathétique" (complete sonata)
+https://raw.githubusercontent.com/fosfrancesco/asap-dataset/master/Beethoven/Piano_Sonatas/8-1/midi_score.mid
+https://raw.githubusercontent.com/fosfrancesco/asap-dataset/master/Beethoven/Piano_Sonatas/8-2/midi_score.mid
+https://raw.githubusercontent.com/fosfrancesco/asap-dataset/master/Beethoven/Piano_Sonatas/8-3/midi_score.mid
+# Chopin Ballade No. 1 Op. 23 (pairs with the Humdrum ballade above)
+https://raw.githubusercontent.com/fosfrancesco/asap-dataset/master/Chopin/Ballades/1/midi_score.mid
+# Mozart Fantasie K. 475 (complete work)
+https://raw.githubusercontent.com/fosfrancesco/asap-dataset/master/Mozart/Fantasie_475/midi_score.mid
+
+# Nottingham Music Database (repository: jukedeck/nottingham-dataset, GPL-3.0)
+# Complete Playford country dances (melody + chords).
+# playford1: The Alderman's Hat; playford10: Nonesuch; playford12: Rufty Tufty
+https://raw.githubusercontent.com/jukedeck/nottingham-dataset/master/MIDI/playford1.mid
+https://raw.githubusercontent.com/jukedeck/nottingham-dataset/master/MIDI/playford10.mid
+https://raw.githubusercontent.com/jukedeck/nottingham-dataset/master/MIDI/playford12.mid

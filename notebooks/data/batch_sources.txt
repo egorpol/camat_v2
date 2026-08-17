@@ -1,5 +1,15 @@
-# Local path, resolved against the CAMAT repository root.
-tests/fixtures/basic.musicxml
+# Small URL-only source-list example for batch conversion.
+# These entries are also present in the canonical
+# test_corpus/non_mei_test_copora_links.txt manifest.
 
-# Remote Humdrum score, pinned for a reproducible tutorial run.
-https://raw.githubusercontent.com/craigsapp/bach-370-chorales/0fd9e00542445a522c6030c80c687b874aa569d5/kern/chor002.krn
+# Humdrum: Beethoven, Piano Sonata no. 14, movement 1.
+https://raw.githubusercontent.com/craigsapp/beethoven-piano-sonatas/master/kern/sonata14-1.krn
+
+# MusicXML: Schubert, Winterreise D. 911, no. 7.
+https://raw.githubusercontent.com/piasteuck/winterreise-analysis/refs/heads/main/Schubert_Winterreise_Dataset_v2-0/01_RawData/score_musicxml/Schubert_D911-07.xml
+
+# MuseScore: official Amazing Grace demo (requires MuseScore CLI).
+https://raw.githubusercontent.com/musescore/MuseScore/main/demos/Amazing_grace.mscz
+
+# MIDI: Bach WTC I prelude BWV 846, ASAP quantized score (music21 route).
+https://raw.githubusercontent.com/fosfrancesco/asap-dataset/master/Bach/Prelude/bwv_846/midi_score.mid

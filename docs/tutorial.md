@@ -1,26 +1,13 @@
 ---
-title: Tutorial
+title: Backend and specialized parsing
 ---
 
-# Tutorial
+# Backend and specialized parsing
 
-## Installation
-
-```bash
-pip install camat
-```
-
-## Quick Start
-
-```python
-from camat import get_parse_files, run_pattern_search
-
-parse_files = get_parse_files()
-results, dfs_by_name, last_df = parse_files(["path/to/score.mei"])
-
-# Example: run pattern search on matrix/kernels
-# out = run_pattern_search(matrix_source, kernel_source)
-```
+This guide covers backend choice and source types that do not follow the
+default common-notation MEI contract. Begin with
+[Parse and represent MEI](guides/parsing-representations.md) for the standard
+`df_pitch` and `df_events` workflow.
 
 ## Common-Notation Backend Choice
 

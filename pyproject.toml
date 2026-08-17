@@ -29,6 +29,9 @@ classifiers = [
 ]
 dynamic = ["dependencies"]
 
+[project.scripts]
+camat-convert = "camat.conversion:main"
+
 [project.urls]
 Homepage = "https://github.com/egorpol/camat_v2"
 Repository = "https://github.com/egorpol/camat_v2"

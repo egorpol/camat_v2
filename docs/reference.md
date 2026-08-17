@@ -43,6 +43,10 @@ duration and onset-position distributions.
 
 ::: camat.mensural_utils
 
+### MEI facsimile viewer
+
+::: camat.facsimile_viewer
+
 ### Music21 backend
 
 ::: camat.music21_backend

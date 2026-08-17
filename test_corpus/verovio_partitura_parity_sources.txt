@@ -14,8 +14,7 @@ https://raw.githubusercontent.com/music-encoding/sample-encodings/main/MEI_5.1/M
 # Rich modern Henle/TROMPA encoding.
 https://raw.githubusercontent.com/trompamusic-encodings/Beethoven_Op31_No3_HenleUrtext/refs/heads/master/Beethoven_Op31_No3_3-HenleUrtext.mei
 
-# Independent modern-edition families.
-test_corpus/dmeref_46d-001_1485.mei
+# Independent modern-edition family.
 https://raw.githubusercontent.com/SEILSdataset/SEILSdataset/master/SEILSdataset/SEILS_with_annotations/Marenzio/marenzio_mentrelaura_mn.mei
 
 # Focused diagnostics: unusual accidentals and source notes without xml:id.

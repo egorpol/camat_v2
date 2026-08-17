@@ -1,5 +1,5 @@
 site_name: CAMAT
-site_description: "CAMAT documentation"
+site_description: "MEI-centered editorial, conversion, parsing, and analysis workflows"
 site_url: https://camat.readthedocs.io
 strict: true
 
@@ -35,19 +35,31 @@ markdown_extensions:
           format: !!python/name:pymdownx.superfences.fence_code_format
 
 nav:
-  - Home: index.md
-  - Guides:
-      - File formats: guides/formats.md
-      - Batch conversion: guides/batch-conversion.md
-  - Tutorial: tutorial.md
-  - Release testing: releasing.md
+  - Start:
+      - Home: index.md
+      - What CAMAT is: overview.md
+      - Notebook roadmap: notebooks.md
+  - Workflows:
+      - 1. Create MEI editions: guides/edition-building.md
+      - 2. Convert to MEI:
+          - Choose a conversion route: guides/formats.md
+          - Batch conversion: guides/batch-conversion.md
+      - 3. Parse and represent MEI: guides/parsing-representations.md
+      - 4. Analyse representations: guides/analysis.md
+  - Further guides:
+      - Backend and specialized parsing: tutorial.md
+      - Test sources: guides/sources.md
+      - Release testing: releasing.md
   - Reference:
       - Overview: reference.md
       - API:
           - Top-level API: api/camat.md
           - Analysis utils: api/analysis_utils.md
           - Binary matrix designer: api/binary_matrix_designer.md
+          - Conversion: api/conversion.md
+          - MEI facsimile viewer: api/facsimile_viewer.md
           - Mensural utils: api/mensural_utils.md
+          - MIDI timing: api/midi_timing.md
           - Music21 backend: api/music21_backend.md
           - Music21 render: api/music21_render.md
           - Music utils: api/music_utils.md

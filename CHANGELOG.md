@@ -9,6 +9,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Integrated the read-only MEI facsimile viewer from `camat_corpus` as
+  `camat.facsimile_viewer`, including top-level parsing, cached Verovio
+  rendering, interactive measure-zone linking, local-image embedding, optional
+  file watching, tests, API guidance, and a workflow-one notebook.
+- Added configurable score-oriented MIDI import through `MidiImportOptions`
+  and `--midi-grid`, including explicit 64th/higher-resolution and unusual
+  tuplet-grid support, quantization-error diagnostics, and per-conversion
+  voice/gap-rest controls. The optional `voice_layout="separate_staves"` /
+  `--midi-voices-to-staves` diagnostic layout expands inferred local voice
+  slots to separate staves while explicitly recording that MIDI provides no
+  persistent notated-voice identity.
+- Added `read_midi_timing(...)` for performance-oriented MIDI analysis without
+  score quantization or chord grouping. It preserves raw note-on/off ticks and
+  exposes exact PPQ quarter-length fractions, tempo-aware seconds, and the
+  tempo map as DataFrames.
+- Added safe batch resumption with provenance sidecars. Outputs are skipped
+  only when source and output hashes, route, normalized options, report schema,
+  and relevant tool versions are unchanged.
+- Added streaming download limits and content-type checks, resolved-URL and
+  tool-version provenance, stage timings, stable failure stage/code fields,
+  and an explicit validation progression from download through editorial
+  inspection.
+- Expanded `test_corpus/mei_test_copora_links.txt` with complete-work MEI from
+  CRIM, TROMPA encodings, Measuring Polyphony, The Beggar's Opera, and iFolk,
+  and added a MkDocs [Test sources](docs/guides/sources.md) page that documents
+  every corpus.
 - Added an optional `highlight_style="mei-friend"` treatment to Verovio
   annotation rendering, using mei-friend's familiar blue selection color and
   short pulse animation. The pulse color can be customized with `pulse_color`.
@@ -26,8 +52,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   into its opening context, and the helper can also return the generated
   standalone excerpt MEI.
 
+### Changed
+
+- Reorganized the MkDocs site around CAMAT's four MEI-centered workflows,
+  clarified the boundary with `camat_corpus`, and added workflow, notebook,
+  source-corpus, parsing/representation, and analysis guidance.
+- Expanded the file-format and batch-conversion notebooks with real MuseScore
+  and MIDI examples from the non-MEI test manifest, configurable MIDI-grid and
+  raw-timing inspection, resumable runs, and report-backed validation stages;
+  added a focused MIDI → music21 → Verovio regression notebook for inspecting
+  quantization, voice reconstruction, and alternative staff layouts.
+- Promoted mixed-format conversion from the repository test script to the
+  supported `camat.conversion` package API. `convert_sources(...)` is now
+  importable directly from `camat`, and installed environments provide the
+  `camat-convert` command; the former script path remains a compatibility
+  entry point.
+- Renamed `test_corpus/test_corpus_links.txt` to
+  `test_corpus/non_mei_test_copora_links.txt` and dropped the overlapping MEI
+  sample-encoding URLs already covered by `mei_test_copora_links.txt`.
+- Cleared checked-in scores from `test_corpus/`. That directory now holds URL
+  manifests only.
+- Added CC0 OpenScore and official MuseScore demo files to
+  `test_corpus/non_mei_test_copora_links.txt` for the MuseScore conversion
+  path.
+- Added quantized score MIDI from ASAP and complete Playford dances from
+  the Nottingham Music Database to
+  `test_corpus/non_mei_test_copora_links.txt` for the music21 conversion
+  path.
+
+### Removed
+
+- Removed local MusicXML, MuseScore, MIDI, and MEI files from `test_corpus/`,
+  plus `small_corpus.txt` and `verovio_only_regression_sources.txt`.
+
 ### Fixed
 
+- Made the MEI facsimile notebook and interactive API accept scores without
+  facsimile records. They now render a full-width score-only view, retain
+  strict parsing for editorial validation, and can switch to the linked view
+  after facsimile records are added without rerendering unchanged notation.
+- Expanded music21 MIDI post-quantization through straight 32nd notes while
+  retaining triplet grids. Sequential ornaments such as the G4/F4 figures in
+  the BWV 846 Fugue no longer collapse into simultaneous 16th-note chords.
+- Reconstructed staggered MIDI overlaps as music21 voices with visible gap
+  rests before MusicXML export. This preserves delayed voices such as the BWV
+  846 Prelude's lower-staff sixteenth rest followed by E4 when Verovio creates
+  MEI.
+- Made batch-conversion output names source-unique so same-basename inputs such
+  as ASAP's `midi_score.mid` files cannot overwrite one another, and added
+  source/output SHA-256 plus byte-size provenance to conversion reports.
 - Scoped annotation highlight CSS to a unique attribute on each rendered SVG,
   preventing repeated MEI/SVG ids from applying one notebook cell's selection
   highlights to other cell outputs. High-level annotation helpers no longer

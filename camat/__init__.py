@@ -90,6 +90,24 @@ from .parser_utils import (
     format_parsed_summary,
     print_parsed_summary,
 )
+from .conversion import (
+    DownloadOptions,
+    MidiImportOptions,
+    convert_sources,
+    print_conversion_summary,
+    set_validation_stage,
+)
+from .midi_timing import MidiTimingResult, read_midi_timing
+from .facsimile_viewer import (
+    FacsimileViewerCache,
+    FacsimileUnavailableError,
+    InteractiveFacsimileViewer,
+    build_facsimile_viewer,
+    build_verovio_options,
+    launch_interactive_facsimile_viewer,
+    read_facsimile_model,
+    render_verovio_pages,
+)
 from .mensural_utils import (
     DEFAULT_MENSURAL_DURATION_MAP,
     inject_default_meter_signature_in_mei_text,
@@ -180,6 +198,21 @@ __all__ = [
     'expand_file_sources',
     'format_parsed_summary',
     'print_parsed_summary',
+    'DownloadOptions',
+    'MidiImportOptions',
+    'convert_sources',
+    'print_conversion_summary',
+    'set_validation_stage',
+    'MidiTimingResult',
+    'read_midi_timing',
+    'FacsimileViewerCache',
+    'FacsimileUnavailableError',
+    'InteractiveFacsimileViewer',
+    'build_facsimile_viewer',
+    'build_verovio_options',
+    'launch_interactive_facsimile_viewer',
+    'read_facsimile_model',
+    'render_verovio_pages',
     'DEFAULT_MENSURAL_DURATION_MAP',
     'inject_default_meter_signature_in_mei_text',
     'inject_default_meter_signature_in_mei_file',
