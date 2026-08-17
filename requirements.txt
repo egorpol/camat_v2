@@ -11,3 +11,4 @@ partitura
 requests
 tqdm
 verovio
+watchdog

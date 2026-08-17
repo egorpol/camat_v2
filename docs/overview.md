@@ -16,7 +16,7 @@ conversion.
 
 | Workflow | Starts with | Produces | Current location |
 | --- | --- | --- | --- |
-| 1. Create an MEI edition | scans, OMR output, metadata, or draft MEI | reviewed and enriched MEI | [`camat_corpus`](https://github.com/egorpol/camat_corpus) for now |
+| 1. Create an MEI edition | scans, OMR output, metadata, or draft MEI | reviewed and enriched MEI | production in [`camat_corpus`](https://github.com/egorpol/camat_corpus); reusable facsimile inspection in this package |
 | 2. Convert to MEI | MusicXML, Humdrum, MIDI, MuseScore, and other symbolic formats | MEI suitable for inspection and parsing | `camat.conversion` in this package |
 | 3. Parse and represent MEI | common-notation MEI | Python result records, note and event DataFrames, and visual previews | this package |
 | 4. Analyse representations | DataFrames or derived matrices | distributions, piano rolls, binary matrices, pattern matches, and score overlays | this package |
@@ -44,8 +44,10 @@ derived working representations; they do not replace the edition.
 
 The editorial layer creates and improves the source document: corpus metadata,
 facsimile links, measure zones, validation, and corrections. This work
-currently lives in the separate `camat_corpus` repository. Its hand-off to the
-Python package is a valid MEI file with stable `xml:id` values where possible.
+mostly lives in the separate `camat_corpus` repository. The read-only
+MEI/facsimile viewer is available in this package for local inspection; the
+hand-off to later CAMAT workflows remains a valid MEI file with stable
+`xml:id` values where possible.
 
 ### Conversion layer
 
@@ -95,6 +97,7 @@ See [Analyse representations](guides/analysis.md).
 | If you want to… | Start here |
 | --- | --- |
 | prepare facsimiles or construct an MEI edition | [Create MEI editions](guides/edition-building.md) |
+| inspect measure-to-facsimile links in a local MEI | [MEI facsimile viewer](api/facsimile_viewer.md) |
 | import another score format | [File formats](guides/formats.md) |
 | convert a corpus and keep a report | [Batch conversion](guides/batch-conversion.md) |
 | inspect MEI as Python objects and tables | [Parse and represent MEI](guides/parsing-representations.md) |

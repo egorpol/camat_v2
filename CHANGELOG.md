@@ -9,6 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Integrated the read-only MEI facsimile viewer from `camat_corpus` as
+  `camat.facsimile_viewer`, including top-level parsing, cached Verovio
+  rendering, interactive measure-zone linking, local-image embedding, optional
+  file watching, tests, API guidance, and a workflow-one notebook.
+- Added configurable score-oriented MIDI import through `MidiImportOptions`
+  and `--midi-grid`, including explicit 64th/higher-resolution and unusual
+  tuplet-grid support, quantization-error diagnostics, and per-conversion
+  voice/gap-rest controls. The optional `voice_layout="separate_staves"` /
+  `--midi-voices-to-staves` diagnostic layout expands inferred local voice
+  slots to separate staves while explicitly recording that MIDI provides no
+  persistent notated-voice identity.
+- Added `read_midi_timing(...)` for performance-oriented MIDI analysis without
+  score quantization or chord grouping. It preserves raw note-on/off ticks and
+  exposes exact PPQ quarter-length fractions, tempo-aware seconds, and the
+  tempo map as DataFrames.
+- Added safe batch resumption with provenance sidecars. Outputs are skipped
+  only when source and output hashes, route, normalized options, report schema,
+  and relevant tool versions are unchanged.
+- Added streaming download limits and content-type checks, resolved-URL and
+  tool-version provenance, stage timings, stable failure stage/code fields,
+  and an explicit validation progression from download through editorial
+  inspection.
 - Expanded `test_corpus/mei_test_copora_links.txt` with complete-work MEI from
   CRIM, TROMPA encodings, Measuring Polyphony, The Beggar's Opera, and iFolk,
   and added a MkDocs [Test sources](docs/guides/sources.md) page that documents
@@ -32,6 +54,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Reorganized the MkDocs site around CAMAT's four MEI-centered workflows,
+  clarified the boundary with `camat_corpus`, and added workflow, notebook,
+  source-corpus, parsing/representation, and analysis guidance.
+- Expanded the file-format and batch-conversion notebooks with real MuseScore
+  and MIDI examples from the non-MEI test manifest, configurable MIDI-grid and
+  raw-timing inspection, resumable runs, and report-backed validation stages;
+  added a focused MIDI → music21 → Verovio regression notebook for inspecting
+  quantization, voice reconstruction, and alternative staff layouts.
 - Promoted mixed-format conversion from the repository test script to the
   supported `camat.conversion` package API. `convert_sources(...)` is now
   importable directly from `camat`, and installed environments provide the
@@ -57,6 +87,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Made the MEI facsimile notebook and interactive API accept scores without
+  facsimile records. They now render a full-width score-only view, retain
+  strict parsing for editorial validation, and can switch to the linked view
+  after facsimile records are added without rerendering unchanged notation.
 - Expanded music21 MIDI post-quantization through straight 32nd notes while
   retaining triplet grids. Sequential ornaments such as the G4/F4 figures in
   the BWV 846 Fugue no longer collapse into simultaneous 16th-note chords.

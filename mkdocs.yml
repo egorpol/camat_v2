@@ -57,7 +57,9 @@ nav:
           - Analysis utils: api/analysis_utils.md
           - Binary matrix designer: api/binary_matrix_designer.md
           - Conversion: api/conversion.md
+          - MEI facsimile viewer: api/facsimile_viewer.md
           - Mensural utils: api/mensural_utils.md
+          - MIDI timing: api/midi_timing.md
           - Music21 backend: api/music21_backend.md
           - Music21 render: api/music21_render.md
           - Music utils: api/music_utils.md

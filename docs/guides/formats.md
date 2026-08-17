@@ -122,6 +122,97 @@ hidden MusicXML rests that Verovio would represent as MEI `<space>` elements.
 MIDI in particular is lossy: spelling, voices, meter, and articulations are
 reconstructed. Inspect the MEI before treating it as ground truth.
 
+### MIDI ticks and quantization grids
+
+For ordinary PPQ-based MIDI, music21 first accumulates delta times into
+absolute ticks, then calculates:
+
+```text
+onset quarter length = onset tick / ticks per quarter
+duration quarter length = (off tick - on tick) / ticks per quarter
+```
+
+It groups sufficiently close events into candidate chords before snapping
+offsets and durations to the nearest configured subdivision. The finest grid
+therefore affects both rhythmic precision and chord grouping.
+
+| Smallest straight note | Quarter length | Divisor |
+| --- | ---: | ---: |
+| 16th | 1/4 | 4 |
+| 32nd | 1/8 | 8 |
+| 64th | 1/16 | 16 |
+| 128th | 1/32 | 32 |
+
+Override the score grid for a file or corpus with `MidiImportOptions`:
+
+```python
+from camat import MidiImportOptions, convert_sources
+
+records = convert_sources(
+    ["path/to/score.mid"],
+    midi_options=MidiImportOptions(
+        quarter_length_divisors=(16, 12, 11, 8, 6, 4, 3),
+    ),
+)
+```
+
+Divisor `11` permits multiples of 1/11 quarter length, which music21 can
+encode as 11:8 time modification when the durations support that ratio. It
+does not infer a global rhythmic interpretation or guaranteed tuplet grouping.
+Every event independently chooses its nearest candidate, so only include grids
+that are plausible for the source.
+
+The report records the selected grid, PPQ, chord-grouping tolerance, and
+summary statistics for music21's offset and duration quantization errors.
+
+### MIDI tracks, channels, voices, and staves
+
+MIDI files encode tracks, channels, and note events; they do not encode MEI or
+MusicXML-style contrapuntal voice identities. music21 normally maps MIDI tracks
+to score parts/staves, then infers local voices where notes overlap. For
+example, the ASAP BWV 846 Prelude and Fugue files used by CAMAT are type-1 MIDI
+with two tracks, but both tracks use channel 1. Those tracks broadly provide
+the two piano staves; they are not four persistent Bach voices.
+
+By default, inferred voices remain layers on their source staff. For a
+diagnostic voice-isolated view, put every inferred per-measure voice slot on a
+separate staff:
+
+```python
+from camat import MidiImportOptions, convert_sources
+
+records = convert_sources(
+    ["path/to/score.mid"],
+    midi_options=MidiImportOptions(voice_layout="separate_staves"),
+)
+```
+
+This uses music21's local voice ordering, not identities stored in MIDI. A
+staff labelled `voice slot 1` can therefore represent a different musical
+voice after the texture changes. Treat this mode as a diagnostic or
+voice-isolated analysis representation, not an automatic editorial voice
+assignment. The normal `voice_layout="layers"` output remains the production
+default.
+
+### Raw MIDI timing and microtiming
+
+Disabling quantization does not make the score-conversion route lossless:
+music21 still groups near-simultaneous events before returning its score, and
+MusicXML/MEI are notation-oriented representations. Use the separate raw timing
+reader for performance analysis:
+
+```python
+from camat import read_midi_timing
+
+timing = read_midi_timing("path/to/performance.mid")
+display(timing.notes.head())
+display(timing.tempo_map)
+```
+
+`timing.notes` preserves note-on/off ticks, PPQ-derived exact quarter-length
+fractions, tempo-aware seconds, track, channel, pitch, and velocity. SMPTE MIDI
+uses its timecode basis for seconds and leaves metric quarter lengths empty.
+
 ## MuseScore files
 
 `.mscz` / `.mscx` are not Verovio inputs. If MuseScore Studio or the `mscore`
@@ -129,9 +220,10 @@ CLI is on `PATH` (or `MUSESCORE_BIN` points at it), export MusicXML with
 MuseScore, then convert with Verovio. Without MuseScore, convert the file to
 MusicXML or MEI in the editor first.
 
-`convert_sources(...)` implements that route. The batch notebook selects a real
-`.mscz` URL from the test manifest and records a clear failure if MuseScore is
-unavailable.
+`convert_sources(...)` implements that route. Both conversion notebooks select
+the real `Amazing_grace.mscz` demo from the test manifest and record a clear
+failure if MuseScore is unavailable; the single-file notebook continues with
+the other routes rather than aborting.
 
 ## After conversion
 
@@ -157,4 +249,5 @@ source file next to the MEI.
 - Tutorial notebook: [`notebooks/camat_formats.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/camat_formats.ipynb)
 - Batch conversion: [Batch conversion](batch-conversion.md) and
   [`notebooks/camat_batch_conversion.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/camat_batch_conversion.ipynb)
-- API: [`vrv_convert_to_mei`](../api/verovio_render.md)
+- API: [conversion](../api/conversion.md), [MIDI timing](../api/midi_timing.md),
+  and [`vrv_convert_to_mei`](../api/verovio_render.md)

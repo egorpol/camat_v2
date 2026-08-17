@@ -17,9 +17,10 @@ through Python representations to analysis and score-linked results.
 | turn MEI into Python tables and related representations | [Parse and represent MEI](guides/parsing-representations.md) |
 | calculate distributions, binary matrices, or pattern matches | [Analyse representations](guides/analysis.md) |
 
-The editorial tooling currently lives in the separate `camat_corpus`
-repository. Conversion, parsing, analysis, and rendering live here. Read
-[What CAMAT is](overview.md) for the boundaries and the complete data flow.
+The editorial production pipeline currently lives in the separate
+`camat_corpus` repository. Its reusable local MEI/facsimile viewer, plus
+conversion, parsing, analysis, and rendering, live here. Read [What CAMAT
+is](overview.md) for the boundaries and the complete data flow.
 
 ## The central rule
 
@@ -32,6 +33,7 @@ and accepts MEI. Convert non-MEI inputs first.
 
 ## Learn interactively
 
-Follow the [notebook roadmap](notebooks.md) to choose between the single-file
-conversion, batch conversion, and representation examples. The roadmap also
-marks the parsing and analysis tutorials that still need to be added.
+Follow the [notebook roadmap](notebooks.md) to choose the facsimile inspection,
+single-file conversion, batch conversion, or representation example. The
+roadmap also marks the parsing and analysis tutorials that still need to be
+added.

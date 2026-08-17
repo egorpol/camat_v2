@@ -6,27 +6,34 @@ MuseScore-native files use MuseScore -> MusicXML -> Verovio; any other format
 that music21 can read uses music21 -> MusicXML -> Verovio. Verovio therefore
 always performs the final MEI conversion.
 
-MIDI import uses a score-oriented quantization grid that includes 32nd notes.
-Before MIDI is exported to MusicXML, staggered overlaps are separated into
-music21 voices with visible gap rests so their timing survives as MEI layers.
-Verovio runs in a subprocess so one malformed score cannot terminate a batch.
+MIDI import uses a configurable score-oriented quantization grid whose default
+includes 32nd notes. Before MIDI is exported to MusicXML, staggered overlaps
+are separated into music21 voices with visible gap rests so their timing
+survives as MEI layers. Performance-oriented MIDI timing is exposed separately
+by :func:`camat.midi_timing.read_midi_timing`. Verovio runs in a subprocess so
+one malformed score cannot terminate a batch.
 """
 from __future__ import annotations
 
 import argparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import copy
+from dataclasses import asdict, dataclass
 from datetime import datetime
 import hashlib
 import json
+import mimetypes
 import os
 import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
+import time
 import xml.etree.ElementTree as ET
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 from urllib.parse import urlparse
 
 from .parser_utils import expand_file_sources
@@ -41,6 +48,7 @@ DEFAULT_SOURCES: List[str] = [
 ]
 
 XML_ID_ATTR = "{http://www.w3.org/XML/1998/namespace}id"
+CONVERSION_REPORT_SCHEMA_VERSION = 1
 MUSESCORE_REQUIRED_MESSAGE = (
     "MSCZ input requires MuseScore Studio/CLI. Please install MuseScore or convert "
     "the file to MusicXML/MXL/MEI before using CAMAT."
@@ -49,6 +57,19 @@ MUSESCORE_EXTENSIONS = {".mscz", ".mscx", ".musescore", ".mscore", ".ms"}
 # music21 defaults to (4, 3), which cannot represent straight 32nd notes and
 # can collapse two adjacent ornaments into a single 16th-note chord.
 MIDI_QUARTER_LENGTH_DIVISORS = (8, 6, 4, 3)
+DEFAULT_VEROVIO_OPTIONS: Dict[str, Any] = {
+    "removeIds": False,
+    "xmlIdSeed": 0,
+    "breaks": "auto",
+}
+VALIDATION_STAGES = (
+    "downloaded",
+    "converted",
+    "valid_mei",
+    "rendered",
+    "camat_parsed",
+    "editorially_inspected",
+)
 NATIVE_VEROVIO_INPUTS = {
     "abc",
     "cmme.xml",
@@ -62,6 +83,96 @@ NATIVE_VEROVIO_INPUTS = {
     "volpiano",
 }
 _MUSESCORE_LOCK = threading.Lock()
+_VERSION_LOCK = threading.Lock()
+_TOOL_VERSION_CACHE: Dict[str, str] = {}
+
+
+@dataclass(frozen=True)
+class MidiImportOptions:
+    """Control music21's score-oriented MIDI import and notation recovery.
+
+    ``quarter_length_divisors`` are subdivisions of one quarter note: ``8``
+    represents straight 32nd notes, ``16`` represents 64th notes, and ``11``
+    permits multiples of one eleventh of a quarter. They are candidates used
+    independently for each offset and duration, not a global meter inference.
+
+    ``voice_layout="layers"`` retains reconstructed voices as layers on their
+    source MIDI-track staff. ``"separate_staves"`` expands each local voice
+    slot to its own staff for diagnostics; MIDI does not supply persistent
+    notated-voice identities, so slot continuity across measures is inferred.
+    """
+
+    quantize: bool = True
+    quarter_length_divisors: Tuple[int, ...] = MIDI_QUARTER_LENGTH_DIVISORS
+    reconstruct_voices: bool = True
+    fill_gaps: bool = True
+    voice_layout: str = "layers"
+
+    def __post_init__(self) -> None:
+        divisors: List[int] = []
+        for raw_divisor in self.quarter_length_divisors:
+            if isinstance(raw_divisor, bool) or not isinstance(raw_divisor, int):
+                raise TypeError("MIDI quantization divisors must be positive integers.")
+            if raw_divisor <= 0:
+                raise ValueError("MIDI quantization divisors must be positive integers.")
+            if raw_divisor not in divisors:
+                divisors.append(raw_divisor)
+        if self.quantize and not divisors:
+            raise ValueError("At least one MIDI divisor is required when quantization is enabled.")
+        if self.voice_layout not in {"layers", "separate_staves"}:
+            raise ValueError(
+                "voice_layout must be 'layers' or 'separate_staves'."
+            )
+        object.__setattr__(self, "quarter_length_divisors", tuple(divisors))
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Return a JSON-safe, deterministic representation."""
+        return {
+            "quantize": self.quantize,
+            "quarter_length_divisors": list(self.quarter_length_divisors),
+            "reconstruct_voices": self.reconstruct_voices,
+            "fill_gaps": self.fill_gaps,
+            "voice_layout": self.voice_layout,
+        }
+
+
+@dataclass(frozen=True)
+class DownloadOptions:
+    """Control safe HTTP downloads used by conversion batches."""
+
+    max_bytes: int = 100 * 1024 * 1024
+    chunk_size: int = 64 * 1024
+    allowed_content_types: Tuple[str, ...] = ()
+    reject_html: bool = True
+
+    def __post_init__(self) -> None:
+        if self.max_bytes <= 0:
+            raise ValueError("max_bytes must be greater than zero.")
+        if self.chunk_size <= 0:
+            raise ValueError("chunk_size must be greater than zero.")
+        normalized = tuple(
+            dict.fromkeys(
+                str(value).strip().lower()
+                for value in self.allowed_content_types
+                if str(value).strip()
+            )
+        )
+        object.__setattr__(self, "allowed_content_types", normalized)
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Return a JSON-safe, deterministic representation."""
+        data = asdict(self)
+        data["allowed_content_types"] = list(self.allowed_content_types)
+        return data
+
+
+class ConversionStageError(RuntimeError):
+    """Conversion failure carrying a stable stage and machine-readable code."""
+
+    def __init__(self, stage: str, code: str, message: str) -> None:
+        super().__init__(message)
+        self.stage = stage
+        self.code = code
 
 MUSESCORE_EXPORT_CHILD = r"""
 import json
@@ -102,6 +213,7 @@ raise SystemExit(0 if ok else 1)
 CONVERT_CHILD = r"""
 import base64
 import json
+import os
 import pathlib
 import sys
 
@@ -111,13 +223,9 @@ source_path = pathlib.Path(sys.argv[1])
 input_from = sys.argv[2]
 output_path = pathlib.Path(sys.argv[3])
 render_first_page = sys.argv[4] == "1"
+options = json.loads(sys.argv[5])
 
 tk = verovio.toolkit()
-options = {
-    "removeIds": False,
-    "xmlIdSeed": 0,
-    "breaks": "auto",
-}
 if input_from != "musicxml-zip":
     options["inputFrom"] = input_from
 tk.setOptions(options)
@@ -141,7 +249,14 @@ mei = str(mei or "")
 if not mei.strip():
     raise RuntimeError("Verovio returned empty MEI")
 output_path.parent.mkdir(parents=True, exist_ok=True)
-output_path.write_text(mei, encoding="utf-8")
+temporary_path = output_path.with_name(
+    f".{output_path.name}.{os.getpid()}.tmp"
+)
+try:
+    temporary_path.write_text(mei, encoding="utf-8")
+    temporary_path.replace(output_path)
+finally:
+    temporary_path.unlink(missing_ok=True)
 
 svg_ok = None
 if render_first_page and page_count > 0:
@@ -162,6 +277,157 @@ print(json.dumps({
 
 def _sha12(text: str) -> str:
     return hashlib.sha1(text.encode("utf-8", errors="ignore")).hexdigest()[:12]
+
+
+def _atomic_write_text(path: Path, text: str) -> None:
+    """Write text beside its target and atomically replace the final path."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        mode="w",
+        encoding="utf-8",
+        dir=path.parent,
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        delete=False,
+    ) as handle:
+        temporary = Path(handle.name)
+        handle.write(text)
+    temporary.replace(path)
+
+
+def _atomic_write_json(path: Path, value: Any) -> None:
+    _atomic_write_text(path, json.dumps(value, indent=2, sort_keys=True))
+
+
+def _normalized_verovio_options(
+    options: Optional[Mapping[str, Any]],
+) -> Dict[str, Any]:
+    merged = dict(DEFAULT_VEROVIO_OPTIONS)
+    if options:
+        if "inputFrom" in options:
+            raise ValueError("Verovio inputFrom is selected from the source route and cannot be overridden.")
+        merged.update(dict(options))
+    try:
+        return json.loads(json.dumps(merged, sort_keys=True))
+    except (TypeError, ValueError) as exc:
+        raise TypeError("verovio_options must contain JSON-serializable values.") from exc
+
+
+def _conversion_options_payload(
+    *,
+    midi_options: MidiImportOptions,
+    download_options: DownloadOptions,
+    verovio_options: Mapping[str, Any],
+    render_first_page: bool,
+) -> Dict[str, Any]:
+    return {
+        "midi": midi_options.to_dict(),
+        "download": download_options.to_dict(),
+        "verovio": dict(verovio_options),
+        "render_first_page": bool(render_first_page),
+    }
+
+
+def _conversion_signature(payload: Mapping[str, Any]) -> str:
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _new_validation_stages(*, is_remote: bool, render_requested: bool) -> Dict[str, Dict[str, Any]]:
+    return {
+        "downloaded": {
+            "status": "pending" if is_remote else "not_applicable",
+            "details": None if is_remote else "Local source; no download required.",
+        },
+        "converted": {"status": "pending", "details": None},
+        "valid_mei": {"status": "pending", "details": None},
+        "rendered": {
+            "status": "pending" if render_requested else "not_requested",
+            "details": None,
+        },
+        "camat_parsed": {"status": "not_run", "details": None},
+        "editorially_inspected": {"status": "not_run", "details": None},
+    }
+
+
+def set_validation_stage(
+    record: Dict[str, Any],
+    stage: str,
+    status: str,
+    details: Optional[str] = None,
+) -> None:
+    """Update one explicit validation stage in a conversion record."""
+    if stage not in VALIDATION_STAGES:
+        raise ValueError(f"Unknown validation stage: {stage!r}")
+    stages = record.setdefault("validation_stages", {})
+    stages[stage] = {"status": str(status), "details": details}
+
+
+def _read_json(path: Path) -> Optional[Dict[str, Any]]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, OSError, json.JSONDecodeError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def _cached_tool_version(key: str, probe: Any) -> str:
+    with _VERSION_LOCK:
+        cached = _TOOL_VERSION_CACHE.get(key)
+        if cached is not None:
+            return cached
+        try:
+            value = str(probe() or "").strip()
+        except Exception:
+            value = "unknown"
+        _TOOL_VERSION_CACHE[key] = value or "unknown"
+        return _TOOL_VERSION_CACHE[key]
+
+
+def _music21_version() -> str:
+    def probe() -> str:
+        import music21  # type: ignore
+
+        return str(music21.__version__)
+
+    return _cached_tool_version("music21", probe)
+
+
+def _verovio_version() -> str:
+    def probe() -> str:
+        proc = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import verovio; print(verovio.toolkit().getVersion())",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        if proc.returncode != 0:
+            raise RuntimeError(proc.stderr or proc.stdout)
+        return proc.stdout.strip().splitlines()[-1]
+
+    return _cached_tool_version("verovio", probe)
+
+
+def _musescore_version(executable: str) -> str:
+    def probe() -> str:
+        proc = subprocess.run(
+            [executable, "--version"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        output = (proc.stdout or proc.stderr or "").strip()
+        if proc.returncode != 0 and not output:
+            raise RuntimeError(f"MuseScore version probe returned {proc.returncode}")
+        return output.splitlines()[0] if output else "unknown"
+
+    return _cached_tool_version(f"musescore:{executable}", probe)
 
 
 def _file_fingerprint(path: Path) -> Dict[str, Any]:
@@ -271,24 +537,157 @@ def _output_mei_path(
     )
 
 
-def _fetch_source(source: str, source_dir: Path, timeout: int) -> Path:
+def _content_type_allowed(content_type: str, allowed: Sequence[str]) -> bool:
+    if not allowed:
+        return True
+    for candidate in allowed:
+        if candidate.endswith("/*") and content_type.startswith(candidate[:-1]):
+            return True
+        if content_type == candidate:
+            return True
+    return False
+
+
+def _validate_download_content_type(
+    content_type: str,
+    options: DownloadOptions,
+) -> None:
+    if options.reject_html and content_type in {"text/html", "application/xhtml+xml"}:
+        raise ConversionStageError(
+            "download",
+            "html_instead_of_score",
+            f"Remote source returned {content_type or 'HTML'} instead of a score file.",
+        )
+    if content_type and not _content_type_allowed(content_type, options.allowed_content_types):
+        raise ConversionStageError(
+            "download",
+            "content_type_rejected",
+            f"Content type {content_type!r} is not in the configured allow-list.",
+        )
+
+
+def _fetch_source(
+    source: str,
+    source_dir: Path,
+    timeout: int,
+    *,
+    options: Optional[DownloadOptions] = None,
+    force_download: bool = False,
+) -> Tuple[Path, Dict[str, Any]]:
+    options = options or DownloadOptions()
     if not source.startswith(("http://", "https://")):
         path = Path(source)
         if not path.exists():
-            raise FileNotFoundError(f"Local file does not exist: {source}")
-        return path
+            raise ConversionStageError(
+                "download",
+                "local_source_missing",
+                f"Local file does not exist: {source}",
+            )
+        guessed_type, _ = mimetypes.guess_type(str(path))
+        return path, {
+            "requested_url": None,
+            "resolved_url": None,
+            "redirect_history": [],
+            "http_status": None,
+            "content_type": guessed_type,
+            "content_length_header": None,
+            "downloaded_bytes": path.stat().st_size,
+            "download_cache_hit": False,
+        }
 
     import requests
 
     source_dir.mkdir(parents=True, exist_ok=True)
     target = source_dir / f"{_safe_stem(source)}_{_sha12(source)}{_source_suffix(source)}"
-    if target.exists() and target.stat().st_size > 0:
-        return target
+    metadata_path = target.with_name(f"{target.name}.download.json")
+    if not force_download and target.exists() and target.stat().st_size > 0:
+        if target.stat().st_size > options.max_bytes:
+            raise ConversionStageError(
+                "download",
+                "cached_source_too_large",
+                f"Cached source exceeds max_bytes={options.max_bytes}: {target}",
+            )
+        metadata = _read_json(metadata_path) or {
+            "requested_url": source,
+            "resolved_url": source,
+            "redirect_history": [],
+            "http_status": None,
+            "content_type": mimetypes.guess_type(urlparse(source).path)[0],
+            "content_length_header": None,
+            "downloaded_bytes": target.stat().st_size,
+        }
+        _validate_download_content_type(
+            str(metadata.get("content_type") or "").lower(),
+            options,
+        )
+        metadata["download_cache_hit"] = True
+        return target, metadata
 
-    response = requests.get(source, timeout=timeout)
-    response.raise_for_status()
-    target.write_bytes(response.content)
-    return target
+    temporary: Optional[Path] = None
+    try:
+        with requests.get(source, timeout=timeout, stream=True, allow_redirects=True) as response:
+            response.raise_for_status()
+            content_type = response.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
+            content_length_text = response.headers.get("Content-Length")
+            content_length = int(content_length_text) if content_length_text and content_length_text.isdigit() else None
+            if content_length is not None and content_length > options.max_bytes:
+                raise ConversionStageError(
+                    "download",
+                    "content_length_exceeded",
+                    f"Remote source declares {content_length} bytes; limit is {options.max_bytes}.",
+                )
+            _validate_download_content_type(content_type, options)
+
+            with tempfile.NamedTemporaryFile(
+                mode="wb",
+                dir=source_dir,
+                prefix=f".{target.name}.",
+                suffix=".part",
+                delete=False,
+            ) as handle:
+                temporary = Path(handle.name)
+                downloaded_bytes = 0
+                for chunk in response.iter_content(chunk_size=options.chunk_size):
+                    if not chunk:
+                        continue
+                    downloaded_bytes += len(chunk)
+                    if downloaded_bytes > options.max_bytes:
+                        raise ConversionStageError(
+                            "download",
+                            "download_size_exceeded",
+                            f"Remote source exceeded max_bytes={options.max_bytes} while streaming.",
+                        )
+                    handle.write(chunk)
+
+            if downloaded_bytes == 0:
+                raise ConversionStageError(
+                    "download",
+                    "empty_download",
+                    f"Remote source returned no bytes: {source}",
+                )
+            temporary.replace(target)
+            temporary = None
+            metadata = {
+                "requested_url": source,
+                "resolved_url": str(response.url),
+                "redirect_history": [str(item.url) for item in response.history],
+                "http_status": response.status_code,
+                "content_type": content_type or None,
+                "content_length_header": content_length,
+                "downloaded_bytes": downloaded_bytes,
+                "download_cache_hit": False,
+            }
+            _atomic_write_json(metadata_path, metadata)
+            return target, metadata
+    except ConversionStageError:
+        raise
+    except requests.RequestException as exc:
+        raise ConversionStageError("download", "http_error", str(exc)) from exc
+    except OSError as exc:
+        raise ConversionStageError("download", "download_io_error", str(exc)) from exc
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
 
 
 def _local_name(tag: str) -> str:
@@ -335,7 +734,12 @@ def _measure_has_staggered_note_overlaps(measure: Any) -> bool:
     return False
 
 
-def _prepare_midi_score_for_export(score: Any) -> Dict[str, int]:
+def _prepare_midi_score_for_export(
+    score: Any,
+    *,
+    reconstruct_voices: bool = True,
+    fill_gaps: bool = True,
+) -> Dict[str, int]:
     """Reconstruct notated voices and visible gap rests before MIDI export."""
     from music21 import stream as m21_stream  # type: ignore
 
@@ -353,8 +757,9 @@ def _prepare_midi_score_for_export(score: Any) -> Dict[str, int]:
         for element in score.recurse().notesAndRests
     )
 
-    for measure in overlap_measures:
-        measure.makeVoices(inPlace=True, fillGaps=True)
+    if reconstruct_voices:
+        for measure in overlap_measures:
+            measure.makeVoices(inPlace=True, fillGaps=fill_gaps)
     score.makeNotation(inPlace=True)
 
     return {
@@ -369,34 +774,175 @@ def _prepare_midi_score_for_export(score: Any) -> Dict[str, int]:
     }
 
 
-def _load_music21_score(source_path: Path) -> Tuple[Any, Dict[str, Any]]:
+def _midi_voices_to_separate_staves(score: Any) -> Tuple[Any, Dict[str, Any]]:
+    """Expand each source part's local voice slots into separate parts/staves.
+
+    MIDI stores tracks, channels, and note events rather than persistent
+    notated-voice identities. music21's ``voicesToParts`` therefore aligns
+    voices by their ordinal position inside each measure. The result is useful
+    for diagnostics and voice-isolated analysis, but a slot is not guaranteed
+    to represent the same contrapuntal voice throughout the piece.
+    """
+    from music21 import stream as m21_stream  # type: ignore
+
+    source_parts = list(score.parts)
+    voice_slots_per_source_part = []
+    for part in source_parts:
+        measures = part.getElementsByClass(m21_stream.Measure)
+        voice_slots_per_source_part.append(
+            max(1, max((len(measure.voices) for measure in measures), default=0))
+        )
+
+    separated = score.voicesToParts(separateById=False)
+    if getattr(score, "metadata", None) is not None:
+        separated.metadata = copy.deepcopy(score.metadata)
+
+    output_index = 0
+    for source_index, (source_part, slot_count) in enumerate(
+        zip(source_parts, voice_slots_per_source_part),
+        start=1,
+    ):
+        source_name = source_part.partName or f"MIDI track {source_index}"
+        for voice_index in range(1, slot_count + 1):
+            output_part = separated.parts[output_index]
+            output_part.id = f"midi-track-{source_index}-voice-{voice_index}"
+            output_part.partName = f"{source_name} — voice slot {voice_index}"
+            output_part.partAbbreviation = f"T{source_index}V{voice_index}"
+            output_index += 1
+
+    return separated, {
+        "voice_layout": "separate_staves",
+        "source_part_count": len(source_parts),
+        "voice_slots_per_source_part": voice_slots_per_source_part,
+        "output_staff_count": len(separated.parts),
+        "voice_identity_warning": (
+            "MIDI has no persistent notated-voice identity; staves follow "
+            "music21's local per-measure voice-slot order."
+        ),
+    }
+
+
+def _midi_header_timing(source_path: Path) -> Dict[str, Any]:
+    from music21.midi import MidiFile  # type: ignore
+
+    midi_file = MidiFile()
+    midi_file.open(source_path)
+    try:
+        midi_file.read()
+    finally:
+        midi_file.close()
+    return {
+        "ticks_per_quarter_note": (
+            int(midi_file.ticksPerQuarterNote)
+            if midi_file.ticksPerSecond is None
+            else None
+        ),
+        "ticks_per_second": (
+            int(midi_file.ticksPerSecond)
+            if midi_file.ticksPerSecond is not None
+            else None
+        ),
+        "track_count": len(midi_file.tracks),
+    }
+
+
+def _quantization_error_summary(score: Any) -> Dict[str, Any]:
+    def summarize(attribute: str) -> Dict[str, Any]:
+        values = []
+        for element in score.recurse().notesAndRests:
+            value = getattr(element.editorial, attribute, None)
+            if value is not None:
+                values.append(abs(float(value)))
+        ordered = sorted(values)
+        percentile_95 = (
+            ordered[min(len(ordered) - 1, int(0.95 * len(ordered)))]
+            if ordered
+            else 0.0
+        )
+        return {
+            "affected_event_count": len(values),
+            "max_abs_quarter_length": max(values, default=0.0),
+            "mean_abs_quarter_length": (
+                sum(values) / len(values) if values else 0.0
+            ),
+            "p95_abs_quarter_length": percentile_95,
+        }
+
+    return {
+        "offset": summarize("offsetQuantizationError"),
+        "duration": summarize("quarterLengthQuantizationError"),
+    }
+
+
+def _load_music21_score(
+    source_path: Path,
+    midi_options: Optional[MidiImportOptions] = None,
+) -> Tuple[Any, Dict[str, Any]]:
     """Load a source with CAMAT's format-specific music21 import policy."""
     try:
         from music21 import converter  # type: ignore
     except Exception as exc:
-        raise ImportError(
+        raise ConversionStageError(
+            "music21_parse",
+            "music21_unavailable",
             "This source format requires music21. Install it or convert the source "
             "to MusicXML before running Verovio."
         ) from exc
 
-    if _source_extension(source_path) in {".mid", ".midi"}:
-        score = converter.parse(
-            str(source_path),
-            quantizePost=True,
-            quarterLengthDivisors=MIDI_QUARTER_LENGTH_DIVISORS,
-        )
-        return score, {
-            "quantization_quarter_length_divisors": list(
-                MIDI_QUARTER_LENGTH_DIVISORS
+    started = time.perf_counter()
+    try:
+        if _source_extension(source_path) in {".mid", ".midi"}:
+            options = midi_options or MidiImportOptions()
+            score = converter.parse(
+                str(source_path),
+                quantizePost=options.quantize,
+                quarterLengthDivisors=options.quarter_length_divisors,
             )
-        }
+            finest_divisor = (
+                max(options.quarter_length_divisors)
+                if options.quantize
+                else 16
+            )
+            diagnostics = {
+                "quantize_post": options.quantize,
+                "quantization_quarter_length_divisors": (
+                    list(options.quarter_length_divisors)
+                    if options.quantize
+                    else None
+                ),
+                "chord_grouping_tolerance_quarter_length": 1 / finest_divisor,
+                "reconstruct_voices": options.reconstruct_voices,
+                "fill_gaps": options.fill_gaps,
+                "voice_layout": options.voice_layout,
+                "quantization_errors": (
+                    _quantization_error_summary(score)
+                    if options.quantize
+                    else None
+                ),
+                **_midi_header_timing(source_path),
+                "music21_parse_seconds": round(time.perf_counter() - started, 6),
+            }
+            if not options.quantize:
+                diagnostics["microtiming_warning"] = (
+                    "music21 still groups near-simultaneous events before returning "
+                    "the score; use camat.read_midi_timing for raw tick analysis."
+                )
+            return score, diagnostics
 
-    return converter.parse(str(source_path)), {}
+        return converter.parse(str(source_path)), {
+            "music21_parse_seconds": round(time.perf_counter() - started, 6)
+        }
+    except ConversionStageError:
+        raise
+    except Exception as exc:
+        raise ConversionStageError("music21_parse", "music21_parse_failed", str(exc)) from exc
 
 
 def _music21_to_musicxml_path(
     source_path: Path,
     output_dir: Path,
+    *,
+    midi_options: Optional[MidiImportOptions] = None,
 ) -> Tuple[Path, Dict[str, Any]]:
     intermediate_dir = output_dir / "_intermediate_musicxml"
     intermediate_dir.mkdir(parents=True, exist_ok=True)
@@ -404,20 +950,63 @@ def _music21_to_musicxml_path(
 
     # Run music21 in the parent process so import/export errors are reported
     # directly. Verovio still performs the final MEI conversion below.
-    score, diagnostics = _load_music21_score(source_path)
+    score, diagnostics = _load_music21_score(source_path, midi_options=midi_options)
     if _source_extension(source_path) in {".mid", ".midi"}:
-        diagnostics.update(_prepare_midi_score_for_export(score))
+        options = midi_options or MidiImportOptions()
+        started = time.perf_counter()
+        diagnostics.update(
+            _prepare_midi_score_for_export(
+                score,
+                reconstruct_voices=options.reconstruct_voices,
+                fill_gaps=options.fill_gaps,
+            )
+        )
+        if options.voice_layout == "separate_staves":
+            score, voice_layout_diagnostics = _midi_voices_to_separate_staves(score)
+            diagnostics.update(voice_layout_diagnostics)
+        else:
+            diagnostics.update(
+                {
+                    "voice_layout": "layers",
+                    "source_part_count": len(score.parts),
+                    "voice_slots_per_source_part": None,
+                    "output_staff_count": len(score.parts),
+                    "voice_identity_warning": None,
+                }
+            )
+        diagnostics["music21_notation_seconds"] = round(
+            time.perf_counter() - started,
+            6,
+        )
     elif hasattr(score, "makeNotation"):
         score.makeNotation(inPlace=True)
-    written = score.write("musicxml", fp=str(target))
+    try:
+        started = time.perf_counter()
+        written = score.write("musicxml", fp=str(target))
+        diagnostics["music21_export_seconds"] = round(
+            time.perf_counter() - started,
+            6,
+        )
+    except Exception as exc:
+        raise ConversionStageError("music21_export", "musicxml_export_failed", str(exc)) from exc
     musicxml_path = Path(written) if written else target
     if not musicxml_path.exists() or musicxml_path.stat().st_size == 0:
-        raise RuntimeError(f"music21 did not produce a MusicXML file for source: {source_path}")
+        raise ConversionStageError(
+            "music21_export",
+            "musicxml_output_missing",
+            f"music21 did not produce a MusicXML file for source: {source_path}",
+        )
     return musicxml_path, diagnostics
 
 
-def _musescore_to_musicxml_path(source_path: Path, output_dir: Path, timeout: int) -> Path:
-    musescore_bin = _find_musescore_executable()
+def _musescore_to_musicxml_path(
+    source_path: Path,
+    output_dir: Path,
+    timeout: int,
+    *,
+    executable: Optional[str] = None,
+) -> Path:
+    musescore_bin = executable or _find_musescore_executable()
     intermediate_dir = output_dir / "_intermediate_musicxml"
     intermediate_dir.mkdir(parents=True, exist_ok=True)
     target = intermediate_dir / f"{_safe_stem(str(source_path))}_{_sha12(str(source_path.resolve()))}.musicxml"
@@ -454,13 +1043,17 @@ def _musescore_to_musicxml_path(source_path: Path, output_dir: Path, timeout: in
         else:
             detail = (proc.stderr or proc.stdout or "").strip()
         failed_cmd = child_info.get("command") or cmd
-        raise RuntimeError(
+        raise ConversionStageError(
+            "musescore_export",
+            "musescore_export_failed",
             f"{MUSESCORE_REQUIRED_MESSAGE} MuseScore command failed "
             f"(returncode={child_info.get('returncode', proc.returncode)}, command={' '.join(failed_cmd)}"
             f"{', stderr=' + detail if detail else ''})"
         )
     if not target.exists() or target.stat().st_size == 0:
-        raise RuntimeError(
+        raise ConversionStageError(
+            "musescore_export",
+            "musescore_output_missing",
             f"{MUSESCORE_REQUIRED_MESSAGE} MuseScore did not produce MusicXML for source: {source_path}"
         )
     return target
@@ -480,8 +1073,25 @@ def _convert_one(
     render_first_page: bool,
     output_suffix: str = "",
     timestamp_label: str = "",
+    midi_options: Optional[MidiImportOptions] = None,
+    download_options: Optional[DownloadOptions] = None,
+    verovio_options: Optional[Mapping[str, Any]] = None,
+    resume_policy: str = "never",
 ) -> Dict[str, Any]:
+    midi_options = midi_options or MidiImportOptions()
+    download_options = download_options or DownloadOptions()
+    normalized_verovio_options = _normalized_verovio_options(verovio_options)
+    is_remote = source.startswith(("http://", "https://"))
+    conversion_options = _conversion_options_payload(
+        midi_options=midi_options,
+        download_options=download_options,
+        verovio_options=normalized_verovio_options,
+        render_first_page=render_first_page,
+    )
+    started_total = time.perf_counter()
+    stage_durations: Dict[str, float] = {}
     record: Dict[str, Any] = {
+        "report_schema_version": CONVERSION_REPORT_SCHEMA_VERSION,
         "source": source,
         "status": "fail",
         "input_from": None,
@@ -489,8 +1099,14 @@ def _convert_one(
         "output_mei": None,
         "converted": False,
         "overwritten": False,
+        "skipped": False,
+        "resume_policy": resume_policy,
+        "resume_reason": None,
         "message": None,
         "error": None,
+        "error_type": None,
+        "failure_stage": None,
+        "failure_code": None,
         "intermediate_musicxml": None,
         "conversion_route": None,
         "source_size_bytes": None,
@@ -498,10 +1114,58 @@ def _convert_one(
         "output_size_bytes": None,
         "output_sha256": None,
         "music21_diagnostics": None,
+        "download": None,
+        "resolved_url": None,
+        "tool_versions": {
+            "music21": None,
+            "musescore": None,
+            "verovio": None,
+        },
+        "conversion_options": conversion_options,
+        "options_fingerprint": _conversion_signature(conversion_options),
+        "conversion_signature": None,
+        "stage_durations_seconds": stage_durations,
+        "conversion_duration_seconds": None,
+        "validation_stages": _new_validation_stages(
+            is_remote=is_remote,
+            render_requested=render_first_page,
+        ),
     }
+    current_stage = "download"
+
+    def timed(stage: str, callback: Any) -> Any:
+        nonlocal current_stage
+        current_stage = stage
+        started = time.perf_counter()
+        try:
+            return callback()
+        finally:
+            stage_durations[stage] = round(time.perf_counter() - started, 6)
+
     try:
-        source_path = _fetch_source(source, output_dir / "_sources", timeout)
-        source_fingerprint = _file_fingerprint(source_path)
+        source_path, download_metadata = timed(
+            "download",
+            lambda: _fetch_source(
+                source,
+                output_dir / "_sources",
+                timeout,
+                options=download_options,
+                force_download=resume_policy == "force",
+            ),
+        )
+        record["download"] = download_metadata
+        record["resolved_url"] = download_metadata.get("resolved_url")
+        if is_remote:
+            set_validation_stage(
+                record,
+                "downloaded",
+                "passed",
+                "Used cached download."
+                if download_metadata.get("download_cache_hit")
+                else "Downloaded with streaming size checks.",
+            )
+
+        source_fingerprint = timed("source_fingerprint", lambda: _file_fingerprint(source_path))
         record.update(
             {
                 "local_source": str(source_path.resolve()),
@@ -509,13 +1173,22 @@ def _convert_one(
                 "source_sha256": source_fingerprint["sha256"],
             }
         )
-        source_text = None if _is_binary_score_source(source_path) else source_path.read_text(encoding="utf-8", errors="ignore")
-        input_from = _guess_source_format(source_path, source_text)
+        current_stage = "format_detection"
+        source_text = (
+            None
+            if _is_binary_score_source(source_path)
+            else source_path.read_text(encoding="utf-8", errors="ignore")
+        )
+        input_from = timed(
+            "format_detection",
+            lambda: _guess_source_format(source_path, source_text),
+        )
         if input_from is None:
             input_from = "music21"
+        record["input_from"] = input_from
 
         if input_from == "mei" and _source_extension(source_path) == ".mei":
-            stats = _mei_stats(source_path)
+            stats = timed("mei_validation", lambda: _mei_stats(source_path))
             record.update(
                 {
                     "status": "ok",
@@ -534,28 +1207,52 @@ def _convert_one(
                     **stats,
                 }
             )
+            set_validation_stage(
+                record,
+                "converted",
+                "not_applicable",
+                "Source is already MEI.",
+            )
+            set_validation_stage(record, "valid_mei", "passed", "MEI XML parsed successfully.")
+            if render_first_page:
+                set_validation_stage(
+                    record,
+                    "rendered",
+                    "not_run",
+                    "MEI pass-through does not invoke the conversion render smoke test.",
+                )
+            record["conversion_duration_seconds"] = round(
+                time.perf_counter() - started_total,
+                6,
+            )
             return record
 
         child_source_path = source_path
         child_input_from = input_from
         musicxml_intermediate: Optional[Path] = None
         music21_diagnostics: Dict[str, Any] = {}
+        musescore_bin: Optional[str] = None
         if input_from == "musescore":
-            musicxml_intermediate = _musescore_to_musicxml_path(source_path, output_dir, timeout)
-            child_source_path = musicxml_intermediate
-            child_input_from = "musicxml"
+            try:
+                musescore_bin = _find_musescore_executable()
+            except Exception as exc:
+                raise ConversionStageError(
+                    "musescore_export",
+                    "musescore_unavailable",
+                    str(exc),
+                ) from exc
+            record["tool_versions"]["musescore"] = _musescore_version(musescore_bin)
+            record["tool_versions"]["verovio"] = _verovio_version()
             conversion_route = "musescore-musicxml-verovio"
         elif input_from not in NATIVE_VEROVIO_INPUTS:
-            musicxml_intermediate, music21_diagnostics = _music21_to_musicxml_path(
-                source_path,
-                output_dir,
-            )
-            child_source_path = musicxml_intermediate
-            child_input_from = "musicxml"
+            record["tool_versions"]["music21"] = _music21_version()
+            record["tool_versions"]["verovio"] = _verovio_version()
             conversion_route = "music21-musicxml-verovio"
         else:
+            record["tool_versions"]["verovio"] = _verovio_version()
             conversion_route = "verovio-direct"
 
+        record["conversion_route"] = conversion_route
         mei_path = _output_mei_path(
             source,
             output_dir=output_dir,
@@ -563,32 +1260,111 @@ def _convert_one(
             output_suffix=output_suffix,
             timestamp_label=timestamp_label,
         )
+        sidecar_path = mei_path.with_name(f"{mei_path.name}.camat.json")
+        signature_payload = {
+            "report_schema_version": CONVERSION_REPORT_SCHEMA_VERSION,
+            "source_sha256": source_fingerprint["sha256"],
+            "input_from": input_from,
+            "conversion_route": conversion_route,
+            "conversion_options": conversion_options,
+            "tool_versions": record["tool_versions"],
+        }
+        signature = _conversion_signature(signature_payload)
+        record["conversion_signature"] = signature
+
+        if resume_policy == "if-unchanged":
+            previous = _read_json(sidecar_path)
+            previous_record = previous.get("record") if previous else None
+            if (
+                isinstance(previous_record, dict)
+                and previous.get("conversion_signature") == signature
+                and mei_path.exists()
+            ):
+                output_fingerprint = _file_fingerprint(mei_path)
+                if output_fingerprint.get("sha256") == previous_record.get("output_sha256"):
+                    preserved = dict(previous_record)
+                    preserved.update(
+                        {
+                            "status": "ok",
+                            "converted": False,
+                            "overwritten": False,
+                            "skipped": True,
+                            "resume_policy": resume_policy,
+                            "resume_reason": "source, route, options, tool versions, and output hash are unchanged",
+                            "message": "Skipped unchanged conversion.",
+                            "download": download_metadata,
+                            "resolved_url": download_metadata.get("resolved_url"),
+                            "stage_durations_seconds": stage_durations,
+                            "conversion_duration_seconds": round(
+                                time.perf_counter() - started_total,
+                                6,
+                            ),
+                        }
+                    )
+                    return preserved
+
+        if input_from == "musescore":
+            musicxml_intermediate = timed(
+                "musescore_export",
+                lambda: _musescore_to_musicxml_path(
+                    source_path,
+                    output_dir,
+                    timeout,
+                    executable=musescore_bin,
+                ),
+            )
+            child_source_path = musicxml_intermediate
+            child_input_from = "musicxml"
+        elif input_from not in NATIVE_VEROVIO_INPUTS:
+            musicxml_intermediate, music21_diagnostics = timed(
+                "music21_bridge",
+                lambda: _music21_to_musicxml_path(
+                    source_path,
+                    output_dir,
+                    midi_options=midi_options,
+                ),
+            )
+            child_source_path = musicxml_intermediate
+            child_input_from = "musicxml"
         overwritten = mei_path.exists()
-        proc = subprocess.run(
-            [
-                sys.executable,
-                "-X",
-                "faulthandler",
-                "-c",
-                CONVERT_CHILD,
-                str(child_source_path),
-                child_input_from,
-                str(mei_path),
-                "1" if render_first_page else "0",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            check=False,
+        proc = timed(
+            "verovio_conversion",
+            lambda: subprocess.run(
+                [
+                    sys.executable,
+                    "-X",
+                    "faulthandler",
+                    "-c",
+                    CONVERT_CHILD,
+                    str(child_source_path),
+                    child_input_from,
+                    str(mei_path),
+                    "1" if render_first_page else "0",
+                    json.dumps(normalized_verovio_options, sort_keys=True),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                check=False,
+            ),
         )
         if proc.returncode != 0:
-            raise RuntimeError(
+            raise ConversionStageError(
+                "verovio_conversion",
+                "verovio_subprocess_failed",
                 "Verovio subprocess failed "
                 f"(returncode={proc.returncode}, stderr={proc.stderr.strip() or proc.stdout.strip()})"
             )
-        child_info = json.loads((proc.stdout or "{}").strip().splitlines()[-1])
-        stats = _mei_stats(mei_path)
-        output_fingerprint = _file_fingerprint(mei_path)
+        try:
+            child_info = json.loads((proc.stdout or "{}").strip().splitlines()[-1])
+        except (IndexError, json.JSONDecodeError) as exc:
+            raise ConversionStageError(
+                "verovio_conversion",
+                "invalid_verovio_report",
+                "Verovio subprocess did not return a valid JSON report.",
+            ) from exc
+        stats = timed("mei_validation", lambda: _mei_stats(mei_path))
+        output_fingerprint = timed("output_fingerprint", lambda: _file_fingerprint(mei_path))
         record.update(
             {
                 "status": "ok",
@@ -615,8 +1391,51 @@ def _convert_one(
                 **stats,
             }
         )
+        set_validation_stage(record, "converted", "passed", conversion_route)
+        set_validation_stage(record, "valid_mei", "passed", "MEI XML parsed successfully.")
+        if render_first_page:
+            set_validation_stage(
+                record,
+                "rendered",
+                "passed" if child_info.get("svg_ok") is True else "failed",
+                "First-page SVG smoke test.",
+            )
+        record["conversion_duration_seconds"] = round(
+            time.perf_counter() - started_total,
+            6,
+        )
+        timed(
+            "provenance_write",
+            lambda: _atomic_write_json(
+                sidecar_path,
+                {
+                    "report_schema_version": CONVERSION_REPORT_SCHEMA_VERSION,
+                    "conversion_signature": signature,
+                    "signature_payload": signature_payload,
+                    "record": record,
+                },
+            ),
+        )
     except Exception as exc:
+        if isinstance(exc, ConversionStageError):
+            failure_stage = exc.stage
+            failure_code = exc.code
+        else:
+            failure_stage = current_stage
+            failure_code = re.sub(r"(?<!^)(?=[A-Z])", "_", type(exc).__name__).lower()
         record["error"] = f"{type(exc).__name__}: {exc}"
+        record["error_type"] = type(exc).__name__
+        record["failure_stage"] = failure_stage
+        record["failure_code"] = failure_code
+        if failure_stage == "download":
+            set_validation_stage(record, "downloaded", "failed", str(exc))
+        else:
+            set_validation_stage(record, "converted", "failed", str(exc))
+    finally:
+        record["conversion_duration_seconds"] = round(
+            time.perf_counter() - started_total,
+            6,
+        )
     return record
 
 
@@ -632,6 +1451,10 @@ def convert_sources(
     show_progress: bool = True,
     expand_txt_sources: bool = True,
     source_base_dir: Path | str | None = None,
+    midi_options: Optional[MidiImportOptions] = None,
+    download_options: Optional[DownloadOptions] = None,
+    verovio_options: Optional[Mapping[str, Any]] = None,
+    resume_policy: str = "never",
 ) -> List[Dict[str, Any]]:
     """Convert local paths or URLs to MEI and return one report per source.
 
@@ -662,6 +1485,17 @@ def convert_sources(
         Expand ``.txt`` inputs as source manifests.
     source_base_dir
         Base directory for relative source and manifest paths.
+    midi_options
+        Score-oriented MIDI quantization and voice-reconstruction policy.
+    download_options
+        Streaming, file-size, and content-type download policy.
+    verovio_options
+        JSON-serializable Verovio options merged over CAMAT's stable defaults.
+        ``inputFrom`` is route-controlled and cannot be supplied here.
+    resume_policy
+        ``"never"`` converts again using cached downloads, ``"if-unchanged"``
+        reuses an output only when its source, route, options, tool versions,
+        schema, and output hash match, and ``"force"`` redownloads and converts.
 
     Returns
     -------
@@ -669,6 +1503,12 @@ def convert_sources(
         Ordered conversion records containing the route, output path,
         fingerprints, structural checks, diagnostics, and any error.
     """
+    if resume_policy not in {"never", "if-unchanged", "force"}:
+        raise ValueError("resume_policy must be 'never', 'if-unchanged', or 'force'.")
+    effective_midi_options = midi_options or MidiImportOptions()
+    effective_download_options = download_options or DownloadOptions()
+    effective_verovio_options = _normalized_verovio_options(verovio_options)
+
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
     if expand_txt_sources:
@@ -711,6 +1551,10 @@ def convert_sources(
             render_first_page=render_first_page,
             output_suffix=output_suffix,
             timestamp_label=stamp,
+            midi_options=effective_midi_options,
+            download_options=effective_download_options,
+            verovio_options=effective_verovio_options,
+            resume_policy=resume_policy,
         )
 
     if effective_n_jobs == 1:
@@ -761,7 +1605,9 @@ def print_conversion_summary(records: Iterable[Dict[str, Any]]) -> None:
             f"{_shorten(str(row.get('source') or ''))}"
         )
         if row.get("error"):
-            print(f"        error: {row['error']}")
+            stage = row.get("failure_stage") or "unknown"
+            code = row.get("failure_code") or "unknown"
+            print(f"        error [{stage}/{code}]: {row['error']}")
     print()
 
     print("Output paths:")
@@ -771,13 +1617,28 @@ def print_conversion_summary(records: Iterable[Dict[str, Any]]) -> None:
         if row.get("status") != "ok":
             print(f"  FAIL: {source}")
             continue
-        if row.get("converted"):
+        if row.get("skipped"):
+            print(f"  skipped unchanged: {path}")
+        elif row.get("converted"):
             action = "OVERWROTE" if row.get("overwritten") else "created"
             print(f"  {action}: {path}")
         else:
             print(f"  not converted, already MEI: {path}")
         print(f"    source: {source}")
     print()
+
+
+def _parse_midi_grid(value: str) -> Tuple[int, ...]:
+    try:
+        parsed = tuple(int(item.strip()) for item in value.split(",") if item.strip())
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            "MIDI grid must be comma-separated positive integers, for example 16,8,6,4,3."
+        ) from exc
+    try:
+        return MidiImportOptions(quarter_length_divisors=parsed).quarter_length_divisors
+    except (TypeError, ValueError) as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from exc
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -818,7 +1679,95 @@ def main(argv: Optional[List[str]] = None) -> int:
         action="store_true",
         help="Append a batch timestamp to converted output filenames.",
     )
+    parser.add_argument(
+        "--midi-grid",
+        type=_parse_midi_grid,
+        default=MIDI_QUARTER_LENGTH_DIVISORS,
+        help=(
+            "Comma-separated quarter-note divisors used for MIDI score quantization "
+            "(default: 8,6,4,3; use 16 for straight 64th notes)."
+        ),
+    )
+    parser.add_argument(
+        "--no-midi-quantize",
+        action="store_true",
+        help="Disable music21 post-quantization; not a lossless microtiming mode.",
+    )
+    parser.add_argument(
+        "--no-midi-voice-reconstruction",
+        action="store_true",
+        help="Do not separate staggered MIDI overlaps into notated voices.",
+    )
+    parser.add_argument(
+        "--no-midi-fill-gaps",
+        action="store_true",
+        help="When reconstructing MIDI voices, leave gap rests implicit/hidden.",
+    )
+    parser.add_argument(
+        "--midi-voices-to-staves",
+        action="store_true",
+        help=(
+            "Put each inferred local MIDI voice slot on a separate staff. "
+            "This is diagnostic: MIDI does not encode persistent voice identities."
+        ),
+    )
+    parser.add_argument(
+        "--max-download-mb",
+        type=float,
+        default=100.0,
+        help="Maximum permitted size of one downloaded source (default: 100 MiB).",
+    )
+    parser.add_argument(
+        "--allow-content-type",
+        action="append",
+        default=[],
+        help="Optional HTTP content-type allow-list entry; may be repeated and supports type/*.",
+    )
+    parser.add_argument(
+        "--allow-html",
+        action="store_true",
+        help="Allow text/html downloads (normally rejected as likely repository/blob pages).",
+    )
+    parser.add_argument(
+        "--verovio-options-json",
+        default="{}",
+        help="JSON object merged into the stable Verovio conversion options.",
+    )
+    resume_group = parser.add_mutually_exclusive_group()
+    resume_group.add_argument(
+        "--resume",
+        action="store_true",
+        help="Skip outputs whose source, route, options, versions, and output hash are unchanged.",
+    )
+    resume_group.add_argument(
+        "--force",
+        action="store_true",
+        help="Redownload remote sources and reconvert even when cached artifacts exist.",
+    )
     args = parser.parse_args(argv)
+
+    if args.max_download_mb <= 0:
+        parser.error("--max-download-mb must be greater than zero")
+    try:
+        cli_verovio_options = json.loads(args.verovio_options_json)
+    except json.JSONDecodeError as exc:
+        parser.error(f"--verovio-options-json is invalid JSON: {exc}")
+    if not isinstance(cli_verovio_options, dict):
+        parser.error("--verovio-options-json must decode to a JSON object")
+
+    midi_options = MidiImportOptions(
+        quantize=not args.no_midi_quantize,
+        quarter_length_divisors=args.midi_grid,
+        reconstruct_voices=not args.no_midi_voice_reconstruction,
+        fill_gaps=not args.no_midi_fill_gaps,
+        voice_layout="separate_staves" if args.midi_voices_to_staves else "layers",
+    )
+    download_options = DownloadOptions(
+        max_bytes=int(args.max_download_mb * 1024 * 1024),
+        allowed_content_types=tuple(args.allow_content_type),
+        reject_html=not args.allow_html,
+    )
+    resume_policy = "force" if args.force else "if-unchanged" if args.resume else "never"
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -833,10 +1782,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         output_suffix=args.output_suffix,
         timestamp=args.timestamp,
         show_progress=True,
+        midi_options=midi_options,
+        download_options=download_options,
+        verovio_options=cli_verovio_options,
+        resume_policy=resume_policy,
     )
 
     report_path = output_dir / "conversion_report.json"
-    report_path.write_text(json.dumps(records, indent=2), encoding="utf-8")
+    _atomic_write_json(report_path, records)
     print_conversion_summary(records)
     print(f"Report: {report_path}")
 

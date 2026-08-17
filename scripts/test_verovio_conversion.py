@@ -13,6 +13,8 @@ if str(REPO_ROOT) not in sys.path:
 
 from camat.conversion import (
     DEFAULT_SOURCES,
+    DownloadOptions,
+    MidiImportOptions,
     _file_fingerprint,
     _output_mei_path,
     _prepare_midi_score_for_export,
@@ -25,6 +27,8 @@ _print_summary = print_conversion_summary
 
 __all__ = [
     "DEFAULT_SOURCES",
+    "DownloadOptions",
+    "MidiImportOptions",
     "convert_sources",
     "main",
     "print_conversion_summary",
