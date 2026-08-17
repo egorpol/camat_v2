@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-08-17
+
 ### Added
 
 - Integrated the read-only MEI facsimile viewer from `camat_corpus` as
@@ -87,6 +89,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Resynchronized the packaged duration-semantics MEI with its canonical test
+  fixture so installed-wheel release checks and the documented expressive-note
+  example use identical data.
 - Made the MEI facsimile notebook and interactive API accept scores without
   facsimile records. They now render a full-width score-only view, retain
   strict parsing for editorial validation, and can switch to the linked view
