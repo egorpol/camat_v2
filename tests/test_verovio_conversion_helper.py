@@ -154,6 +154,41 @@ def test_custom_midi_grid_preserves_sixty_fourth_notes(tmp_path: Path) -> None:
     assert diagnostics["quantization_quarter_length_divisors"] == [16, 8, 6, 4, 3]
 
 
+def test_default_midi_grid_detects_sixty_fourth_notes(tmp_path: Path) -> None:
+    measure = stream.Measure(number=1)
+    measure.insert(0, meter.TimeSignature("4/4"))
+    for index, pitch in enumerate(("C4", "D4", "E4", "F4")):
+        measure.insert(
+            Fraction(index, 16),
+            note.Note(pitch, quarterLength=Fraction(1, 16)),
+        )
+    measure.insert(Fraction(1, 4), note.Note("G4", quarterLength=Fraction(15, 4)))
+    midi_path = Path(
+        stream.Score([stream.Part([measure])]).write(
+            "midi",
+            fp=str(tmp_path / "auto_sixty_fourths.mid"),
+        )
+    )
+
+    imported, diagnostics = _load_music21_score(midi_path)
+    opening = [
+        (element.nameWithOctave, element.offset, element.quarterLength)
+        for element in imported.parts[0].flatten().notes
+        if not element.isChord
+    ][:4]
+
+    assert opening == [
+        ("C4", 0.0, Fraction(1, 16)),
+        ("D4", Fraction(1, 16), Fraction(1, 16)),
+        ("E4", Fraction(1, 8), Fraction(1, 16)),
+        ("F4", Fraction(3, 16), Fraction(1, 16)),
+    ]
+    assert diagnostics["quantization_quarter_length_divisors"] == [16, 8, 6, 4, 3]
+    inference = diagnostics["quantization_grid_inference"]
+    assert inference["mode"] == "auto"
+    assert inference["detected_divisors"] == [16]
+
+
 def test_eleven_grid_exports_eleven_to_eight_time_modification(tmp_path: Path) -> None:
     measure = stream.Measure(number=1)
     measure.insert(0, meter.TimeSignature("4/4"))
@@ -238,6 +273,10 @@ def test_conversion_options_reject_invalid_values() -> None:
         DownloadOptions(max_bytes=0)
     with pytest.raises(ValueError):
         MidiImportOptions(voice_layout="one_staff_per_voice")
+    with pytest.raises(ValueError):
+        MidiImportOptions(auto_max_quarter_length_divisor=0)
+    with pytest.raises(TypeError):
+        MidiImportOptions(auto_max_quarter_length_divisor=16.0)  # type: ignore[arg-type]
 
 
 def test_midi_voices_can_be_expanded_to_separate_staves() -> None:
@@ -415,7 +454,7 @@ def test_conversion_report_records_provenance_and_validation(tmp_path: Path) -> 
         expand_txt_sources=False,
     )[0]
 
-    assert record["report_schema_version"] == 1
+    assert record["report_schema_version"] == 2
     assert record["source_sha256"]
     assert record["output_sha256"]
     assert record["options_fingerprint"]

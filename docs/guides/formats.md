@@ -95,6 +95,14 @@ downloading scores.
 
 ## music21 bridge
 
+!!! warning "Experimental MIDI route"
+
+    MIDI → music21 → MusicXML → Verovio is an experimental import route. It is
+    known to produce incorrect rhythm, chord grouping, voices, rests, ties, or
+    notation in some files, even when quantization diagnostics look good. Use
+    it for exploration and regression work, not unattended edition production;
+    inspect every generated MEI measure before analysis or publication.
+
 Formats Verovio cannot identify, including MIDI, go through music21. Export
 MusicXML, then convert that MusicXML with Verovio so the analysis file is
 still Verovio MEI. The public converter applies the complete bridge:
@@ -112,15 +120,17 @@ print(records[0]["output_mei"])
 The companion notebook executes this route with the ASAP BWV 846 score MIDI
 from `test_corpus/non_mei_test_copora_links.txt`. Its downloaded MIDI and
 intermediate MusicXML are retained as working/provenance files beside the MEI.
-The converter expands music21's default post-quantization grid from `(4, 3)` to
-`(8, 6, 4, 3)`: straight 32nds such as the adjacent G/F ornament in BWV 846
-remain sequential, while binary and triplet subdivisions are retained. It
-applies voice reconstruction only to measures containing staggered overlapping
-notes. `fillGaps=True` is important: it exports visible rests rather than
-hidden MusicXML rests that Verovio would represent as MEI `<space>` elements.
+The converter starts from `(8, 6, 4, 3)`, then scans exact raw note-on ticks for
+common finer binary/triplet grids before music21 groups notes into chords.
+Straight 32nds such as the adjacent G/F ornament in BWV 846 remain sequential,
+and a score containing exact 64ths automatically adds divisor `16`. It applies
+voice reconstruction only to measures containing staggered overlapping notes.
+`fillGaps=True` is important: it exports visible rests rather than hidden
+MusicXML rests that Verovio would represent as MEI `<space>` elements.
 
 MIDI in particular is lossy: spelling, voices, meter, and articulations are
-reconstructed. Inspect the MEI before treating it as ground truth.
+reconstructed. The automatic grid reduces specific failures but does not make
+the route notation-reliable. See [Known limitations](../known-limitations.md).
 
 ### MIDI ticks and quantization grids
 
@@ -136,6 +146,14 @@ It groups sufficiently close events into candidate chords before snapping
 offsets and durations to the nearest configured subdivision. The finest grid
 therefore affects both rhythmic precision and chord grouping.
 
+CAMAT's default `MidiImportOptions()` infers common divisors `12`, `16`, `24`,
+`32`, `48`, or `64` when exact note-on positions or adjacent onset intervals
+require them. It deliberately ignores note-off ticks: score MIDI commonly
+shortens those by one tick for articulation, which is not evidence of a finer
+notated value. One-tick and other nonstandard onset denominators are also not
+promoted automatically, avoiding an extreme grid for ordinary performance
+jitter.
+
 | Smallest straight note | Quarter length | Divisor |
 | --- | ---: | ---: |
 | 16th | 1/4 | 4 |
@@ -143,7 +161,7 @@ therefore affects both rhythmic precision and chord grouping.
 | 64th | 1/16 | 16 |
 | 128th | 1/32 | 32 |
 
-Override the score grid for a file or corpus with `MidiImportOptions`:
+Override automatic detection for a file or corpus with `MidiImportOptions`:
 
 ```python
 from camat import MidiImportOptions, convert_sources
@@ -162,8 +180,9 @@ does not infer a global rhythmic interpretation or guaranteed tuplet grouping.
 Every event independently chooses its nearest candidate, so only include grids
 that are plausible for the source.
 
-The report records the selected grid, PPQ, chord-grouping tolerance, and
-summary statistics for music21's offset and duration quantization errors.
+The report records the effective grid, exact onset/interval evidence used by
+automatic detection, PPQ, chord-grouping tolerance, and summary statistics for
+music21's offset and duration quantization errors.
 
 ### MIDI tracks, channels, voices, and staves
 

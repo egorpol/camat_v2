@@ -3,9 +3,10 @@
 Pure helpers parse MEI, render Verovio SVG pages, and return HTML. The
 :class:`InteractiveFacsimileViewer` and
 :func:`launch_interactive_facsimile_viewer` entry points add Jupyter controls
-and optional MEI file watching. The viewer accepts any local MEI: files with
-facsimile surfaces, measure zones, and matching measure ``@facs`` links get a
-linked two-pane view, while files without those records get a score-only view.
+and optional MEI file watching. The viewer accepts a local MEI path or an HTTP(S)
+link: files with facsimile surfaces, measure zones, and matching measure
+``@facs`` links get a linked two-pane view, while files without those records
+get a score-only view.
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ from dataclasses import dataclass, field
 from html import escape
 import hashlib
 import json
+import math
 import mimetypes
 from pathlib import Path
 import re
@@ -26,6 +28,8 @@ import uuid
 import xml.etree.ElementTree as ET
 
 import verovio
+
+from .quiet_utils import suppress_native_output
 
 MEI_NS = "http://www.music-encoding.org/ns/mei"
 XML_ID = "{http://www.w3.org/XML/1998/namespace}id"
@@ -43,6 +47,7 @@ __all__ = [
     "build_facsimile_viewer",
     "build_verovio_options",
     "display_path",
+    "find_camat_root",
     "format_facsimile_summary",
     "launch_interactive_facsimile_viewer",
     "make_diagnostic_table",
@@ -52,6 +57,7 @@ __all__ = [
     "read_facsimile_model",
     "render_verovio_pages",
     "resolve_graphic_src",
+    "resolve_mei_source",
     "resolve_repo_path",
     "score_content_hash",
     "verovio_options_hash",
@@ -62,21 +68,73 @@ class FacsimileUnavailableError(RuntimeError):
     """Raised when an MEI has no usable facsimile surface to inspect."""
 
 
+def find_camat_root(start: Path | None = None) -> Path:
+    """Return the CAMAT checkout when Jupyter or tests start in a subdirectory."""
+    start = (start or Path.cwd()).resolve()
+    for candidate in (start, *start.parents):
+        if (candidate / "pyproject.toml").is_file() and (candidate / "camat").is_dir():
+            return candidate
+    return start
+
+
 def resolve_repo_path(path: str | Path, *, repo_root: Path | None = None) -> Path:
     """Resolve a repo-relative, absolute, or home-relative path."""
     resolved = Path(path).expanduser()
     if not resolved.is_absolute():
-        resolved = (repo_root or Path.cwd()).resolve() / resolved
+        resolved = (repo_root or find_camat_root()).resolve() / resolved
     return resolved.resolve()
 
 
 def display_path(path: Path, *, repo_root: Path | None = None) -> str:
     """Return a compact path relative to repo_root when possible."""
-    root = (repo_root or Path.cwd()).resolve()
+    root = (repo_root or find_camat_root()).resolve()
     try:
         return str(path.relative_to(root))
     except ValueError:
         return str(path)
+
+
+def _default_mei_cache_dir(repo_root: Path | None = None) -> Path:
+    root = (repo_root or find_camat_root()).resolve()
+    if (root / "pyproject.toml").is_file() and (root / "camat").is_dir():
+        return root / "converted_mei" / "facsimile_viewer_sources"
+    from .music_utils import get_download_cache_dir
+
+    return Path(get_download_cache_dir())
+
+
+def resolve_mei_source(
+    source: str | Path,
+    *,
+    repo_root: Path | None = None,
+    cache_dir: str | Path | None = None,
+    timeout_seconds: int = 60,
+) -> Path:
+    """Return a local MEI path from a local file or an HTTP(S) link.
+
+    GitHub ``blob`` pages are converted to raw-file URLs. Remote files are
+    cached under ``converted_mei/facsimile_viewer_sources/`` when this is a
+    CAMAT checkout, otherwise under the shared CAMAT download cache.
+    """
+    root = (repo_root or find_camat_root()).resolve()
+    source_text = str(source)
+    if source_text.startswith(("http://", "https://")):
+        from .music_utils import get_file_path
+
+        resolved_cache = Path(cache_dir) if cache_dir is not None else _default_mei_cache_dir(root)
+        return Path(
+            get_file_path(
+                source_text,
+                timeout_seconds=timeout_seconds,
+                use_cache=True,
+                cache_dir=str(resolved_cache),
+            )
+        ).resolve()
+
+    local_path = resolve_repo_path(source, repo_root=root)
+    if not local_path.is_file():
+        raise FileNotFoundError(f"No MEI file at {local_path}")
+    return local_path
 
 
 def parse_int_attr(element: ET.Element, attr: str, *, context: str) -> int:
@@ -115,11 +173,12 @@ def read_facsimile_model(
 ) -> dict:
     """Parse facsimile graphics, zones, and score measure links from an MEI file.
 
-    Set ``allow_missing_facsimile=True`` to return a score-only model when the
-    MEI has no facsimile, first surface, graphic, or measure zones. Invalid
+    ``mei_path`` may be a local path or an HTTP(S) link, including a GitHub
+    ``blob`` page. Set ``allow_missing_facsimile=True`` to return a score-only
+    model when the MEI has no facsimile or usable surfaces. Invalid
     facsimile records, such as unresolved measure links, remain errors.
     """
-    mei_path = resolve_repo_path(mei_path, repo_root=repo_root)
+    mei_path = resolve_mei_source(mei_path, repo_root=repo_root)
     tree = ET.parse(mei_path)
     root = tree.getroot()
 
@@ -134,6 +193,8 @@ def read_facsimile_model(
                     "facs": facs,
                     "zone_id": facs[1:] if facs.startswith("#") else facs,
                     "zone": None,
+                    "surface_id": None,
+                    "surface_index": None,
                     "status": "facsimile unavailable",
                 }
             )
@@ -151,10 +212,12 @@ def read_facsimile_model(
             "graphic_src": None,
             "image_width": None,
             "image_height": None,
+            "surfaces": [],
             "zones": {},
             "measures": measures,
             "linked": [],
             "missing_facs": measures,
+            "other_surface_links": [],
         }
 
     def unavailable(message: str) -> dict:
@@ -168,44 +231,76 @@ def read_facsimile_model(
             f"No <facsimile> found in {display_path(mei_path, repo_root=repo_root)}"
         )
 
-    surface = facsimile.find("m:surface", NS)
-    if surface is None:
+    surface_elements = facsimile.findall("m:surface", NS)
+    if not surface_elements:
         return unavailable(
             f"No <surface> found in <facsimile> for {display_path(mei_path, repo_root=repo_root)}"
         )
 
-    graphic = surface.find("m:graphic", NS)
-    if graphic is None:
-        return unavailable(
-            f"No <graphic> found in first facsimile surface for {display_path(mei_path, repo_root=repo_root)}"
-        )
-
-    graphic_target = graphic.get("target")
-    if not graphic_target:
-        raise RuntimeError(
-            f"The facsimile <graphic> in {display_path(mei_path, repo_root=repo_root)} has no @target"
-        )
-
-    image_width = parse_int_attr(graphic, "width", context="facsimile graphic")
-    image_height = parse_int_attr(graphic, "height", context="facsimile graphic")
-
+    surfaces = []
     zones = {}
-    for zone in surface.findall("m:zone", NS):
-        if zone.get("type") != "measure":
+    for source_index, surface in enumerate(surface_elements):
+        measure_zones = [
+            zone
+            for zone in surface.findall("m:zone", NS)
+            if zone.get("type") == "measure"
+        ]
+        if not measure_zones:
             continue
-        zone_id = zone.get(XML_ID)
-        if not zone_id:
-            raise RuntimeError("A measure <zone> is missing xml:id")
-        zones[zone_id] = {
-            "id": zone_id,
-            "ulx": parse_int_attr(zone, "ulx", context=f"zone {zone_id}"),
-            "uly": parse_int_attr(zone, "uly", context=f"zone {zone_id}"),
-            "lrx": parse_int_attr(zone, "lrx", context=f"zone {zone_id}"),
-            "lry": parse_int_attr(zone, "lry", context=f"zone {zone_id}"),
-        }
-    if not zones:
+
+        surface_id = surface.get(XML_ID) or f"surface-{source_index + 1}"
+        graphic = surface.find("m:graphic", NS)
+        if graphic is None:
+            raise RuntimeError(
+                f"Facsimile surface {surface_id!r} has measure zones but no <graphic>"
+            )
+        graphic_target = graphic.get("target")
+        if not graphic_target:
+            raise RuntimeError(
+                f"The <graphic> on facsimile surface {surface_id!r} has no @target"
+            )
+
+        surface_index = len(surfaces)
+        surface_zones = {}
+        for zone in measure_zones:
+            zone_id = zone.get(XML_ID)
+            if not zone_id:
+                raise RuntimeError("A measure <zone> is missing xml:id")
+            if zone_id in zones:
+                raise RuntimeError(f"Duplicate measure zone xml:id: {zone_id}")
+            zone_model = {
+                "id": zone_id,
+                "ulx": parse_int_attr(zone, "ulx", context=f"zone {zone_id}"),
+                "uly": parse_int_attr(zone, "uly", context=f"zone {zone_id}"),
+                "lrx": parse_int_attr(zone, "lrx", context=f"zone {zone_id}"),
+                "lry": parse_int_attr(zone, "lry", context=f"zone {zone_id}"),
+                "surface_id": surface_id,
+                "surface_index": surface_index,
+            }
+            surface_zones[zone_id] = zone_model
+            zones[zone_id] = zone_model
+
+        surfaces.append(
+            {
+                "id": surface_id,
+                "n": surface.get("n") or str(source_index + 1),
+                "index": surface_index,
+                "graphic_target": graphic_target,
+                "graphic_src": resolve_graphic_src(graphic_target, mei_path),
+                "image_width": parse_int_attr(
+                    graphic, "width", context=f"graphic on surface {surface_id}"
+                ),
+                "image_height": parse_int_attr(
+                    graphic, "height", context=f"graphic on surface {surface_id}"
+                ),
+                "zones": surface_zones,
+            }
+        )
+
+    if not surfaces:
         return unavailable(
-            f"No measure zones found in first facsimile surface for {display_path(mei_path, repo_root=repo_root)}"
+            f"No facsimile surface with measure zones found in "
+            f"{display_path(mei_path, repo_root=repo_root)}"
         )
 
     measures = []
@@ -224,6 +319,8 @@ def read_facsimile_model(
             "facs": facs,
             "zone_id": zone_id,
             "zone": zone,
+            "surface_id": zone["surface_id"] if zone else None,
+            "surface_index": zone["surface_index"] if zone else None,
             "status": status,
         }
         measures.append(row)
@@ -239,19 +336,26 @@ def read_facsimile_model(
         raise RuntimeError(f"Found {len(unresolved)} unresolved measure @facs link(s): {examples}")
 
     linked = [row for row in measures if row["status"] == "linked"]
+    first_surface = surfaces[0]
     return {
         "mei_path": mei_path,
         "viewer_mode": "facsimile",
         "has_facsimile": True,
         "facsimile_status": None,
-        "graphic_target": graphic_target,
-        "graphic_src": resolve_graphic_src(graphic_target, mei_path),
-        "image_width": image_width,
-        "image_height": image_height,
+        # Keep the first-surface fields for callers written against the
+        # original single-surface model.
+        "graphic_target": first_surface["graphic_target"],
+        "graphic_src": first_surface["graphic_src"],
+        "image_width": first_surface["image_width"],
+        "image_height": first_surface["image_height"],
+        "surfaces": surfaces,
         "zones": zones,
         "measures": measures,
         "linked": linked,
         "missing_facs": missing_facs,
+        "other_surface_links": [
+            row for row in linked if (row["surface_index"] or 0) > 0
+        ],
     }
 
 
@@ -292,8 +396,7 @@ def format_facsimile_summary(model: dict, *, repo_root: Path | None = None) -> s
     return (
         f"MEI:             {display_path(mei_path, repo_root=repo_root)}\n"
         f"Viewer mode:     score + facsimile\n"
-        f"Graphic target:  {model['graphic_target']}\n"
-        f"Image size:      {model['image_width']} x {model['image_height']}\n"
+        f"Surfaces:        {len(model.get('surfaces', []))}\n"
         f"Measures:        {len(model['measures'])}\n"
         f"Linked zones:    {len(model['linked'])}\n"
         f"Missing @facs:   {len(model['missing_facs'])}"
@@ -319,11 +422,17 @@ def build_facsimile_viewer(
     viewer_max_height: int = 820,
     facsimile_max_width: int = 600,
     zone_opacity: float = 0.18,
+    initial_score_zoom_percent: int | float = 100,
+    initial_facsimile_zoom_percent: int | float = 100,
+    zoom_step_percent: int | float = 25,
+    min_zoom_percent: int | float = 50,
+    max_zoom_percent: int | float = 300,
     show_diagnostic_table: bool = True,
+    show_verovio_warnings: bool = False,
     allow_missing_facsimile: bool = True,
 ) -> dict:
     """Render linked facsimiles or fall back to a score-only MEI viewer."""
-    resolved_path = resolve_repo_path(mei_path, repo_root=repo_root)
+    resolved_path = resolve_mei_source(mei_path, repo_root=repo_root)
     model = read_facsimile_model(
         resolved_path,
         repo_root=repo_root,
@@ -350,6 +459,7 @@ def build_facsimile_viewer(
             initial_page=initial_page,
             options=verovio_options,
             repo_root=repo_root,
+            show_verovio_warnings=show_verovio_warnings,
         )
         viewer_cache.score_hash = current_score_hash
         viewer_cache.options_hash = current_options_hash
@@ -366,6 +476,11 @@ def build_facsimile_viewer(
         viewer_max_height=viewer_max_height,
         facsimile_max_width=facsimile_max_width,
         zone_opacity=zone_opacity,
+        initial_score_zoom_percent=initial_score_zoom_percent,
+        initial_facsimile_zoom_percent=initial_facsimile_zoom_percent,
+        zoom_step_percent=zoom_step_percent,
+        min_zoom_percent=min_zoom_percent,
+        max_zoom_percent=max_zoom_percent,
         show_diagnostic_table=show_diagnostic_table,
     )
     return {
@@ -412,24 +527,35 @@ def render_verovio_pages(
     initial_page: int,
     options: dict,
     repo_root: Path | None = None,
+    show_verovio_warnings: bool = False,
 ) -> dict:
-    """Render all Verovio pages and return SVG strings plus page metadata."""
-    mei_path = resolve_repo_path(mei_path, repo_root=repo_root)
-    toolkit = verovio.toolkit()
-    toolkit.setOptions(options)
-    if not toolkit.loadData(mei_path.read_text(encoding="utf-8")):
-        raise RuntimeError(f"Verovio could not load {display_path(mei_path, repo_root=repo_root)}")
+    """Render all Verovio pages and return SVG strings plus page metadata.
 
-    page_count = toolkit.getPageCount()
-    if initial_page < 1 or initial_page > page_count:
-        raise ValueError(f"initial_page={initial_page} is outside the rendered page range 1..{page_count}")
+    Verovio layout messages such as ``Justification is highly compressed`` are
+    suppressed unless ``show_verovio_warnings`` is True.
+    """
+    mei_path = resolve_mei_source(mei_path, repo_root=repo_root)
+    mei_text = mei_path.read_text(encoding="utf-8")
+    with suppress_native_output(enabled=not show_verovio_warnings):
+        toolkit = verovio.toolkit()
+        toolkit.setOptions(options)
+        if not toolkit.loadData(mei_text):
+            raise RuntimeError(
+                f"Verovio could not load {display_path(mei_path, repo_root=repo_root)}"
+            )
 
-    pages = []
-    for page_number in range(1, page_count + 1):
-        svg = toolkit.renderToSVG(page_number)
-        if not svg.strip():
-            raise RuntimeError(f"Verovio returned an empty SVG for page {page_number}")
-        pages.append({"number": page_number, "svg": svg})
+        page_count = toolkit.getPageCount()
+        if initial_page < 1 or initial_page > page_count:
+            raise ValueError(
+                f"initial_page={initial_page} is outside the rendered page range 1..{page_count}"
+            )
+
+        pages = []
+        for page_number in range(1, page_count + 1):
+            svg = toolkit.renderToSVG(page_number)
+            if not svg.strip():
+                raise RuntimeError(f"Verovio returned an empty SVG for page {page_number}")
+            pages.append({"number": page_number, "svg": svg})
 
     return {
         "page_count": page_count,
@@ -452,6 +578,7 @@ def make_diagnostic_table(model: dict, *, show: bool = True) -> str:
             f"<td>{escape(row['measure_id'])}</td>"
             f"<td>{escape(row['facs'])}</td>"
             f"<td>{escape(row['zone_id'])}</td>"
+            f"<td>{escape(row.get('surface_id') or '')}</td>"
             f"<td>{zone.get('ulx', '')}</td>"
             f"<td>{zone.get('uly', '')}</td>"
             f"<td>{zone.get('lrx', '')}</td>"
@@ -472,7 +599,7 @@ def make_diagnostic_table(model: dict, *, show: bool = True) -> str:
         <thead>
           <tr>
             <th>n</th><th>measure id</th><th>@facs</th><th>zone id</th>
-            <th>ulx</th><th>uly</th><th>lrx</th><th>lry</th><th>status</th>
+            <th>surface</th><th>ulx</th><th>uly</th><th>lrx</th><th>lry</th><th>status</th>
           </tr>
         </thead>
         <tbody>{''.join(rows)}</tbody>
@@ -491,11 +618,46 @@ def make_viewer_html(
     viewer_max_height: int = 820,
     facsimile_max_width: int = 600,
     zone_opacity: float = 0.18,
+    initial_score_zoom_percent: int | float = 100,
+    initial_facsimile_zoom_percent: int | float = 100,
+    zoom_step_percent: int | float = 25,
+    min_zoom_percent: int | float = 50,
+    max_zoom_percent: int | float = 300,
     show_diagnostic_table: bool = True,
 ) -> str:
+    zoom_values = {
+        "initial_score_zoom_percent": initial_score_zoom_percent,
+        "initial_facsimile_zoom_percent": initial_facsimile_zoom_percent,
+        "zoom_step_percent": zoom_step_percent,
+        "min_zoom_percent": min_zoom_percent,
+        "max_zoom_percent": max_zoom_percent,
+    }
+    for name, value in zoom_values.items():
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise TypeError(f"{name} must be a number")
+        if not math.isfinite(value):
+            raise ValueError(f"{name} must be finite")
+    if min_zoom_percent <= 0:
+        raise ValueError("min_zoom_percent must be greater than zero")
+    if max_zoom_percent < min_zoom_percent:
+        raise ValueError(
+            "max_zoom_percent must be greater than or equal to min_zoom_percent"
+        )
+    if zoom_step_percent <= 0:
+        raise ValueError("zoom_step_percent must be greater than zero")
+    for name, value in (
+        ("initial_score_zoom_percent", initial_score_zoom_percent),
+        ("initial_facsimile_zoom_percent", initial_facsimile_zoom_percent),
+    ):
+        if not min_zoom_percent <= value <= max_zoom_percent:
+            raise ValueError(
+                f"{name} must be between min_zoom_percent and max_zoom_percent"
+            )
+
     viewer_id = viewer_id or f"mei-viewer-{uuid.uuid4().hex}"
     has_facsimile = model.get("has_facsimile", True)
-    overlays = []
+    surfaces = model.get("surfaces", [])
+    surface_overlays = {surface["index"]: [] for surface in surfaces}
     pairs = []
     measure_page = {}
     score_page_html = []
@@ -522,7 +684,8 @@ def make_viewer_html(
         width = zone["lrx"] - zone["ulx"]
         height = zone["lry"] - zone["uly"]
         page_index = measure_page.get(measure_id)
-        overlays.append(
+        surface_index = row["surface_index"]
+        surface_overlays[surface_index].append(
             f'<rect class="zone" data-measure-id="{escape(measure_id)}" '
             f'data-zone-id="{escape(zone["id"])}" data-measure-n="{escape(row["measure_n"])}" '
             f'x="{zone["ulx"]}" y="{zone["uly"]}" width="{width}" height="{height}" />'
@@ -532,32 +695,80 @@ def make_viewer_html(
                 "measureId": measure_id,
                 "measureN": row["measure_n"],
                 "zoneId": zone["id"],
+                "surfaceIndex": surface_index,
                 "pageIndex": page_index,
                 "scorePage": score_pages[page_index]["number"] if page_index is not None else None,
             }
         )
 
+    score_page_surface_indices = []
+    for page_index in range(len(score_pages)):
+        counts = {}
+        for item in pairs:
+            if item["pageIndex"] != page_index:
+                continue
+            surface_index = item["surfaceIndex"]
+            counts[surface_index] = counts.get(surface_index, 0) + 1
+        score_page_surface_indices.append(
+            max(counts, key=counts.get) if counts else None
+        )
+
+    initial_surface_index = (
+        score_page_surface_indices[initial_page_index]
+        if score_page_surface_indices[initial_page_index] is not None
+        else 0
+    )
     pairs_json = json.dumps(pairs)
     score_pages_json = json.dumps([page["number"] for page in score_pages])
+    score_page_surfaces_json = json.dumps(score_page_surface_indices)
     table_html = make_diagnostic_table(model, show=show_diagnostic_table)
     disabled_prev = "disabled" if len(score_pages) <= 1 else ""
     disabled_next = "disabled" if len(score_pages) <= 1 else ""
     if has_facsimile:
-        graphic_src = escape(model["graphic_src"], quote=True)
-        graphic_target = escape(model["graphic_target"])
+        facsimile_pages = []
+        for surface in surfaces:
+            surface_index = surface["index"]
+            surface_class = (
+                "facsimile-page is-active"
+                if surface_index == initial_surface_index
+                else "facsimile-page"
+            )
+            graphic_src = escape(surface["graphic_src"], quote=True)
+            graphic_target = escape(surface["graphic_target"], quote=True)
+            source_attribute = (
+                f'src="{graphic_src}"'
+                if surface_index == initial_surface_index
+                else f'data-src="{graphic_src}"'
+            )
+            facsimile_pages.append(
+                f'<div class="{surface_class}" data-surface-index="{surface_index}" '
+                f'data-surface-n="{escape(surface["n"], quote=True)}">'
+                '<div class="facsimile-wrap">'
+                f'<img {source_attribute} alt="Facsimile image from MEI graphic target" '
+                f'title="{graphic_target}" width="{surface["image_width"]}" '
+                f'height="{surface["image_height"]}">'
+                f'<svg class="zone-layer" viewBox="0 0 {surface["image_width"]} '
+                f'{surface["image_height"]}" preserveAspectRatio="none" '
+                'aria-label="Measure zone overlay">'
+                f'{"".join(surface_overlays[surface_index])}'
+                "</svg></div></div>"
+            )
         facsimile_panel = f"""
     <div class="viewer-pane facsimile-pane" aria-label="Facsimile with measure zones">
-      <div class="facsimile-wrap">
-        <img src="{graphic_src}" alt="Facsimile image from MEI graphic target" title="{graphic_target}">
-        <svg class="zone-layer" viewBox="0 0 {model['image_width']} {model['image_height']}" preserveAspectRatio="none" aria-label="Measure zone overlay">
-          {''.join(overlays)}
-        </svg>
-      </div>
+      {''.join(facsimile_pages)}
     </div>"""
         viewer_status = "Hover or click a rendered measure or facsimile zone."
         grid_class = "viewer-grid"
+        facsimile_zoom_controls = f"""
+    <div class="zoom-controls" aria-label="Facsimile zoom controls">
+      <span class="zoom-label">Facsimile zoom</span>
+      <button type="button" class="facsimile-zoom-out" title="Zoom facsimile out">−</button>
+      <button type="button" class="facsimile-zoom-reset" title="Reset facsimile zoom">{initial_facsimile_zoom_percent:g}%</button>
+      <button type="button" class="facsimile-zoom-in" title="Zoom facsimile in">+</button>
+    </div>"""
     else:
         facsimile_panel = ""
+        facsimile_zoom_controls = ""
         viewer_status = (
             "Score-only mode — this MEI has no usable facsimile records. "
             "Add them and use Check facsimile to enable the linked view."
@@ -570,6 +781,8 @@ def make_viewer_html(
     --active: #f59e0b;
     --linked: #2563eb;
     --panel-border: #d7dce2;
+    --score-zoom: {initial_score_zoom_percent:g}%;
+    --facsimile-zoom: {initial_facsimile_zoom_percent:g}%;
     color: #1f2933;
     font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   }}
@@ -584,6 +797,7 @@ def make_viewer_html(
   #{viewer_id} .score-toolbar {{
     display: flex;
     align-items: center;
+    flex-wrap: wrap;
     gap: 8px;
     margin: 0 0 10px;
   }}
@@ -604,6 +818,26 @@ def make_viewer_html(
     font-size: 13px;
     color: #4b5563;
   }}
+  #{viewer_id} .toolbar-spacer {{
+    flex: 1 1 24px;
+  }}
+  #{viewer_id} .zoom-controls {{
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }}
+  #{viewer_id} .zoom-label {{
+    margin-right: 2px;
+    color: #4b5563;
+    font-size: 12px;
+  }}
+  #{viewer_id} .zoom-controls button {{
+    min-width: 31px;
+    padding-inline: 7px;
+  }}
+  #{viewer_id} .zoom-controls button[class$="-reset"] {{
+    min-width: 52px;
+  }}
   #{viewer_id} .viewer-grid {{
     display: grid;
     grid-template-columns: minmax(360px, 1fr) minmax(320px, {facsimile_max_width}px);
@@ -617,6 +851,7 @@ def make_viewer_html(
     min-width: 0;
     max-height: {viewer_max_height}px;
     overflow: auto;
+    scrollbar-gutter: stable;
     border: 1px solid var(--panel-border);
     border-radius: 6px;
     background: white;
@@ -631,12 +866,24 @@ def make_viewer_html(
     display: block;
   }}
   #{viewer_id} .score-pane svg {{
-    max-width: 100%;
+    width: var(--score-zoom);
+    max-width: none;
     height: auto;
   }}
   #{viewer_id} .facsimile-wrap {{
     position: relative;
+    width: var(--facsimile-zoom);
     line-height: 0;
+  }}
+  #{viewer_id} .facsimile-page {{
+    display: none;
+  }}
+  #{viewer_id} .facsimile-page.is-active {{
+    display: block;
+  }}
+  #{viewer_id} .facsimile-page-label {{
+    color: #4b5563;
+    font-size: 13px;
   }}
   #{viewer_id} .facsimile-wrap img {{
     display: block;
@@ -700,6 +947,15 @@ def make_viewer_html(
     <button type="button" class="score-prev" {disabled_prev}>Previous score page</button>
     <button type="button" class="score-next" {disabled_next}>Next score page</button>
     <span class="score-page-label"></span>
+    <span class="facsimile-page-label" aria-live="polite"></span>
+    <span class="toolbar-spacer"></span>
+    <div class="zoom-controls" aria-label="Score zoom controls">
+      <span class="zoom-label">Score zoom</span>
+      <button type="button" class="score-zoom-out" title="Zoom score out">−</button>
+      <button type="button" class="score-zoom-reset" title="Reset score zoom">{initial_score_zoom_percent:g}%</button>
+      <button type="button" class="score-zoom-in" title="Zoom score in">+</button>
+    </div>
+    {facsimile_zoom_controls}
   </div>
   <div class="{grid_class}">
     <div class="viewer-pane score-pane" aria-label="Rendered MEI score">
@@ -711,28 +967,100 @@ def make_viewer_html(
 </div>
 <script>
 (() => {{
-  const root = document.getElementById({json.dumps(viewer_id)});
+  const viewerId = {json.dumps(viewer_id)};
+  let initializationAttempts = 0;
+
+  function initializeViewer() {{
+    const root = document.getElementById(viewerId);
+    if (!root) {{
+      initializationAttempts += 1;
+      if (initializationAttempts < 50) window.setTimeout(initializeViewer, 20);
+      return;
+    }}
+    if (root.dataset.camatViewerInitialized === 'true') return;
+    root.dataset.camatViewerInitialized = 'true';
+
   const pairs = {pairs_json};
   const scorePages = {score_pages_json};
+  const scorePageSurfaces = {score_page_surfaces_json};
   const totalScorePages = {total_score_pages};
+  const totalSurfaces = {len(surfaces)};
+  const initialScoreZoom = {initial_score_zoom_percent};
+  const initialFacsimileZoom = {initial_facsimile_zoom_percent};
+  const zoomStep = {zoom_step_percent};
+  const minZoom = {min_zoom_percent};
+  const maxZoom = {max_zoom_percent};
   const status = root.querySelector('.viewer-status');
   const pageLabel = root.querySelector('.score-page-label');
+  const surfaceLabel = root.querySelector('.facsimile-page-label');
   const prevButton = root.querySelector('.score-prev');
   const nextButton = root.querySelector('.score-next');
+  const scoreZoomOut = root.querySelector('.score-zoom-out');
+  const scoreZoomReset = root.querySelector('.score-zoom-reset');
+  const scoreZoomIn = root.querySelector('.score-zoom-in');
+  const facsimileZoomOut = root.querySelector('.facsimile-zoom-out');
+  const facsimileZoomReset = root.querySelector('.facsimile-zoom-reset');
+  const facsimileZoomIn = root.querySelector('.facsimile-zoom-in');
   const byMeasure = new Map(pairs.map((item) => [item.measureId, item]));
   const byZone = new Map(pairs.map((item) => [item.zoneId, item]));
   const initialPageIndex = {initial_page_index};
   let activePageIndex = initialPageIndex;
+  let activeSurfaceIndex = {initial_surface_index};
+  let scoreZoom = initialScoreZoom;
+  let facsimileZoom = initialFacsimileZoom;
+
+  function clampZoom(value) {{
+    return Math.min(maxZoom, Math.max(minZoom, value));
+  }}
+
+  function applyScoreZoom(value) {{
+    scoreZoom = clampZoom(value);
+    root.style.setProperty('--score-zoom', `${{scoreZoom}}%`);
+    scoreZoomReset.textContent = `${{Math.round(scoreZoom)}}%`;
+    scoreZoomOut.disabled = scoreZoom <= minZoom;
+    scoreZoomIn.disabled = scoreZoom >= maxZoom;
+  }}
+
+  function applyFacsimileZoom(value) {{
+    if (!facsimileZoomReset) return;
+    facsimileZoom = clampZoom(value);
+    root.style.setProperty('--facsimile-zoom', `${{facsimileZoom}}%`);
+    facsimileZoomReset.textContent = `${{Math.round(facsimileZoom)}}%`;
+    facsimileZoomOut.disabled = facsimileZoom <= minZoom;
+    facsimileZoomIn.disabled = facsimileZoom >= maxZoom;
+  }}
+
+  function showFacsimileSurface(index) {{
+    if (index === null || index === undefined || index < 0 || index >= totalSurfaces) return;
+    const nextSurface = root.querySelector(`.facsimile-page[data-surface-index="${{index}}"]`);
+    if (!nextSurface) return;
+    if (!nextSurface.classList.contains('is-active')) {{
+      root.querySelectorAll('.facsimile-page').forEach((surface) => {{
+        surface.classList.toggle('is-active', surface === nextSurface);
+      }});
+    }}
+    activeSurfaceIndex = index;
+    const image = nextSurface.querySelector('img[data-src]');
+    if (image && !image.getAttribute('src')) image.setAttribute('src', image.dataset.src);
+    if (surfaceLabel) {{
+      const surfaceN = nextSurface.dataset.surfaceN || String(activeSurfaceIndex + 1);
+      surfaceLabel.textContent = `Facsimile surface ${{surfaceN}} (${{activeSurfaceIndex + 1}} of ${{totalSurfaces}})`;
+    }}
+  }}
 
   function showScorePage(index) {{
     if (index < 0 || index >= scorePages.length) return;
+    const pageChanged = index !== activePageIndex || !root.querySelector('.score-page.is-active');
     activePageIndex = index;
-    root.querySelectorAll('.score-page').forEach((page, pageIndex) => {{
-      page.classList.toggle('is-active', pageIndex === activePageIndex);
-    }});
+    if (pageChanged) {{
+      root.querySelectorAll('.score-page').forEach((page, pageIndex) => {{
+        page.classList.toggle('is-active', pageIndex === activePageIndex);
+      }});
+    }}
     prevButton.disabled = activePageIndex === 0;
     nextButton.disabled = activePageIndex === scorePages.length - 1;
     pageLabel.textContent = `Rendered score page ${{scorePages[activePageIndex]}} of ${{totalScorePages}}`;
+    showFacsimileSurface(scorePageSurfaces[activePageIndex]);
   }}
 
   function clearActive() {{
@@ -742,6 +1070,7 @@ def make_viewer_html(
   function activate(item, scrollScore = false) {{
     if (!item) return;
     if (item.pageIndex !== null && item.pageIndex !== undefined) showScorePage(item.pageIndex);
+    showFacsimileSurface(item.surfaceIndex);
     clearActive();
     const activePage = root.querySelector('.score-page.is-active');
     const measure = activePage ? activePage.querySelector(`#${{CSS.escape(item.measureId)}}`) : null;
@@ -757,6 +1086,14 @@ def make_viewer_html(
 
   prevButton.addEventListener('click', () => showScorePage(activePageIndex - 1));
   nextButton.addEventListener('click', () => showScorePage(activePageIndex + 1));
+  scoreZoomOut.addEventListener('click', () => applyScoreZoom(scoreZoom - zoomStep));
+  scoreZoomReset.addEventListener('click', () => applyScoreZoom(initialScoreZoom));
+  scoreZoomIn.addEventListener('click', () => applyScoreZoom(scoreZoom + zoomStep));
+  if (facsimileZoomReset) {{
+    facsimileZoomOut.addEventListener('click', () => applyFacsimileZoom(facsimileZoom - zoomStep));
+    facsimileZoomReset.addEventListener('click', () => applyFacsimileZoom(initialFacsimileZoom));
+    facsimileZoomIn.addEventListener('click', () => applyFacsimileZoom(facsimileZoom + zoomStep));
+  }}
 
   root.querySelectorAll('.score-pane .measure[id]').forEach((measure) => {{
     const item = byMeasure.get(measure.id);
@@ -772,8 +1109,17 @@ def make_viewer_html(
     zone.addEventListener('click', () => activate(item, true));
   }});
 
+  applyScoreZoom(initialScoreZoom);
+  applyFacsimileZoom(initialFacsimileZoom);
   showScorePage(initialPageIndex);
-  if (pairs.length) activate(pairs[0]);
+  const initialItem = pairs.find((item) => item.pageIndex === initialPageIndex) || pairs[0];
+  if (initialItem) activate(initialItem);
+  }}
+
+  // Notebook frontends can evaluate an HTML output's script before its root
+  // element has been attached to the live DOM. Defer and retry initialization
+  // so page controls also work on the first render, not only after reload.
+  window.setTimeout(initializeViewer, 0);
 }})();
 </script>
 """
@@ -811,7 +1157,7 @@ class InteractiveFacsimileViewer:
         mei_path: str | Path,
         *,
         repo_root: Path | None = None,
-        viewer_id: str = "mei-viewer-live",
+        viewer_id: str | None = None,
         verovio_initial_page: int = 1,
         verovio_orientation: str = "portrait",
         verovio_portrait_size: tuple[int, int] = DEFAULT_PORTRAIT_SIZE,
@@ -822,7 +1168,13 @@ class InteractiveFacsimileViewer:
         viewer_max_height: int = 820,
         facsimile_max_width: int = 600,
         zone_opacity: float = 0.18,
+        initial_score_zoom_percent: int | float = 100,
+        initial_facsimile_zoom_percent: int | float = 100,
+        zoom_step_percent: int | float = 25,
+        min_zoom_percent: int | float = 50,
+        max_zoom_percent: int | float = 300,
         show_diagnostic_table: bool = True,
+        show_verovio_warnings: bool = False,
         allow_missing_facsimile: bool = True,
         auto_watch_mei: bool = True,
         auto_watch_mode: str = "events",
@@ -831,9 +1183,9 @@ class InteractiveFacsimileViewer:
         watch_debounce_sec: float = 0.4,
         note_probe_id: str | None = None,
     ) -> None:
-        self.mei_path = mei_path
-        self.repo_root = (repo_root or Path.cwd()).resolve()
-        self.viewer_id = viewer_id
+        self.repo_root = (repo_root or find_camat_root()).resolve()
+        self.mei_path = resolve_mei_source(mei_path, repo_root=self.repo_root)
+        self.viewer_id = viewer_id or f"mei-viewer-live-{uuid.uuid4().hex}"
         self.verovio_initial_page = verovio_initial_page
         self.verovio_orientation = verovio_orientation
         self.verovio_portrait_size = verovio_portrait_size
@@ -844,7 +1196,13 @@ class InteractiveFacsimileViewer:
         self.viewer_max_height = viewer_max_height
         self.facsimile_max_width = facsimile_max_width
         self.zone_opacity = zone_opacity
+        self.initial_score_zoom_percent = initial_score_zoom_percent
+        self.initial_facsimile_zoom_percent = initial_facsimile_zoom_percent
+        self.zoom_step_percent = zoom_step_percent
+        self.min_zoom_percent = min_zoom_percent
+        self.max_zoom_percent = max_zoom_percent
         self.show_diagnostic_table = show_diagnostic_table
+        self.show_verovio_warnings = show_verovio_warnings
         self.allow_missing_facsimile = allow_missing_facsimile
         self.auto_watch_mei = auto_watch_mei
         self.auto_watch_mode = auto_watch_mode
@@ -924,7 +1282,13 @@ class InteractiveFacsimileViewer:
             viewer_max_height=self.viewer_max_height,
             facsimile_max_width=self.facsimile_max_width,
             zone_opacity=self.zone_opacity,
+            initial_score_zoom_percent=self.initial_score_zoom_percent,
+            initial_facsimile_zoom_percent=self.initial_facsimile_zoom_percent,
+            zoom_step_percent=self.zoom_step_percent,
+            min_zoom_percent=self.min_zoom_percent,
+            max_zoom_percent=self.max_zoom_percent,
             show_diagnostic_table=self.show_diagnostic_table,
+            show_verovio_warnings=self.show_verovio_warnings,
             allow_missing_facsimile=self.allow_missing_facsimile,
         )
         self.cache = result["cache"]
@@ -1239,5 +1603,5 @@ def launch_interactive_facsimile_viewer(
     mei_path: str | Path,
     **kwargs: Any,
 ) -> InteractiveFacsimileViewer:
-    """Convenience wrapper: construct and display an InteractiveFacsimileViewer."""
+    """Construct and display a Jupyter viewer for a local MEI path or HTTP(S) link."""
     return InteractiveFacsimileViewer(mei_path, **kwargs).display()

@@ -23,6 +23,7 @@ __all__ = [
     "get_file_path",
     "get_download_cache_dir",
     "is_cached_download",
+    "to_direct_download_url",
     "extract_voice_data",
     "filter_and_adjust_durations",
     "get_measure_offsets",
@@ -67,6 +68,19 @@ def _get_requests_module():
         warnings.simplefilter("ignore")
         import requests  # type: ignore
     return requests
+
+
+def to_direct_download_url(source: str) -> str:
+    """Return a URL that downloads the file rather than a hosting web page.
+
+    GitHub ``/blob/`` pages become ``raw.githubusercontent.com`` links. Other
+    HTTP(S) URLs are returned unchanged.
+    """
+    prefix = "https://github.com/"
+    if source.startswith(prefix) and "/blob/" in source:
+        repository_path = source[len(prefix):].replace("/blob/", "/", 1)
+        return f"https://raw.githubusercontent.com/{repository_path}"
+    return source
 
 
 def get_download_cache_dir(cache_dir: Optional[str] = None) -> str:
@@ -149,6 +163,7 @@ def get_file_path(
         If the local file does not exist.
     """
     if file_source.startswith(("http://", "https://")):
+        file_source = to_direct_download_url(file_source)
         if use_cache:
             resolved_dir = get_download_cache_dir(cache_dir)
             cached_path = os.path.join(resolved_dir, _cached_download_filename(file_source))

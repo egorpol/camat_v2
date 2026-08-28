@@ -54,6 +54,9 @@ def test_wheel_is_installed_and_public_api_is_complete() -> None:
     packaged_example = files("camat").joinpath("examples", "duration_semantics.mei")
     assert packaged_example.is_file()
     assert packaged_example.read_bytes() == DURATION_FIXTURE.read_bytes()
+    packaged_schema = files("camat").joinpath("schemas", "mei-CMN-5.1.rng")
+    assert packaged_schema.is_file()
+    assert packaged_schema.read_bytes().startswith(b'<?xml version="1.0"')
 
 
 def test_parser_registry_and_default_verovio_mei_parser() -> None:

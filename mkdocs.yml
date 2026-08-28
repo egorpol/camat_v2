@@ -39,8 +39,11 @@ nav:
       - Home: index.md
       - What CAMAT is: overview.md
       - Notebook roadmap: notebooks.md
+      - Known limitations: known-limitations.md
   - Workflows:
-      - 1. Create MEI editions: guides/edition-building.md
+      - 1. Handling MEI files:
+          - Workflow overview: guides/edition-building.md
+          - Introduction to MEI and XML: guides/mei-introduction.md
       - 2. Convert to MEI:
           - Choose a conversion route: guides/formats.md
           - Batch conversion: guides/batch-conversion.md
@@ -57,6 +60,8 @@ nav:
           - Analysis utils: api/analysis_utils.md
           - Binary matrix designer: api/binary_matrix_designer.md
           - Conversion: api/conversion.md
+          - Edition and IIIF pipeline: api/edition_pipeline.md
+          - MEI consistency and cleanup: api/mei_consistency.md
           - MEI facsimile viewer: api/facsimile_viewer.md
           - Mensural utils: api/mensural_utils.md
           - MIDI timing: api/midi_timing.md

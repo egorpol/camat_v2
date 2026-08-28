@@ -1,0 +1,62 @@
+name: Bug report
+description: Report a reproducible CAMAT defect or incorrect musical result.
+title: "[Bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a problem. Please reduce musical-input issues to
+        the smallest shareable file and identify the first incorrect measure.
+  - type: dropdown
+    id: workflow
+    attributes:
+      label: Workflow
+      options:
+        - MEI edition / facsimile viewer
+        - Conversion to MEI
+        - MEI parsing / representation
+        - Analysis / visualization
+        - Installation / release
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: CAMAT and Python versions
+      placeholder: "CAMAT 0.2.0; Python 3.13"
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: Include the command or notebook cell, input link/path, and measure or xml:id when relevant.
+      placeholder: |
+        1. Run ...
+        2. Open measure ...
+        3. Observe ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected result
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual result and diagnostics
+      description: Add tracebacks, conversion-report fields, screenshots, or a short MEI excerpt as appropriate.
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Submission checks
+      options:
+        - label: I checked the known-limitations page and searched existing issues.
+          required: true
+        - label: Shared files contain no private, sensitive, or restricted material.
+          required: true

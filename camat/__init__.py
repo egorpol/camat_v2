@@ -1,4 +1,4 @@
-__version__ = "0.2.0"
+__version__ = "0.2.1b1"
 
 from .pattern_search import run_pattern_search
 from .parser_registry import (
@@ -104,9 +104,67 @@ from .facsimile_viewer import (
     InteractiveFacsimileViewer,
     build_facsimile_viewer,
     build_verovio_options,
+    find_camat_root,
     launch_interactive_facsimile_viewer,
     read_facsimile_model,
     render_verovio_pages,
+    resolve_mei_source,
+)
+from .check_mei_consistency import Finding, MeiChecker, check_mei_files
+from .convert_harm_startid_to_tstamp import (
+    ConversionResult as HarmConversionResult,
+    HarmConversion,
+    convert_file as convert_harm_startid_to_tstamp,
+    normalize_figured_bass_accidentals,
+)
+from .link_pb_to_surface import (
+    PbSurfaceResult,
+    PbSurfaceRow,
+    link_file as link_pb_to_surface,
+)
+from .mei_consistency_workflow import (
+    MEI_CMN_51_SCHEMA,
+    VEROVIO_REPORT_COLUMNS,
+    CleanupResult,
+    SchemaValidationResult,
+    VerovioLogResult,
+    apply_safe_cleanup,
+    load_report,
+    normalize_single_layer_number_copies,
+    report_summary,
+    resolve_mei_inputs,
+    run_checker,
+    run_relaxng_validation,
+    run_verovio_warning_check,
+    source_snippet,
+)
+from .facsimile_downloader import download_images as download_facsimile_images
+from .integrate_measure_annotations import (
+    get_body_measures,
+    get_measure_alignment_report,
+    integrate_annotation_file,
+    parse_mei,
+    validate_measure_alignment,
+)
+from .page_filter import (
+    filter_mei_files,
+    page_in_ranges,
+    page_number_for_path,
+    parse_page_ranges,
+)
+from .upload_and_integrate_measure_annotations import (
+    DETECTOR_URL,
+    SkipFile as MeasureDetectionSkip,
+    build_annotation_tree,
+    process_mei_file as detect_and_integrate_mei,
+)
+from .validate_iiif_vs_local import (
+    IIIF_IMAGE_URL_TEMPLATE,
+    find_image_for_stem,
+    parse_graphic_from_output_mei,
+    read_image_size,
+    sha256_bytes,
+    sha256_file,
 )
 from .mensural_utils import (
     DEFAULT_MENSURAL_DURATION_MAP,
@@ -210,9 +268,55 @@ __all__ = [
     'InteractiveFacsimileViewer',
     'build_facsimile_viewer',
     'build_verovio_options',
+    'find_camat_root',
     'launch_interactive_facsimile_viewer',
     'read_facsimile_model',
     'render_verovio_pages',
+    'resolve_mei_source',
+    'Finding',
+    'MeiChecker',
+    'check_mei_files',
+    'HarmConversion',
+    'HarmConversionResult',
+    'convert_harm_startid_to_tstamp',
+    'normalize_figured_bass_accidentals',
+    'PbSurfaceResult',
+    'PbSurfaceRow',
+    'link_pb_to_surface',
+    'MEI_CMN_51_SCHEMA',
+    'VEROVIO_REPORT_COLUMNS',
+    'CleanupResult',
+    'SchemaValidationResult',
+    'VerovioLogResult',
+    'apply_safe_cleanup',
+    'load_report',
+    'normalize_single_layer_number_copies',
+    'report_summary',
+    'resolve_mei_inputs',
+    'run_checker',
+    'run_relaxng_validation',
+    'run_verovio_warning_check',
+    'source_snippet',
+    'download_facsimile_images',
+    'get_body_measures',
+    'get_measure_alignment_report',
+    'integrate_annotation_file',
+    'parse_mei',
+    'validate_measure_alignment',
+    'filter_mei_files',
+    'page_in_ranges',
+    'page_number_for_path',
+    'parse_page_ranges',
+    'DETECTOR_URL',
+    'MeasureDetectionSkip',
+    'build_annotation_tree',
+    'detect_and_integrate_mei',
+    'IIIF_IMAGE_URL_TEMPLATE',
+    'find_image_for_stem',
+    'parse_graphic_from_output_mei',
+    'read_image_size',
+    'sha256_bytes',
+    'sha256_file',
     'DEFAULT_MENSURAL_DURATION_MAP',
     'inject_default_meter_signature_in_mei_text',
     'inject_default_meter_signature_in_mei_file',

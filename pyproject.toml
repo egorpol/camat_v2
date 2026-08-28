@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "camat"
-version = "0.2.0"
+version = "0.2.1b1"
 description = "CAMAT: tools for symbolic music parsing, analysis, and rendering."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -31,6 +31,18 @@ dynamic = ["dependencies"]
 
 [project.scripts]
 camat-convert = "camat.conversion:main"
+camat-check-mei = "camat.check_mei_consistency:main"
+camat-convert-harm-startid = "camat.convert_harm_startid_to_tstamp:main"
+camat-link-pb-surface = "camat.link_pb_to_surface:main"
+camat-check-bsb-page-coverage = "camat.check_bsb_page_coverage:main"
+camat-corpus-cleanup = "camat.corpus_cleanup:main"
+camat-facsimile-download = "camat.facsimile_downloader:main"
+camat-fetch-bsb-metadata = "camat.fetch_bsb_metadata:main"
+camat-generate-volume-pages = "camat.generate_volume_pages:main"
+camat-integrate-annotation-file = "camat.integrate_measure_annotations:main"
+camat-integrate-annotations = "camat.upload_and_integrate_measure_annotations:main"
+camat-run-pipeline = "camat.run_pipeline:main"
+camat-validate-iiif = "camat.validate_iiif_vs_local:main"
 
 [project.urls]
 Homepage = "https://github.com/egorpol/camat_v2"
@@ -46,7 +58,7 @@ include-package-data = false
 include = ["camat*"]
 
 [tool.setuptools.package-data]
-camat = ["examples/*.mei"]
+camat = ["examples/*.mei", "schemas/*.rng"]
 
 [tool.setuptools.dynamic]
 dependencies = { file = ["requirements.txt"] }

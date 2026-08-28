@@ -33,7 +33,7 @@ pip install camat
 - Binary pitch/time matrices with optional source-row provenance.
 - Pattern search and similarity utilities.
 - Match overlay helpers.
-- A read-only local MEI viewer with a full-width score fallback, optional
+- A read-only MEI viewer for local files or URLs, with a full-width score fallback, optional
   measure-to-facsimile linking, and reload controls for active editing.
 - Verovio-based rendering utilities.
 
@@ -53,13 +53,20 @@ converter is available as `camat.convert_sources(...)` and the installed
 `camat-convert` command; `scripts/test_verovio_conversion.py` is retained only
 as a compatibility entry point.
 
-MIDI score conversion accepts explicit `MidiImportOptions`, including custom
-64th-note or tuplet grids and an optional diagnostic layout that expands
-inferred local voice slots to separate staves. Performance-oriented tick and
-tempo-map data is kept separate through `camat.read_midi_timing(...)`, without
-MusicXML/MEI quantization. Batch conversion supports safe streaming downloads,
-provenance sidecars, layered validation records, and exact
-`resume_policy="if-unchanged"` reuse.
+MIDI score conversion automatically detects common fine binary/triplet grids
+from exact raw note-on ticks before music21 groups chords. `MidiImportOptions`
+also accepts explicit grids for unusual tuplets and an optional diagnostic
+layout that expands inferred local voice slots to separate staves.
+Performance-oriented tick and tempo-map data is kept separate through
+`camat.read_midi_timing(...)`, without MusicXML/MEI quantization. Batch
+conversion supports safe streaming downloads, provenance sidecars, layered
+validation records, and exact `resume_policy="if-unchanged"` reuse.
+
+> [!WARNING]
+> MIDI → music21 → MusicXML → Verovio conversion is experimental. It is useful
+> for exploration and diagnostics, but it is known to produce incorrect rhythm,
+> chord grouping, voices, rests, ties, or notation in some scores. Do not treat
+> its MEI output as a reliable edition without measure-by-measure review.
 
 The `partitura` backend remains the ground-truth/reference implementation for
 parser parity tests. The `music21` backend remains available for compatibility
@@ -88,15 +95,23 @@ Public score corpora used in tests are listed in
 [Test sources](docs/guides/sources.md). The main MEI URL manifest is
 `test_corpus/mei_test_copora_links.txt`.
 
+Confirmed constraints are documented under
+[Known limitations](docs/known-limitations.md). Track actionable defects and
+feature requests in [GitHub Issues](https://github.com/egorpol/camat_v2/issues);
+the repository includes structured issue templates for reproducible reports.
+
 For the four workflows and the boundary between source MEI and derived
 representations, start with [What CAMAT is](docs/overview.md). The
 [notebook roadmap](docs/notebooks.md) maps each showcase notebook to its
 workflow.
 
-Workflow one now includes a reusable local inspection component: open
-`notebooks/mei_facsimile_viewer.ipynb` or call
-`camat.launch_interactive_facsimile_viewer(...)` for an MEI page containing
-facsimile measure zones. Corpus production itself remains in `camat_corpus`.
+Workflow one now includes reusable inspection and validation components. Open
+`notebooks/mei_facsimile_viewer.ipynb` for linked score/facsimile inspection,
+or use `mei_corrected_full_checks.ipynb` as the maintainer probe for schema,
+publication-profile, musical-consistency, page-link, and Verovio checks.
+`single_mei_iiif_integration.ipynb` and `run_pipeline_workflow.ipynb` wrap the
+packaged single-page and batch IIIF/measure-zone pipeline. Corpus data and run
+configuration remain in `camat_corpus`.
 
 ## Release Testing
 

@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1b1] - 2026-08-29
+
+### Added
+
+- Integrated Workflow 1 MEI consistency, cleanup, figured-bass anchor,
+  page-break/facsimile, RELAX NG, and Verovio checks into the installable
+  `camat` package. Added the packaged MEI 5.1 CMN schema, three CLI entry
+  points, and a read-only-by-default corrected-full-MEI maintainer notebook.
+- Migrated the remaining `camat_corpus` IIIF acquisition, measure-detection,
+  annotation-integration, page-coverage, validation, metadata, cleanup, and
+  batch-pipeline helpers into `camat`, together with opt-in single-file and
+  batch Workflow 1 maintainer notebooks.
+
+### Changed
+
+- MIDI score conversion now infers common finer binary and triplet grids from
+  exact raw note-on ticks before music21 chord grouping. Explicit
+  `quarter_length_divisors` still override inference, and conversion reports
+  include the evidence and effective grid. This preserves the 64th-note run in
+  Beethoven Op. 13/i, measure 9, instead of collapsing adjacent notes into
+  chords.
+- Documented the MIDI → music21 → MusicXML → Verovio route as experimental and
+  added a versioned known-limitations page plus GitHub bug/feature templates.
+- Simplified the facsimile notebook to one local-path-or-URL `MEI_SOURCE`, with
+  a public CAMAT corpus edition as its default. Source resolution (GitHub
+  `blob` pages, remote download, and checkout-relative paths) now lives in
+  `camat.facsimile_viewer.resolve_mei_source`, so the notebook no longer
+  defines helper functions. Verovio layout warnings such as
+  "Justification is highly compressed" are hidden unless
+  `SHOW_VEROVIO_WARNINGS` is True. Viewer instances now use unique DOM ids and defer
+  JavaScript initialization until notebook output is attached, so score-page
+  controls work on the initial render.
+- Added multi-surface facsimile navigation: changing the rendered Verovio page
+  now switches to the surface referenced by that page's measures, while direct
+  measure interaction selects the exact linked surface. Facsimile frames reserve
+  image dimensions and scrollbar space so selection does not resize the pane.
+- Added independent client-side score and facsimile zoom controls, configurable
+  initial percentages, step, and range, and documented Verovio's non-visual
+  handling of `@plist`- and `@tstamp`-anchored `<annot>` text.
+
 ## [0.2.0] - 2026-08-17
 
 ### Added

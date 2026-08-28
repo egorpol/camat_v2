@@ -28,11 +28,19 @@ Companion notebooks:
 Each Verovio import in the batch helper runs in a child process so a native
 crash cannot take down the notebook kernel.
 
-For MIDI, CAMAT quantizes through straight 32nd notes as well as triplet grids,
-then separates staggered overlaps into music21 voices and fills their gaps with
-visible rests before MusicXML export. This preserves short sequential notes and
-voice offsets through Verovio instead of collapsing them into chords or one MEI
-layer.
+For MIDI, CAMAT scans exact raw note-on ticks before music21 import and extends
+its baseline 32nd/triplet grid when common finer binary or triplet subdivisions
+occur. It then separates staggered overlaps into music21 voices and fills their
+gaps with visible rests before MusicXML export. This preserves short sequential
+notes and voice offsets through Verovio instead of collapsing them into chords
+or one MEI layer.
+
+!!! warning "Do not run MIDI conversion as an unattended production pipeline"
+
+    The MIDI → music21 → MusicXML → Verovio route is experimental and still
+    produces incorrect notation in known cases. Reports and successful parsing
+    prove technical completion, not musical correctness. Review the generated
+    MEI measure by measure.
 
 ## Direct URLs and source-list files
 
@@ -137,12 +145,13 @@ camat-convert \
   --resume
 ```
 
-A 64th-capable MIDI grid and stricter download limit:
+An explicit unusual MIDI grid and stricter download limit (the default grid is
+`auto`):
 
 ```bash
 camat-convert \
   --source path/to/scores.txt \
-  --midi-grid 16,12,8,6,4,3 \
+  --midi-grid 16,11,8,6,4,3 \
   --max-download-mb 50 \
   --resume
 ```

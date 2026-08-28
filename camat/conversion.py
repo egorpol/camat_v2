@@ -7,19 +7,22 @@ that music21 can read uses music21 -> MusicXML -> Verovio. Verovio therefore
 always performs the final MEI conversion.
 
 MIDI import uses a configurable score-oriented quantization grid whose default
-includes 32nd notes. Before MIDI is exported to MusicXML, staggered overlaps
-are separated into music21 voices with visible gap rests so their timing
-survives as MEI layers. Performance-oriented MIDI timing is exposed separately
-by :func:`camat.midi_timing.read_midi_timing`. Verovio runs in a subprocess so
-one malformed score cannot terminate a batch.
+detects common fine binary and triplet subdivisions from exact raw note-on
+ticks. Before MIDI is exported to MusicXML, staggered overlaps are separated
+into music21 voices with visible gap rests so their timing survives as MEI
+layers. Performance-oriented MIDI timing is exposed separately by
+:func:`camat.midi_timing.read_midi_timing`. Verovio runs in a subprocess so one
+malformed score cannot terminate a batch.
 """
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import copy
 from dataclasses import asdict, dataclass
 from datetime import datetime
+from fractions import Fraction
 import hashlib
 import json
 import mimetypes
@@ -48,15 +51,21 @@ DEFAULT_SOURCES: List[str] = [
 ]
 
 XML_ID_ATTR = "{http://www.w3.org/XML/1998/namespace}id"
-CONVERSION_REPORT_SCHEMA_VERSION = 1
+CONVERSION_REPORT_SCHEMA_VERSION = 2
 MUSESCORE_REQUIRED_MESSAGE = (
     "MSCZ input requires MuseScore Studio/CLI. Please install MuseScore or convert "
     "the file to MusicXML/MXL/MEI before using CAMAT."
 )
 MUSESCORE_EXTENSIONS = {".mscz", ".mscx", ".musescore", ".mscore", ".ms"}
-# music21 defaults to (4, 3), which cannot represent straight 32nd notes and
-# can collapse two adjacent ornaments into a single 16th-note chord.
+# Baseline score grids retained when automatic MIDI resolution detection does
+# not find shorter values. music21's default (4, 3) cannot represent straight
+# 32nd notes and can collapse two adjacent ornaments into one 16th-note chord.
 MIDI_QUARTER_LENGTH_DIVISORS = (8, 6, 4, 3)
+# Common finer binary, triplet, and mixed binary/triplet grids considered by
+# automatic detection. Unusual tuplets remain available through an explicit
+# ``quarter_length_divisors`` value.
+MIDI_AUTO_QUARTER_LENGTH_DIVISORS = (12, 16, 24, 32, 48, 64)
+MIDI_AUTO_MAX_QUARTER_LENGTH_DIVISOR = 64
 DEFAULT_VEROVIO_OPTIONS: Dict[str, Any] = {
     "removeIds": False,
     "xmlIdSeed": 0,
@@ -91,10 +100,17 @@ _TOOL_VERSION_CACHE: Dict[str, str] = {}
 class MidiImportOptions:
     """Control music21's score-oriented MIDI import and notation recovery.
 
-    ``quarter_length_divisors`` are subdivisions of one quarter note: ``8``
-    represents straight 32nd notes, ``16`` represents 64th notes, and ``11``
-    permits multiples of one eleventh of a quarter. They are candidates used
-    independently for each offset and duration, not a global meter inference.
+    By default, ``quarter_length_divisors=None`` inspects exact raw note-on
+    ticks and extends the baseline ``(8, 6, 4, 3)`` grid when common shorter
+    binary or triplet values occur. ``auto_max_quarter_length_divisor`` bounds
+    that search. Note-off ticks are deliberately excluded because articulation
+    often makes them slightly shorter than the intended notated duration.
+
+    Explicit ``quarter_length_divisors`` disable inference. The values are
+    subdivisions of one quarter note: ``8`` represents straight 32nd notes,
+    ``16`` represents 64th notes, and ``11`` permits multiples of one eleventh
+    of a quarter. They are candidates used independently for each offset and
+    duration, not a global meter inference.
 
     ``voice_layout="layers"`` retains reconstructed voices as layers on their
     source MIDI-track staff. ``"separate_staves"`` expands each local voice
@@ -103,33 +119,49 @@ class MidiImportOptions:
     """
 
     quantize: bool = True
-    quarter_length_divisors: Tuple[int, ...] = MIDI_QUARTER_LENGTH_DIVISORS
+    quarter_length_divisors: Optional[Tuple[int, ...]] = None
+    auto_max_quarter_length_divisor: int = MIDI_AUTO_MAX_QUARTER_LENGTH_DIVISOR
     reconstruct_voices: bool = True
     fill_gaps: bool = True
     voice_layout: str = "layers"
 
     def __post_init__(self) -> None:
-        divisors: List[int] = []
-        for raw_divisor in self.quarter_length_divisors:
-            if isinstance(raw_divisor, bool) or not isinstance(raw_divisor, int):
-                raise TypeError("MIDI quantization divisors must be positive integers.")
-            if raw_divisor <= 0:
-                raise ValueError("MIDI quantization divisors must be positive integers.")
-            if raw_divisor not in divisors:
-                divisors.append(raw_divisor)
-        if self.quantize and not divisors:
-            raise ValueError("At least one MIDI divisor is required when quantization is enabled.")
+        if (
+            isinstance(self.auto_max_quarter_length_divisor, bool)
+            or not isinstance(self.auto_max_quarter_length_divisor, int)
+        ):
+            raise TypeError("MIDI automatic-grid maximum must be a positive integer.")
+        if self.auto_max_quarter_length_divisor <= 0:
+            raise ValueError("MIDI automatic-grid maximum must be a positive integer.")
+
+        if self.quarter_length_divisors is not None:
+            divisors: List[int] = []
+            for raw_divisor in self.quarter_length_divisors:
+                if isinstance(raw_divisor, bool) or not isinstance(raw_divisor, int):
+                    raise TypeError("MIDI quantization divisors must be positive integers.")
+                if raw_divisor <= 0:
+                    raise ValueError("MIDI quantization divisors must be positive integers.")
+                if raw_divisor not in divisors:
+                    divisors.append(raw_divisor)
+            if self.quantize and not divisors:
+                raise ValueError("At least one MIDI divisor is required when quantization is enabled.")
+            object.__setattr__(self, "quarter_length_divisors", tuple(divisors))
+
         if self.voice_layout not in {"layers", "separate_staves"}:
             raise ValueError(
                 "voice_layout must be 'layers' or 'separate_staves'."
             )
-        object.__setattr__(self, "quarter_length_divisors", tuple(divisors))
 
     def to_dict(self) -> Dict[str, Any]:
         """Return a JSON-safe, deterministic representation."""
         return {
             "quantize": self.quantize,
-            "quarter_length_divisors": list(self.quarter_length_divisors),
+            "quarter_length_divisors": (
+                list(self.quarter_length_divisors)
+                if self.quarter_length_divisors is not None
+                else None
+            ),
+            "auto_max_quarter_length_divisor": self.auto_max_quarter_length_divisor,
             "reconstruct_voices": self.reconstruct_voices,
             "fill_gaps": self.fill_gaps,
             "voice_layout": self.voice_layout,
@@ -822,6 +854,97 @@ def _midi_voices_to_separate_staves(score: Any) -> Tuple[Any, Dict[str, Any]]:
     }
 
 
+def _infer_midi_quantization_divisors(
+    source_path: Path,
+    *,
+    max_divisor: int = MIDI_AUTO_MAX_QUARTER_LENGTH_DIVISOR,
+) -> Tuple[Tuple[int, ...], Dict[str, Any]]:
+    """Infer a conservative notation grid from exact raw MIDI note-on ticks.
+
+    Only common finer binary/triplet divisors are inferred. This prevents
+    one-tick performance jitter from turning into an impractically fine grid,
+    while preserving exact short score events before music21 performs its
+    chord grouping. Durations and note-off ticks are intentionally ignored.
+    """
+    from music21.midi import MidiFile, translate  # type: ignore
+
+    midi_file = MidiFile()
+    midi_file.open(source_path)
+    try:
+        midi_file.read()
+    finally:
+        midi_file.close()
+
+    base_divisors = tuple(MIDI_QUARTER_LENGTH_DIVISORS)
+    if midi_file.ticksPerSecond is not None:
+        return base_divisors, {
+            "mode": "auto",
+            "timing_basis": "smpte",
+            "max_divisor": max_divisor,
+            "detected_divisors": [],
+            "effective_divisors": list(base_divisors),
+            "reason": "SMPTE MIDI has no ticks-per-quarter notation grid.",
+        }
+
+    ticks_per_quarter = int(midi_file.ticksPerQuarterNote)
+    onset_denominators: Counter[int] = Counter()
+    interval_denominators: Counter[int] = Counter()
+    unique_onset_count = 0
+    for track in midi_file.tracks:
+        timed_events = translate.getTimeForEvents(track)
+        onset_ticks = sorted({
+            int(timed_note.onTime)
+            for timed_note in translate.getNotesFromEvents(timed_events)
+        })
+        unique_onset_count += len(onset_ticks)
+        onset_denominators.update(
+            Fraction(tick, ticks_per_quarter).denominator
+            for tick in onset_ticks
+        )
+        interval_denominators.update(
+            Fraction(right - left, ticks_per_quarter).denominator
+            for left, right in zip(onset_ticks, onset_ticks[1:])
+            if right > left
+        )
+
+    candidates = tuple(
+        divisor
+        for divisor in MIDI_AUTO_QUARTER_LENGTH_DIVISORS
+        if divisor <= max_divisor
+    )
+    detected = tuple(
+        divisor
+        for divisor in candidates
+        if onset_denominators[divisor] or interval_denominators[divisor]
+    )
+    effective = tuple(sorted({*base_divisors, *detected}, reverse=True))
+    evidence = [
+        {
+            "divisor": divisor,
+            "exact_onset_count": onset_denominators[divisor],
+            "exact_adjacent_interval_count": interval_denominators[divisor],
+        }
+        for divisor in detected
+    ]
+    return effective, {
+        "mode": "auto",
+        "timing_basis": "ppq",
+        "ticks_per_quarter_note": ticks_per_quarter,
+        "unique_onset_count": unique_onset_count,
+        "max_divisor": max_divisor,
+        "candidate_divisors": list(candidates),
+        "detected_divisors": list(detected),
+        "evidence": evidence,
+        "effective_divisors": list(effective),
+        "smallest_unit_quarter_length": float(Fraction(1, max(effective))),
+        "reason": (
+            "Exact common note-on grids were detected."
+            if detected
+            else "No finer exact common note-on grid was detected."
+        ),
+    }
+
+
 def _midi_header_timing(source_path: Path) -> Dict[str, Any]:
     from music21.midi import MidiFile  # type: ignore
 
@@ -893,23 +1016,39 @@ def _load_music21_score(
     try:
         if _source_extension(source_path) in {".mid", ".midi"}:
             options = midi_options or MidiImportOptions()
+            if options.quantize and options.quarter_length_divisors is None:
+                effective_divisors, grid_inference = _infer_midi_quantization_divisors(
+                    source_path,
+                    max_divisor=options.auto_max_quarter_length_divisor,
+                )
+            elif options.quantize:
+                assert options.quarter_length_divisors is not None
+                effective_divisors = options.quarter_length_divisors
+                grid_inference = {
+                    "mode": "explicit",
+                    "effective_divisors": list(effective_divisors),
+                }
+            else:
+                effective_divisors = MIDI_QUARTER_LENGTH_DIVISORS
+                grid_inference = None
             score = converter.parse(
                 str(source_path),
                 quantizePost=options.quantize,
-                quarterLengthDivisors=options.quarter_length_divisors,
+                quarterLengthDivisors=effective_divisors,
             )
             finest_divisor = (
-                max(options.quarter_length_divisors)
+                max(effective_divisors)
                 if options.quantize
                 else 16
             )
             diagnostics = {
                 "quantize_post": options.quantize,
                 "quantization_quarter_length_divisors": (
-                    list(options.quarter_length_divisors)
+                    list(effective_divisors)
                     if options.quantize
                     else None
                 ),
+                "quantization_grid_inference": grid_inference,
                 "chord_grouping_tolerance_quarter_length": 1 / finest_divisor,
                 "reconstruct_voices": options.reconstruct_voices,
                 "fill_gaps": options.fill_gaps,
@@ -1628,7 +1767,9 @@ def print_conversion_summary(records: Iterable[Dict[str, Any]]) -> None:
     print()
 
 
-def _parse_midi_grid(value: str) -> Tuple[int, ...]:
+def _parse_midi_grid(value: str) -> Optional[Tuple[int, ...]]:
+    if value.strip().lower() == "auto":
+        return None
     try:
         parsed = tuple(int(item.strip()) for item in value.split(",") if item.strip())
     except ValueError as exc:
@@ -1682,10 +1823,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument(
         "--midi-grid",
         type=_parse_midi_grid,
-        default=MIDI_QUARTER_LENGTH_DIVISORS,
+        default=None,
         help=(
-            "Comma-separated quarter-note divisors used for MIDI score quantization "
-            "(default: 8,6,4,3; use 16 for straight 64th notes)."
+            "MIDI score-quantization grid: 'auto' (default), or comma-separated "
+            "quarter-note divisors such as 16,8,6,4,3."
         ),
     )
     parser.add_argument(

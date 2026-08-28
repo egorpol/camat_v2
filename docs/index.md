@@ -12,15 +12,16 @@ through Python representations to analysis and score-linked results.
 
 | Goal | Guide |
 | --- | --- |
-| create and validate an MEI edition | [Create MEI editions](guides/edition-building.md) |
+| understand, render, validate, or enrich an MEI file | [Handling MEI files](guides/edition-building.md) |
 | import MusicXML, Humdrum, MIDI, MuseScore, or another format | [File formats](guides/formats.md) |
 | turn MEI into Python tables and related representations | [Parse and represent MEI](guides/parsing-representations.md) |
 | calculate distributions, binary matrices, or pattern matches | [Analyse representations](guides/analysis.md) |
 
-The editorial production pipeline currently lives in the separate
-`camat_corpus` repository. Its reusable local MEI/facsimile viewer, plus
-conversion, parsing, analysis, and rendering, live here. Read [What CAMAT
-is](overview.md) for the boundaries and the complete data flow.
+The editorial production pipeline and corpus data currently live in the
+separate `camat_corpus` repository. Reusable IIIF/measure-zone production, MEI
+validation, cleanup, and facsimile-inspection helpers, plus conversion, parsing,
+analysis, and rendering, live here. Read [What CAMAT is](overview.md) for the
+boundaries and the complete data flow.
 
 ## The central rule
 
@@ -33,7 +34,7 @@ and accepts MEI. Convert non-MEI inputs first.
 
 ## Learn interactively
 
-Follow the [notebook roadmap](notebooks.md) to choose the facsimile inspection,
-single-file conversion, batch conversion, or representation example. The
-roadmap also marks the parsing and analysis tutorials that still need to be
-added.
+Follow the [notebook roadmap](notebooks.md) to choose the paste-and-render MEI
+notebook, facsimile inspection, consistency checks, single-file conversion,
+batch conversion, or representation example. The roadmap also marks the
+parsing and analysis tutorials that still need to be added.

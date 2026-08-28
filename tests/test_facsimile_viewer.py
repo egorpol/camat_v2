@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 from pathlib import Path
 
 import pytest
@@ -8,8 +9,10 @@ import camat.facsimile_viewer as facsimile_viewer
 from camat.facsimile_viewer import (
     FacsimileViewerCache,
     FacsimileUnavailableError,
+    InteractiveFacsimileViewer,
     build_facsimile_viewer,
     build_verovio_options,
+    make_viewer_html,
     read_facsimile_model,
     render_verovio_pages,
     score_content_hash,
@@ -65,6 +68,8 @@ def test_read_facsimile_model_resolves_local_graphic(tmp_path: Path) -> None:
     assert model["image_width"] == 100
     assert model["image_height"] == 200
     assert model["zones"]["zone-1"]["ulx"] == 10
+    assert model["zones"]["zone-1"]["surface_index"] == 0
+    assert len(model["surfaces"]) == 1
     assert model["linked"][0]["measure_id"] == "measure-1"
     assert model["missing_facs"] == []
 
@@ -81,6 +86,101 @@ def test_read_facsimile_model_rejects_unresolved_measure_link(tmp_path: Path) ->
         read_facsimile_model(mei_path)
     with pytest.raises(RuntimeError, match="unresolved measure @facs"):
         read_facsimile_model(mei_path, allow_missing_facsimile=True)
+
+
+def test_later_surface_links_are_available_for_display(tmp_path: Path) -> None:
+    mei_path = tmp_path / "pages.mei"
+    _write_facsimile_mei(mei_path)
+    text = mei_path.read_text(encoding="utf-8")
+    text = text.replace(
+        "</facsimile>",
+        '''
+    <surface xml:id="surface-2">
+      <graphic target="scan.svg" width="100" height="200"/>
+      <zone xml:id="zone-2" type="measure" ulx="10" uly="20" lrx="80" lry="180"/>
+    </surface>
+  </facsimile>''',
+    ).replace(
+        "</section>",
+        '''<measure xml:id="measure-2" n="2" facs="#zone-2">
+      <staff n="1"><layer n="1"><note xml:id="note-2" pname="d" oct="4" dur="1"/></layer></staff>
+    </measure></section>''',
+    )
+    mei_path.write_text(text, encoding="utf-8")
+
+    model = read_facsimile_model(mei_path)
+
+    assert [surface["id"] for surface in model["surfaces"]] == [
+        "surface-1",
+        "surface-2",
+    ]
+    assert [row["measure_id"] for row in model["linked"]] == [
+        "measure-1",
+        "measure-2",
+    ]
+    assert [row["measure_id"] for row in model["other_surface_links"]] == ["measure-2"]
+    assert model["other_surface_links"][0]["status"] == "linked"
+    assert model["other_surface_links"][0]["surface_index"] == 1
+
+
+def test_score_pages_switch_to_their_linked_facsimile_surface(tmp_path: Path) -> None:
+    mei_path = tmp_path / "pages.mei"
+    _write_facsimile_mei(mei_path)
+    text = mei_path.read_text(encoding="utf-8")
+    text = text.replace(
+        "</facsimile>",
+        '''
+    <surface xml:id="surface-2" n="2">
+      <graphic target="scan.svg" width="100" height="200"/>
+      <zone xml:id="zone-2" type="measure" ulx="10" uly="20" lrx="80" lry="180"/>
+    </surface>
+  </facsimile>''',
+    ).replace(
+        "</section>",
+        '''<measure xml:id="measure-2" n="2" facs="#zone-2">
+      <staff n="1"><layer n="1"><note xml:id="note-2" pname="d" oct="4" dur="1"/></layer></staff>
+    </measure></section>''',
+    )
+    mei_path.write_text(text, encoding="utf-8")
+    model = read_facsimile_model(mei_path)
+
+    html = make_viewer_html(
+        model,
+        [
+            {"number": 1, "svg": '<svg><g class="measure" id="measure-1"/></svg>'},
+            {"number": 2, "svg": '<svg><g class="measure" id="measure-2"/></svg>'},
+        ],
+        total_score_pages=2,
+        viewer_id="test-viewer",
+        initial_score_zoom_percent=125,
+        initial_facsimile_zoom_percent=150,
+        zoom_step_percent=25,
+        min_zoom_percent=50,
+        max_zoom_percent=200,
+    )
+
+    assert 'data-surface-index="0"' in html
+    assert 'data-surface-index="1"' in html
+    assert 'data-surface-n="2"' in html
+    assert 'const scorePageSurfaces = [0, 1];' in html
+    assert "showFacsimileSurface(scorePageSurfaces[activePageIndex])" in html
+    assert '"surfaceIndex": 1' in html
+    assert 'width="100" height="200"' in html
+    assert "scrollbar-gutter: stable" in html
+    assert "if (!nextSurface.classList.contains('is-active'))" in html
+    assert '<span class="facsimile-page-label" aria-live="polite"></span>' in html
+    assert "--score-zoom: 125%;" in html
+    assert "--facsimile-zoom: 150%;" in html
+    assert 'class="score-zoom-reset" title="Reset score zoom">125%</button>' in html
+    assert (
+        'class="facsimile-zoom-reset" title="Reset facsimile zoom">150%</button>'
+        in html
+    )
+    assert "const zoomStep = 25;" in html
+    assert "const minZoom = 50;" in html
+    assert "const maxZoom = 200;" in html
+    assert "applyScoreZoom(scoreZoom + zoomStep)" in html
+    assert "applyFacsimileZoom(facsimileZoom + zoomStep)" in html
 
 
 def test_missing_facsimile_has_strict_error_and_score_only_model(tmp_path: Path) -> None:
@@ -239,3 +339,126 @@ def test_render_verovio_pages_returns_every_page() -> None:
     assert result["page_count"] >= 1
     assert len(result["pages"]) == result["page_count"]
     assert all("<svg" in page["svg"] for page in result["pages"])
+
+
+def test_render_verovio_pages_can_keep_native_warnings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: list[bool] = []
+
+    @contextlib.contextmanager
+    def fake_suppress(*, enabled: bool = True, **_: object):
+        seen.append(enabled)
+        yield
+
+    monkeypatch.setattr(facsimile_viewer, "suppress_native_output", fake_suppress)
+    source = Path(__file__).parents[1] / "camat" / "examples" / "duration_semantics.mei"
+    render_verovio_pages(
+        str(source),
+        initial_page=1,
+        options={"footer": "none", "scale": 20, "svgViewBox": True},
+        show_verovio_warnings=True,
+    )
+
+    assert seen == [False]
+
+
+def test_viewer_page_controls_initialize_after_dom_attachment(tmp_path: Path) -> None:
+    mei_path = tmp_path / "score.mei"
+    _write_facsimile_mei(mei_path, include_facsimile=False)
+    model = read_facsimile_model(mei_path, allow_missing_facsimile=True)
+    html = make_viewer_html(
+        model,
+        [
+            {"number": 1, "svg": '<svg><g class="measure" id="measure-1"/></svg>'},
+            {"number": 2, "svg": '<svg><g class="measure" id="measure-2"/></svg>'},
+        ],
+        total_score_pages=2,
+        viewer_id="test-viewer",
+    )
+
+    assert 'class="score-next"' in html
+    assert "function initializeViewer()" in html
+    assert "window.setTimeout(initializeViewer, 0)" in html
+    assert "root.dataset.camatViewerInitialized" in html
+    assert 'class="score-zoom-out"' in html
+    assert '<button type="button" class="facsimile-zoom-out"' not in html
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"min_zoom_percent": 0}, "min_zoom_percent"),
+        (
+            {"min_zoom_percent": 200, "max_zoom_percent": 100},
+            "max_zoom_percent",
+        ),
+        ({"zoom_step_percent": 0}, "zoom_step_percent"),
+        ({"initial_score_zoom_percent": 25}, "initial_score_zoom_percent"),
+        ({"initial_facsimile_zoom_percent": 400}, "initial_facsimile_zoom_percent"),
+    ],
+)
+def test_viewer_rejects_invalid_zoom_configuration(
+    tmp_path: Path,
+    kwargs: dict,
+    message: str,
+) -> None:
+    mei_path = tmp_path / "score.mei"
+    _write_facsimile_mei(mei_path, include_facsimile=False)
+    model = read_facsimile_model(mei_path, allow_missing_facsimile=True)
+
+    with pytest.raises(ValueError, match=message):
+        make_viewer_html(
+            model,
+            [{"number": 1, "svg": "<svg/>"}],
+            total_score_pages=1,
+            **kwargs,
+        )
+
+
+def test_interactive_viewers_get_unique_default_dom_ids(tmp_path: Path) -> None:
+    _write_facsimile_mei(tmp_path / "one.mei")
+    _write_facsimile_mei(tmp_path / "two.mei")
+    first = InteractiveFacsimileViewer(tmp_path / "one.mei")
+    second = InteractiveFacsimileViewer(tmp_path / "two.mei")
+
+    assert first.viewer_id.startswith("mei-viewer-live-")
+    assert first.viewer_id != second.viewer_id
+
+
+def test_to_direct_download_url_converts_github_blob_pages() -> None:
+    from camat.music_utils import to_direct_download_url
+
+    blob = "https://github.com/owner/repo/blob/main/path/score.mei"
+    raw = "https://raw.githubusercontent.com/owner/repo/main/path/score.mei"
+    assert to_direct_download_url(blob) == raw
+    assert to_direct_download_url(raw) == raw
+    assert to_direct_download_url("https://example.org/score.mei") == "https://example.org/score.mei"
+
+
+def test_resolve_mei_source_accepts_local_and_remote_paths(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from camat.facsimile_viewer import resolve_mei_source
+
+    mei_path = tmp_path / "page.mei"
+    _write_facsimile_mei(mei_path)
+
+    assert resolve_mei_source("page.mei", repo_root=tmp_path) == mei_path.resolve()
+    assert resolve_mei_source(mei_path) == mei_path.resolve()
+
+    with pytest.raises(FileNotFoundError, match="No MEI file"):
+        resolve_mei_source("missing.mei", repo_root=tmp_path)
+
+    downloaded = tmp_path / "downloaded.mei"
+    downloaded.write_text("<mei/>", encoding="utf-8")
+    blob = "https://github.com/owner/repo/blob/main/score.mei"
+
+    def fake_get_file_path(file_source: str, **_: object) -> str:
+        assert file_source == blob
+        return str(downloaded)
+
+    monkeypatch.setattr("camat.music_utils.get_file_path", fake_get_file_path)
+
+    assert resolve_mei_source(blob, cache_dir=tmp_path / "cache") == downloaded.resolve()
