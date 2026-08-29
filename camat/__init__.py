@@ -104,11 +104,21 @@ from .facsimile_viewer import (
     InteractiveFacsimileViewer,
     build_facsimile_viewer,
     build_verovio_options,
+    display_path,
     find_camat_root,
+    format_facsimile_summary,
     launch_interactive_facsimile_viewer,
     read_facsimile_model,
     render_verovio_pages,
     resolve_mei_source,
+    resolve_repo_path,
+)
+from .mei_renderer import (
+    DEFAULT_MEI,
+    InteractiveMeiRenderer,
+    launch_interactive_mei_renderer,
+    make_mei_renderer_html,
+    validate_mei_text,
 )
 from .check_mei_consistency import Finding, MeiChecker, check_mei_files
 from .convert_harm_startid_to_tstamp import (
@@ -138,7 +148,13 @@ from .mei_consistency_workflow import (
     run_verovio_warning_check,
     source_snippet,
 )
-from .facsimile_downloader import download_images as download_facsimile_images
+from .facsimile_downloader import (
+    download_facsimile_image,
+    download_images as download_facsimile_images,
+    parse_bsb_viewer_url,
+    resolve_iiif_image_url,
+    stage_mei_copy,
+)
 from .integrate_measure_annotations import (
     get_body_measures,
     get_measure_alignment_report,
@@ -268,11 +284,19 @@ __all__ = [
     'InteractiveFacsimileViewer',
     'build_facsimile_viewer',
     'build_verovio_options',
+    'display_path',
     'find_camat_root',
+    'format_facsimile_summary',
     'launch_interactive_facsimile_viewer',
     'read_facsimile_model',
     'render_verovio_pages',
     'resolve_mei_source',
+    'resolve_repo_path',
+    'DEFAULT_MEI',
+    'InteractiveMeiRenderer',
+    'launch_interactive_mei_renderer',
+    'make_mei_renderer_html',
+    'validate_mei_text',
     'Finding',
     'MeiChecker',
     'check_mei_files',
@@ -297,7 +321,11 @@ __all__ = [
     'run_relaxng_validation',
     'run_verovio_warning_check',
     'source_snippet',
+    'download_facsimile_image',
     'download_facsimile_images',
+    'parse_bsb_viewer_url',
+    'resolve_iiif_image_url',
+    'stage_mei_copy',
     'get_body_measures',
     'get_measure_alignment_report',
     'integrate_annotation_file',

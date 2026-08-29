@@ -19,8 +19,11 @@ from __future__ import annotations
 
 import argparse
 import csv
+import re
+import shutil
 import time
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 import requests
 from tqdm.auto import tqdm
@@ -31,6 +34,72 @@ IIIF_IMAGE_TEMPLATE = (
     "https://api.digitale-sammlungen.de/iiif/image/v2/{stem}/full/{width},/0/default.jpg"
 )
 IIIF_INFO_TEMPLATE = "https://api.digitale-sammlungen.de/iiif/image/v2/{stem}/info.json"
+
+
+def parse_bsb_viewer_url(archive_url: str) -> tuple[str, int, str]:
+    """Return ``(bsb_id, page, stem)`` from a Digitale Sammlungen viewer URL."""
+    parsed = urlparse(archive_url.strip())
+    match = re.search(r"/view/(bsb\d+)", parsed.path, flags=re.IGNORECASE)
+    if not match:
+        raise ValueError(f"Could not find a BSB id in {archive_url!r}")
+
+    page_values = parse_qs(parsed.query).get("page") or []
+    if not page_values:
+        raise ValueError(f"Could not find a page= value in {archive_url!r}")
+
+    bsb_id = match.group(1).lower()
+    page = int(page_values[0])
+    if page < 1:
+        raise ValueError(f"Invalid page number in {archive_url!r}")
+    return bsb_id, page, f"{bsb_id}_{page:05d}"
+
+
+def resolve_iiif_image_url(
+    *,
+    stem: str | None = None,
+    width: int | None = None,
+    image_url: str | None = None,
+    template: str = IIIF_IMAGE_TEMPLATE,
+) -> str:
+    """Prefer an explicit IIIF image URL; otherwise fill the BSB template.
+
+    ``image_url`` may be a complete address or a template that still contains
+    ``{stem}`` and/or ``{width}``. An empty string is treated as unset.
+    """
+    candidate = (image_url or "").strip() or None
+    if candidate and "{" not in candidate:
+        return candidate
+
+    source = candidate or template
+    if "{stem}" in source and not stem:
+        raise ValueError("An IIIF stem is required when no explicit image URL is given.")
+    if "{width}" in source and width is None:
+        raise ValueError("An image width is required to fill the IIIF URL template.")
+    return source.format(stem=stem, width=width)
+
+
+def stage_mei_copy(
+    source_mei: Path,
+    target_dir: Path,
+    target_stem: str | None = None,
+    *,
+    overwrite: bool = False,
+) -> Path:
+    """Copy ``source_mei`` to ``target_dir/{stem}.mei`` without changing the original."""
+    source_mei = Path(source_mei).expanduser().resolve()
+    if not source_mei.is_file():
+        raise FileNotFoundError(source_mei)
+
+    target_dir = Path(target_dir)
+    target_dir.mkdir(parents=True, exist_ok=True)
+    staged_mei = target_dir / f"{target_stem or source_mei.stem}.mei"
+    if staged_mei.exists() and staged_mei.resolve() != source_mei and not overwrite:
+        raise FileExistsError(
+            f"Staged MEI already exists: {staged_mei}. Set overwrite=True to replace it."
+        )
+    if staged_mei.resolve() != source_mei:
+        shutil.copy2(source_mei, staged_mei)
+    return staged_mei.resolve()
 
 
 def collect_mei_files(score_dir: Path) -> list[Path]:
@@ -115,6 +184,58 @@ def resolve_width_for_stem(
     raise ValueError("One resolution mode must be selected")
 
 
+def download_facsimile_image(
+    output_path: Path,
+    *,
+    stem: str | None = None,
+    image_url: str | None = None,
+    width: int | None = None,
+    quality_rank: int | None = None,
+    target_dpi: int | None = None,
+    page_width_mm: float = 210.0,
+    timeout: int = 30,
+    overwrite: bool = False,
+) -> tuple[Path, str]:
+    """Download one facsimile JPEG. Return ``(path, url_used)``.
+
+    If ``image_url`` is a complete address, that URL is fetched as-is. Otherwise
+    the BSB template (or an ``image_url`` that still contains ``{stem}`` /
+    ``{width}``) is filled after resolving the request width.
+    """
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    explicit = (image_url or "").strip() or None
+    needs_template_width = explicit is None or "{width}" in explicit
+    session = requests.Session()
+
+    resolved_width = width
+    if needs_template_width and resolved_width is None:
+        if quality_rank is None and target_dpi is None:
+            raise ValueError(
+                "Provide image_url, width, quality_rank, or target_dpi to download a facsimile."
+            )
+        if quality_rank is not None and not stem:
+            raise ValueError("stem is required when choosing width from IIIF info.json")
+        resolved_width = resolve_width_for_stem(
+            session=session,
+            stem=stem or "unused",
+            width=None,
+            quality_rank=quality_rank,
+            target_dpi=target_dpi,
+            page_width_mm=page_width_mm,
+            timeout=timeout,
+        )
+
+    url = resolve_iiif_image_url(stem=stem, width=resolved_width, image_url=explicit)
+    if output_path.exists() and not overwrite:
+        return output_path, url
+
+    response = session.get(url, timeout=timeout)
+    response.raise_for_status()
+    output_path.write_bytes(response.content)
+    return output_path, url
+
+
 def download_images(
     *,
     mei_files: list[Path],
@@ -151,7 +272,7 @@ def download_images(
                 page_width_mm=page_width_mm,
                 timeout=timeout,
             )
-            url = IIIF_IMAGE_TEMPLATE.format(stem=stem, width=resolved_width)
+            url = resolve_iiif_image_url(stem=stem, width=resolved_width)
             response = session.get(url, timeout=timeout)
             response.raise_for_status()
             out_path.write_bytes(response.content)

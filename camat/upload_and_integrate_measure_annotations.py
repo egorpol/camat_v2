@@ -1,7 +1,13 @@
 #!/usr/bin/env python3
 """
-Upload page images to the DOMD service and integrate the resulting measure
-annotations into matching MEI files.
+Upload page images to the Edirom measure detector and integrate the resulting
+measure annotations into matching MEI files.
+
+The detector at https://measure-detector.edirom.de/upload is a neural-network
+service (DOMD: Detecting Objects in Music Documents). It does not parse the
+MEI. It looks at the facsimile picture, returns bounding boxes for detected
+measures, and this module writes those boxes as MEI ``<zone type="measure">``
+elements with matching measure ``@facs`` links.
 
 Examples:
     camat-integrate-annotations \
@@ -33,6 +39,7 @@ from pathlib import Path
 import requests
 from tqdm.auto import tqdm
 
+from .facsimile_downloader import resolve_iiif_image_url
 from .integrate_measure_annotations import (
     get_body_measures,
     integrate_annotation_file,
@@ -341,6 +348,8 @@ def build_graphic_target(
     image_path: Path | None,
     graphic_target_mode: str,
     iiif_url_template: str,
+    graphic_target: str | None = None,
+    iiif_stem: str | None = None,
 ) -> str | None:
     if graphic_target_mode == "local":
         return None
@@ -352,7 +361,12 @@ def build_graphic_target(
     else:
         width, _height = get_annotation_graphic_size(annotation_path)
 
-    return iiif_url_template.format(stem=mei_path.stem, width=width)
+    return resolve_iiif_image_url(
+        stem=iiif_stem or mei_path.stem,
+        width=width,
+        image_url=graphic_target,
+        template=iiif_url_template,
+    )
 
 
 def process_mei_file(
@@ -371,6 +385,8 @@ def process_mei_file(
     overwrite: bool,
     graphic_target_mode: str,
     iiif_url_template: str,
+    graphic_target: str | None = None,
+    iiif_stem: str | None = None,
 ) -> tuple[Path, Path]:
     annotation_path = mei_path.with_name(f"{mei_path.stem}{annotation_suffix}")
     output_path = mei_path.with_name(f"{mei_path.stem}{output_suffix}.mei")
@@ -421,6 +437,8 @@ def process_mei_file(
         image_path=image_path,
         graphic_target_mode=graphic_target_mode,
         iiif_url_template=iiif_url_template,
+        graphic_target=graphic_target,
+        iiif_stem=iiif_stem,
     )
 
     integrate_annotation_file(

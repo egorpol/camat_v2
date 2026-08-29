@@ -22,7 +22,13 @@ from camat import (
 )
 from camat.check_bsb_page_coverage import compare_to_manifest
 from camat.corpus_cleanup import collect_deletions
-from camat.facsimile_downloader import resolve_width_for_stem
+from camat.facsimile_downloader import (
+    download_facsimile_image,
+    parse_bsb_viewer_url,
+    resolve_iiif_image_url,
+    resolve_width_for_stem,
+    stage_mei_copy,
+)
 from camat.fetch_bsb_metadata import localized_text, split_creation
 from camat.generate_volume_pages import build_markdown, extract_meta
 from camat.run_pipeline import step1_args, step4_args, step5_args
@@ -118,6 +124,27 @@ def test_reused_measure_annotations_integrate_without_network(tmp_path: Path) ->
     assert all(measure.get("facs", "").startswith("#zone_") for measure in measures)
     assert "<?xml-model" in output.read_text(encoding="utf-8")
 
+    override = "https://example.test/manual-iiif.jpg"
+    _, overridden = detect_and_integrate_mei(
+        source,
+        image_dir=tmp_path / "img",
+        detector_url="https://example.invalid/detector",
+        timeout=1,
+        retries=0,
+        retry_delay=0,
+        minimum_measures=1,
+        max_measure_mismatch=0,
+        annotation_suffix="_measure_annotations.xml",
+        output_suffix="_facs_zones",
+        reuse_annotations=True,
+        overwrite=True,
+        graphic_target_mode="iiif",
+        iiif_url_template=IIIF_IMAGE_URL_TEMPLATE,
+        graphic_target=override,
+    )
+    target, _, _ = parse_graphic_from_output_mei(overridden)
+    assert target == override
+
 
 def test_image_helpers_and_download_width_resolution(tmp_path: Path) -> None:
     png = tmp_path / "page.png"
@@ -210,6 +237,55 @@ def test_cleanup_and_metadata_helpers_are_package_safe(tmp_path: Path) -> None:
     assert markdown.startswith("# Buxtehude: Works")
 
 
+def test_bsb_stem_and_iiif_url_overrides(tmp_path: Path, monkeypatch) -> None:
+    bsb_id, page, stem = parse_bsb_viewer_url(
+        "https://digitale-sammlungen.de/en/view/bsb00023199?page=185"
+    )
+    assert (bsb_id, page, stem) == ("bsb00023199", 185, "bsb00023199_00185")
+
+    explicit = "https://example.test/page.jpg"
+    assert resolve_iiif_image_url(image_url=explicit, stem="ignored", width=1) == explicit
+    assert (
+        resolve_iiif_image_url(
+            stem="bsb00023199_00185",
+            width=1000,
+            image_url="https://cdn.example/{stem}/{width}.jpg",
+        )
+        == "https://cdn.example/bsb00023199_00185/1000.jpg"
+    )
+
+    source = tmp_path / "orig.mei"
+    source.write_text("<mei/>", encoding="utf-8")
+    staged = stage_mei_copy(source, tmp_path / "out", "bsb00000000_00001")
+    assert staged.name == "bsb00000000_00001.mei"
+    assert staged.read_text(encoding="utf-8") == "<mei/>"
+
+    class DummyResponse:
+        content = b"jpeg-bytes"
+
+        def raise_for_status(self) -> None:
+            return None
+
+    class DummySession:
+        def __init__(self) -> None:
+            self.url = None
+
+        def get(self, url, timeout):
+            self.url = url
+            return DummyResponse()
+
+    dummy = DummySession()
+    monkeypatch.setattr("camat.facsimile_downloader.requests.Session", lambda: dummy)
+    image_path, url = download_facsimile_image(
+        tmp_path / "img" / "page.jpg",
+        image_url="https://example.test/scan.jpg",
+        timeout=1,
+    )
+    assert url == "https://example.test/scan.jpg"
+    assert dummy.url == url
+    assert image_path.read_bytes() == b"jpeg-bytes"
+
+
 def test_copied_pipeline_notebooks_use_package_imports_and_safe_defaults() -> None:
     repo_root = Path(__file__).resolve().parents[1]
 
@@ -222,11 +298,24 @@ def test_copied_pipeline_notebooks_use_package_imports_and_safe_defaults() -> No
         )
 
     single = code_for("single_mei_iiif_integration.ipynb")
+    tutorial = code_for("notebooks/mei_single_file_iiif_integration.ipynb")
     batch = code_for("run_pipeline_workflow.ipynb")
 
     assert "from camat import" in single
     assert "RUN_IIIF_INTEGRATION = False" in single
     assert 'SCRIPTS_DIR' not in single
+    assert "import setup_camat" in tutorial
+    assert 'test_corpus/Buxtehude-Anhang-S._185_musicxml_verovio.mei' in tutorial
+    assert 'page=185' in tutorial
+    assert "IIIF_IMAGE_URL" in tutorial
+    assert "camat_corpus" not in tutorial
+    assert "CORPUS_ROOT" not in tutorial
+    assert "def derive_bsb_stem" not in tutorial
+    assert "def stage_single_mei" not in tutorial
+    assert "RUN_IIIF_INTEGRATION = False" in tutorial
+    assert "raise RuntimeError(\"Review the paths" not in tutorial
+    example = repo_root / "test_corpus" / "Buxtehude-Anhang-S._185_musicxml_verovio.mei"
+    assert example.is_file()
     assert "RUN_PIPELINE = False" in batch
     assert "RUN_COVERAGE_CHECK = False" in batch
     assert "RUN_CUSTOM_INTEGRATION = False" in batch

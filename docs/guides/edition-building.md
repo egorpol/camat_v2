@@ -21,10 +21,11 @@ MEI cleanup/consistency, and facsimile-inspection helpers are now part of the
 | --- | --- |
 | understand MEI elements, attributes, schemas, and document structure | [Introduction to MEI and XML](mei-introduction.md) |
 | paste or edit MEI and immediately render the score in Jupyter | [`mei_render.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/mei_render.ipynb) |
+| add a BSB IIIF facsimile and detected measure zones to one clean MEI file | [`mei_single_file_iiif_integration.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/mei_single_file_iiif_integration.ipynb) |
 | run corpus-style consistency checks and combine page files | [`mei_consistency_checks.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/mei_consistency_checks.ipynb) |
 | check corrected full-score files with schema, profile, page-link, and Verovio passes | [`mei_corrected_full_checks.ipynb`](https://github.com/egorpol/camat_v2/blob/main/mei_corrected_full_checks.ipynb) |
 | inspect notation together with linked facsimile zones | [`mei_facsimile_viewer.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/mei_facsimile_viewer.ipynb) |
-| build facsimile-linked MEI from corpus inputs | [Build facsimile-linked MEI](#build-facsimile-linked-mei) below |
+| build facsimile-linked MEI across a corpus | [Add a facsimile and measure zones](#add-a-facsimile-and-measure-zones) below |
 
 The introductory guide was migrated from the project's earlier HfM Weimar
 wiki. The MkDocs copy is now the project version to maintain; the
@@ -81,21 +82,39 @@ annotations, and generated reports in `camat_corpus`. The installed package
 operates on explicit score directories and MEI paths, so the implementation no
 longer depends on a `scripts/` folder in that repository.
 
-## Build facsimile-linked MEI
+## Add a facsimile and measure zones
 
-Two copied Workflow 1 maintainer notebooks expose the production pipeline:
+The focused
+[`mei_single_file_iiif_integration.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/mei_single_file_iiif_integration.ipynb)
+notebook is the first editorial Workflow 1 tutorial. Its example is the clean
+`test_corpus/Buxtehude-Anhang-S._185_musicxml_verovio.mei` file in this
+repository. A read-only preflight confirms that the source has 17 measures and
+no existing facsimile data. “Clean” is scoped to this integration step; schema
+and editorial consistency are checked later. Identify the source page with a
+Digitale Sammlungen `ARCHIVE_URL`, a pasted `IIIF_IMAGE_URL`, or both. After
+the user explicitly enables the production flag, the notebook:
 
-- [`single_mei_iiif_integration.ipynb`](https://github.com/egorpol/camat_v2/blob/main/single_mei_iiif_integration.ipynb)
-  stages one MEI under its BSB page stem, downloads the IIIF image, sends it to
-  the measure detector, integrates the returned zones, verifies the image, and
-  writes the final IIIF-linked MEI;
+1. copies the source to a working name in `converted_mei/iiif_tutorial/`
+   without changing the original;
+2. downloads the facsimile image (the pasted IIIF URL when set, otherwise the
+   BSB URL derived from the archive page);
+3. sends that picture to the Edirom measure-detector network and integrates
+   the returned measure boxes;
+4. verifies the local image against the IIIF URL that was fetched;
+5. writes and checks `{stem}_facs_zones.mei` with that IIIF graphic target.
+
+The root-level maintainer notebooks expose the same production work at broader
+scales:
+
 - [`run_pipeline_workflow.ipynb`](https://github.com/egorpol/camat_v2/blob/main/run_pipeline_workflow.ipynb)
   inventories a score directory, optionally checks BSB manifest coverage, runs
   selected batch steps, and summarizes run/validation reports.
 
-Both notebooks have cleared outputs and disable network calls and writes by
-default. Configure paths in the external corpus checkout before enabling their
-`RUN_*` flags. The equivalent batch command is:
+The tutorial notebook uses an example in this repository and writes
+generated files under `converted_mei/`. The maintainer notebooks have
+cleared outputs and disable network calls and writes by default; configure
+their score-directory paths before enabling `RUN_*` flags. The equivalent
+batch command is:
 
 ```bash
 camat-run-pipeline /path/to/score-directory --skip-pages 1-29

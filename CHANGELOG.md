@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Added `launch_interactive_mei_renderer` with on-screen score zoom controls
+  for the paste-and-render notebook. The renderer uses an A4-like Verovio page
+  so the staff stays readable; CSS zoom then enlarges the notation rather than
+  stretching a very wide, short page.
+- Added packaged helpers for a single-file IIIF job: `parse_bsb_viewer_url`,
+  `resolve_iiif_image_url`, `download_facsimile_image`, and `stage_mei_copy`.
+  `detect_and_integrate_mei` now accepts an explicit `graphic_target` so the
+  IIIF link does not have to come from the MEI filename.
+
+### Changed
+
+- The single-file IIIF notebook uses `test_corpus/Buxtehude-Anhang-S._185_musicxml_verovio.mei`,
+  no longer depends on `camat_corpus`, and can take a pasted IIIF image URL.
+
 ## [0.2.1b1] - 2026-08-29
 
 ### Added

@@ -35,6 +35,6 @@ and accepts MEI. Convert non-MEI inputs first.
 ## Learn interactively
 
 Follow the [notebook roadmap](notebooks.md) to choose the paste-and-render MEI
-notebook, facsimile inspection, consistency checks, single-file conversion,
-batch conversion, or representation example. The roadmap also marks the
-parsing and analysis tutorials that still need to be added.
+notebook, single-file IIIF integration, facsimile inspection, consistency
+checks, format conversion, or representation example. The roadmap also marks
+the parsing and analysis tutorials that still need to be added.

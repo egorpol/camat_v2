@@ -33,9 +33,13 @@ existing annotation XML file is local.
 ::: camat.facsimile_downloader
     options:
       members:
+        - parse_bsb_viewer_url
+        - resolve_iiif_image_url
+        - stage_mei_copy
         - collect_mei_files
         - infer_bsb_id
         - resolve_width_for_stem
+        - download_facsimile_image
         - download_images
         - main
 
