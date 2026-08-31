@@ -101,6 +101,8 @@ See [Analyse representations](guides/analysis.md).
 | learn the basic XML and MEI structure | [Introduction to MEI and XML](guides/mei-introduction.md) |
 | paste MEI and render it interactively | [`mei_render.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/mei_render.ipynb) |
 | add an IIIF facsimile and measure zones to one clean MEI | [`mei_single_file_iiif_integration.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/mei_single_file_iiif_integration.ipynb) |
+| add IIIF facsimiles and measure zones to several MEI files | [`mei_batch_iiif_integration.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/mei_batch_iiif_integration.ipynb) |
+| run editorial checks on MEI (optionally combine pages first) | [`mei_consistency_checks.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/mei_consistency_checks.ipynb) |
 | validate, clean, inspect, or enrich MEI | [Handling MEI files](guides/edition-building.md) |
 | inspect measure-to-facsimile links in a local MEI | [MEI facsimile viewer](api/facsimile_viewer.md) |
 | import another score format | [File formats](guides/formats.md) |

@@ -28,11 +28,26 @@ existing annotation XML file is local.
         - compare_to_manifest
         - main
 
+## Single-file and batch IIIF jobs
+
+::: camat.iiif_page
+    options:
+      members:
+        - IiifPagePlan
+        - collect_iiif_jobs_from_directory
+        - plan_iiif_page
+        - plan_iiif_pages
+        - integrate_iiif_page
+        - integrate_iiif_pages
+        - format_iiif_page_plans
+        - format_iiif_page_results
+
 ## Facsimile acquisition
 
 ::: camat.facsimile_downloader
     options:
       members:
+        - parse_bsb_filename_stem
         - parse_bsb_viewer_url
         - resolve_iiif_image_url
         - stage_mei_copy

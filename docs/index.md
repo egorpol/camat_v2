@@ -8,7 +8,7 @@ CAMAT is an **MEI-centered toolbox for editorial and analytical work with
 symbolic music**. It supports a path from creating or importing an MEI document
 through Python representations to analysis and score-linked results.
 
-## Start with the workflow, not the module
+## Workflow overview
 
 | Goal | Guide |
 | --- | --- |
@@ -34,7 +34,7 @@ and accepts MEI. Convert non-MEI inputs first.
 
 ## Learn interactively
 
-Follow the [notebook roadmap](notebooks.md) to choose the paste-and-render MEI
-notebook, single-file IIIF integration, facsimile inspection, consistency
-checks, format conversion, or representation example. The roadmap also marks
-the parsing and analysis tutorials that still need to be added.
+Follow the [notebook roadmap](notebooks.md) for the Workflow 1 sequence: MEI
+introduction, paste-and-render, facsimile inspection, IIIF integration,
+editorial checks (check-only or combine-then-check), then conversion or
+representation examples.

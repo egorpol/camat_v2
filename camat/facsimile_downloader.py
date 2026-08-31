@@ -36,6 +36,21 @@ IIIF_IMAGE_TEMPLATE = (
 IIIF_INFO_TEMPLATE = "https://api.digitale-sammlungen.de/iiif/image/v2/{stem}/info.json"
 
 
+_BSB_STEM_RE = re.compile(r"^(bsb\d+)_(\d+)$", re.IGNORECASE)
+
+
+def parse_bsb_filename_stem(stem: str) -> tuple[str, int, str] | None:
+    """Return ``(bsb_id, page, stem)`` when ``stem`` looks like ``bsb00023199_00185``."""
+    match = _BSB_STEM_RE.fullmatch(stem.strip())
+    if not match:
+        return None
+    bsb_id = match.group(1).lower()
+    page = int(match.group(2))
+    if page < 1:
+        return None
+    return bsb_id, page, f"{bsb_id}_{page:05d}"
+
+
 def parse_bsb_viewer_url(archive_url: str) -> tuple[str, int, str]:
     """Return ``(bsb_id, page, stem)`` from a Digitale Sammlungen viewer URL."""
     parsed = urlparse(archive_url.strip())

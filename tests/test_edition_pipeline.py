@@ -286,6 +286,82 @@ def test_bsb_stem_and_iiif_url_overrides(tmp_path: Path, monkeypatch) -> None:
     assert image_path.read_bytes() == b"jpeg-bytes"
 
 
+def test_iiif_page_plans_and_batch_integration(tmp_path: Path, monkeypatch) -> None:
+    from camat import (
+        collect_iiif_jobs_from_directory,
+        format_iiif_page_plans,
+        integrate_iiif_page,
+        parse_bsb_filename_stem,
+        plan_iiif_pages,
+    )
+
+    assert parse_bsb_filename_stem("bsb00023199_00185") == ("bsb00023199", 185, "bsb00023199_00185")
+    assert parse_bsb_filename_stem("orig") is None
+
+    source = tmp_path / "src" / "page.mei"
+    source.parent.mkdir()
+    _write_source_mei(source)
+    target_dir = tmp_path / "out"
+    plans = plan_iiif_pages(
+        [
+            {
+                "source_mei": source,
+                "archive_url": "https://digitale-sammlungen.de/en/view/bsb00000000?page=1",
+                "iiif_image_url": "",
+            }
+        ],
+        target_dir=target_dir,
+    )
+    assert plans[0].target_stem == "bsb00000000_00001"
+    assert plans[0].page_number == 1
+    assert "bsb00000000_00001" in format_iiif_page_plans(plans)
+
+    named = tmp_path / "named" / "bsb00000000_00002.mei"
+    named.parent.mkdir()
+    _write_source_mei(named)
+    named_plans = plan_iiif_pages(
+        [{"source_mei": named, "archive_url": "", "iiif_image_url": ""}],
+        target_dir=target_dir,
+    )
+    assert named_plans[0].target_stem == "bsb00000000_00002"
+
+    score_dir = tmp_path / "score"
+    score_dir.mkdir()
+    _write_source_mei(score_dir / "bsb00000000_00003.mei")
+    collected = collect_iiif_jobs_from_directory(score_dir)
+    assert Path(collected[0]["source_mei"]).name == "bsb00000000_00003.mei"
+
+    png_bytes = b"\x89PNG\r\n\x1a\n" + b"\x00" * 8 + struct.pack(">II", 1000, 1400)
+    expected_url = "https://example.test/page.jpg"
+
+    def fake_download(output_path, **_kwargs):
+        output_path = Path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(png_bytes)
+        return output_path, expected_url
+
+    monkeypatch.setattr("camat.iiif_page.download_facsimile_image", fake_download)
+    target_dir.mkdir(parents=True, exist_ok=True)
+    _write_annotation_mei(plans[0].annotation_path)
+
+    result = integrate_iiif_page(
+        plans[0],
+        reuse_annotations=True,
+        overwrite_output=True,
+        verify_iiif=False,
+        minimum_measures=1,
+        max_measure_mismatch=0,
+        timeout=1,
+        retries=0,
+        retry_delay=0,
+    )
+    assert result["ok"] is True
+    assert result["expected_iiif_url"] == expected_url
+    assert Path(str(result["final_mei"])).is_file()
+    target, width, height = parse_graphic_from_output_mei(Path(str(result["final_mei"])))
+    assert (target, width, height) == (expected_url, 1000, 1400)
+
+
 def test_copied_pipeline_notebooks_use_package_imports_and_safe_defaults() -> None:
     repo_root = Path(__file__).resolve().parents[1]
 
@@ -299,6 +375,7 @@ def test_copied_pipeline_notebooks_use_package_imports_and_safe_defaults() -> No
 
     single = code_for("single_mei_iiif_integration.ipynb")
     tutorial = code_for("notebooks/mei_single_file_iiif_integration.ipynb")
+    batch_tutorial = code_for("notebooks/mei_batch_iiif_integration.ipynb")
     batch = code_for("run_pipeline_workflow.ipynb")
 
     assert "from camat import" in single
@@ -316,6 +393,31 @@ def test_copied_pipeline_notebooks_use_package_imports_and_safe_defaults() -> No
     assert "raise RuntimeError(\"Review the paths" not in tutorial
     example = repo_root / "test_corpus" / "Buxtehude-Anhang-S._185_musicxml_verovio.mei"
     assert example.is_file()
+    assert "import setup_camat" in batch_tutorial
+    assert "plan_iiif_pages" in batch_tutorial
+    assert "integrate_iiif_pages" in batch_tutorial
+    assert "RUN_IIIF_INTEGRATION = False" in batch_tutorial
+    assert "camat_corpus" not in batch_tutorial
+    assert "def derive_bsb_stem" not in batch_tutorial
+    for page in (175, 178, 185):
+        assert (
+            repo_root / "test_corpus" / f"Buxtehude-Anhang-S._{page}_musicxml_verovio.mei"
+        ).is_file()
+    consistency = code_for("notebooks/mei_consistency_checks.ipynb")
+    assert "import setup_camat" in consistency
+    assert "test_corpus/buxtehude_pages" in consistency
+    assert "run_editorial_checks" in consistency
+    assert "combine_meis" in consistency
+    assert "RUN_PIPELINE = False" in consistency
+    assert "COMBINE_PAGES" in consistency
+    assert "ANNOTATE_COMBINED = False" in consistency
+    assert "Bach-JS_Ein_feste_Burg.mei" in consistency
+    assert "CHECK_IIIF_LINKS = False" in consistency
+    assert "camat_corpus" not in consistency
+    assert "def facsimile_graphic_targets" not in consistency
+    assert "def check_facsimile_iiif_links" not in consistency
+    page_dir = repo_root / "test_corpus" / "buxtehude_pages"
+    assert len(list(page_dir.glob("bsb00023199_001*_facs_zones.mei"))) == 10
     assert "RUN_PIPELINE = False" in batch
     assert "RUN_COVERAGE_CHECK = False" in batch
     assert "RUN_CUSTOM_INTEGRATION = False" in batch

@@ -10,14 +10,25 @@ state created by another notebook.
 
 ## Recommended order
 
+Workflow 1 — **Handling MEI files** — tutorial sequence:
+
+| Order | Notebook | Main result |
+| --- | --- | --- |
+| 1 | [Introduction to MEI and XML](guides/mei-introduction.md) | MEI/XML structure and editorial concepts |
+| 2 | [`mei_render.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/mei_render.ipynb) | paste or edit MEI and render interactively with Verovio |
+| 3 | [`mei_facsimile_viewer.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/mei_facsimile_viewer.ipynb) | read-only inspection of MEI with optional measure–facsimile linking |
+| 4 | [`mei_single_file_iiif_integration.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/mei_single_file_iiif_integration.ipynb) | IIIF facsimile + measure zones on one clean MEI |
+| 5 | [`mei_batch_iiif_integration.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/mei_batch_iiif_integration.ipynb) | same IIIF job over many page files |
+| 6 | [`mei_consistency_checks.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/mei_consistency_checks.ipynb) | automated editorial checks (CSV/JSON under `TARGET_DIR`); optional page combine |
+| 7 | [`mei_facsimile_viewer.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/mei_facsimile_viewer.ipynb) again | inspect the checked or combined MEI |
+
+Later workflows (convert, parse, analyse):
+
 | Order | Notebook | Workflow | Main result |
 | --- | --- | --- | --- |
-| 1 | [`mei_render.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/mei_render.ipynb) | handle MEI files | paste or edit MEI text and render any score page interactively with Verovio, including on-screen score zoom |
-| 2 | [`mei_single_file_iiif_integration.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/mei_single_file_iiif_integration.ipynb) | handle MEI files | add an IIIF facsimile and detector measure zones to one clean MEI in this repository |
-| 3 | [`mei_facsimile_viewer.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/mei_facsimile_viewer.ipynb) | handle MEI files | read-only inspection of local or remote MEI, linking rendered measures to facsimile zones |
-| 4 | [`camat_formats.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/camat_formats.ipynb) | convert to MEI | corpus-backed MEI pass-through, direct Humdrum/MusicXML conversion, and MIDI/MuseScore bridges |
-| 5 | [`camat_batch_conversion.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/camat_batch_conversion.ipynb) | convert to MEI | mixed-route MEI files, technical validation, and a JSON report |
-| 6 | [`duration_semantics_examples.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/duration_semantics_examples.ipynb) | parse and represent MEI | note tables that distinguish segment, logical, and performed duration |
+| 8 | [`camat_formats.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/camat_formats.ipynb) | convert to MEI | corpus-backed MEI pass-through, direct Humdrum/MusicXML conversion, and MIDI/MuseScore bridges |
+| 9 | [`camat_batch_conversion.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/camat_batch_conversion.ipynb) | convert to MEI | mixed-route MEI files, technical validation, and a JSON report |
+| 10 | [`duration_semantics_examples.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/duration_semantics_examples.ipynb) | parse and represent MEI | note tables that distinguish segment, logical, and performed duration |
 
 The conversion notebooks are alternatives after their shared introduction:
 use the first for one score or for learning routes, and the second for a mixed
@@ -27,7 +38,7 @@ corpus.
 
 | CAMAT workflow | Current coverage | Next documentation task |
 | --- | --- | --- |
-| Handling MEI files | MEI/XML introduction, paste-and-render notebook, focused single-file IIIF integration, reusable batch production, MEI checks, and facsimile inspection | add a focused validation/correction showcase after facsimile integration and inspection |
+| Handling MEI files | MEI/XML introduction, render, facsimile inspection, IIIF integration, editorial checks (with optional page combine), maintainer cleanup | document rewrite/cleanup in the maintainer notebook path |
 | Convert to MEI | corpus-backed single-file and batch notebooks, configurable MIDI grids, raw timing and voice-slot-to-staff diagnostics, resumability, and MuseScore | add larger-corpus performance and cache benchmarks |
 | Parse and represent MEI | duration semantics example only | add a general MEI-to-`df_pitch`/`df_events` notebook |
 | Analyse representations | no focused showcase notebook yet | add DataFrame → piano roll → binary matrix → pattern match → score overlay |
@@ -46,14 +57,11 @@ A CAMAT showcase notebook should include:
 
 ## Workflow 1 maintainer notebooks
 
-The copied
-[`mei_consistency_checks.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/mei_consistency_checks.ipynb)
-retains the corpus preparation, checking, combining, and annotation workflow,
-but now calls helpers from the installed `camat` package. The root-level
+The root-level
 `mei_corrected_full_checks.ipynb`, the older root-level
-`single_mei_iiif_integration.ipynb`, and `run_pipeline_workflow.ipynb` are also
-maintainer probes. They test real production behavior rather than teach a
-portable user workflow.
+`single_mei_iiif_integration.ipynb`, and `run_pipeline_workflow.ipynb` are
+maintainer probes. They test real production behavior, including rewrite
+flags, rather than teach a portable user workflow.
 
 Implementation probes such as `testing_verovio_conversion.ipynb` are likewise
 outside the tutorial sequence.

@@ -19,6 +19,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Iterable, Mapping, Sequence
 
+import requests
+
 from .check_mei_consistency import (
     Finding,
     check_mei_files,
@@ -26,6 +28,8 @@ from .check_mei_consistency import (
     strip_ppq_text,
     write_csv,
 )
+from .convert_harm_startid_to_tstamp import convert_file as convert_harm_startid_to_tstamp
+from .link_pb_to_surface import link_file as link_pb_to_surface
 
 
 MEI_NS = "http://www.music-encoding.org/ns/mei"
@@ -153,8 +157,15 @@ def normalized_text(element: ET.Element | None) -> str:
 
 
 def resolve_mei_inputs(inputs: Iterable[str | Path], root: Path) -> list[Path]:
+    """Resolve MEI paths from repo-relative files, directories, or HTTP(S) links."""
     files: list[Path] = []
     for raw_path in inputs:
+        raw_text = str(raw_path).strip()
+        if raw_text.startswith(("http://", "https://")):
+            from .facsimile_viewer import resolve_mei_source
+
+            files.append(resolve_mei_source(raw_text, repo_root=root))
+            continue
         path = Path(raw_path)
         if not path.is_absolute():
             path = root / path
@@ -165,7 +176,7 @@ def resolve_mei_inputs(inputs: Iterable[str | Path], root: Path) -> list[Path]:
         elif path.suffix.lower() == ".mei":
             raise FileNotFoundError(f"MEI file does not exist: {path}")
         else:
-            raise ValueError(f"Input is not a directory or .mei file: {path}")
+            raise ValueError(f"Input is not a directory, .mei file, or HTTP(S) link: {path}")
     return sorted(dict.fromkeys(file.resolve() for file in files))
 
 
@@ -224,19 +235,73 @@ def make_unique_xml_id_copies(files: Iterable[Path], output_dir: Path) -> WriteR
     return WriteResult(output_files, renamed_total, f"Renamed {renamed_total} duplicate xml:id value(s).")
 
 
-def strip_ppq_copies(files: Iterable[Path], output_dir: Path) -> WriteResult:
+def strip_ppq_copies(
+    files: Iterable[Path],
+    output_dir: Path,
+    *,
+    strip_ppq: bool = True,
+    strip_accid_ges: bool = False,
+) -> WriteResult:
     output_files: list[Path] = []
     removed_total = 0
     output_dir.mkdir(parents=True, exist_ok=True)
 
     for source in files:
-        cleaned, removed = strip_ppq_text(source.read_text(encoding="utf-8"))
+        cleaned = source.read_text(encoding="utf-8")
+        removed = 0
+        if strip_ppq:
+            cleaned, ppq_removed = strip_ppq_text(cleaned)
+            removed += ppq_removed
+        if strip_accid_ges:
+            cleaned, accid_removed = strip_accid_ges_text(cleaned)
+            removed += accid_removed
         removed_total += removed
         target = output_dir / f"{source.stem}_noppq{source.suffix}"
         target.write_text(cleaned, encoding="utf-8")
         output_files.append(target)
 
-    return WriteResult(output_files, removed_total, f"Removed {removed_total} @ppq/@dur.ppq attribute(s).")
+    parts: list[str] = []
+    if strip_ppq:
+        parts.append("@ppq/@dur.ppq")
+    if strip_accid_ges:
+        parts.append("@accid.ges")
+    label = " and ".join(parts) if parts else "import"
+    return WriteResult(
+        output_files,
+        removed_total,
+        f"Removed {removed_total} {label} attribute(s).",
+    )
+
+
+def prepare_pages_for_combine(
+    files: Iterable[Path],
+    output_dir: Path,
+    *,
+    unique_xml_ids: bool = True,
+    strip_ppq: bool = True,
+    strip_accid_ges: bool = True,
+) -> WriteResult:
+    """Copy page files into ``output_dir`` with unique xml:ids and optional import cleanup."""
+    active = list(files)
+    messages: list[str] = []
+    if unique_xml_ids:
+        unique_result = make_unique_xml_id_copies(active, output_dir / "unique_ids")
+        active = unique_result.files
+        messages.append(unique_result.message)
+    if strip_ppq or strip_accid_ges:
+        ppq_result = strip_ppq_copies(
+            active,
+            output_dir / "noppq",
+            strip_ppq=strip_ppq,
+            strip_accid_ges=strip_accid_ges,
+        )
+        active = ppq_result.files
+        messages.append(ppq_result.message)
+    return WriteResult(
+        active,
+        len(active),
+        " ".join(messages) or "No page preparation requested.",
+    )
 
 
 def normalize_single_layer_number_copies(
@@ -1186,6 +1251,307 @@ def load_report(csv_path: Path):
     return df
 
 
+def _report_row(
+    *,
+    severity: str,
+    category: str,
+    check: str,
+    file: str,
+    message: str,
+    line: str = "",
+    element: str = "",
+    measure_n: str = "",
+    staff_n: str = "",
+    layer_n: str = "",
+    xml_id: str = "",
+    expected: str = "",
+    actual: str = "",
+    context: str = "",
+) -> dict[str, str]:
+    return {
+        "severity": severity,
+        "category": category,
+        "check": check,
+        "file": file,
+        "line": line,
+        "element": element,
+        "measure_n": measure_n,
+        "staff_n": staff_n,
+        "layer_n": layer_n,
+        "xml_id": xml_id,
+        "message": message,
+        "expected": expected,
+        "actual": actual,
+        "context": context,
+    }
+
+
+def facsimile_graphic_targets(mei_path: Path) -> list[str]:
+    """Return ``<graphic @target>`` values under every ``<facsimile>``."""
+    root = ET.parse(mei_path).getroot()
+    targets: list[str] = []
+    for facsimile in root.iter():
+        if local_name(facsimile.tag) != "facsimile":
+            continue
+        for element in facsimile.iter():
+            if local_name(element.tag) == "graphic":
+                targets.append(element.get("target") or "")
+    return targets
+
+
+def _iiif_url_available(url: str, timeout: int) -> tuple[bool, str]:
+    try:
+        response = requests.get(
+            url,
+            timeout=timeout,
+            headers={"Range": "bytes=0-0", "User-Agent": "camat-iiif-check/1.0"},
+            stream=True,
+        )
+        response.close()
+        ok = 200 <= response.status_code < 400 or response.status_code == 206
+        return ok, f"HTTP {response.status_code}"
+    except requests.RequestException as exc:
+        return False, str(exc)
+
+
+def iiif_graphic_target_rows(
+    files: Iterable[Path],
+    *,
+    root: Path,
+    timeout: int = 15,
+) -> list[dict[str, str]]:
+    """Record missing, non-IIIF, or unreachable facsimile ``@target`` URLs."""
+    rows: list[dict[str, str]] = []
+    for path in files:
+        shown = _relative_path_text(path, root)
+        try:
+            targets = facsimile_graphic_targets(path)
+        except ET.ParseError as exc:
+            rows.append(
+                _report_row(
+                    severity="error",
+                    category="facsimile",
+                    check="iiif_graphic_target",
+                    file=shown,
+                    message=f"XML parse error: {exc}",
+                )
+            )
+            continue
+        if not targets:
+            rows.append(
+                _report_row(
+                    severity="error",
+                    category="facsimile",
+                    check="iiif_graphic_target",
+                    file=shown,
+                    message="Missing <facsimile>/<graphic @target>.",
+                )
+            )
+            continue
+        for target in targets:
+            if not target:
+                rows.append(
+                    _report_row(
+                        severity="error",
+                        category="facsimile",
+                        check="iiif_graphic_target",
+                        file=shown,
+                        element="graphic",
+                        message="Missing <graphic @target>.",
+                    )
+                )
+                continue
+            if not target.startswith(("http://", "https://")) or "/iiif/" not in target.lower():
+                rows.append(
+                    _report_row(
+                        severity="warning",
+                        category="facsimile",
+                        check="iiif_graphic_target",
+                        file=shown,
+                        element="graphic",
+                        message="Facsimile target is not an IIIF URL.",
+                        actual=target,
+                    )
+                )
+                continue
+            available, status = _iiif_url_available(target, timeout)
+            if not available:
+                rows.append(
+                    _report_row(
+                        severity="error",
+                        category="facsimile",
+                        check="iiif_graphic_target",
+                        file=shown,
+                        element="graphic",
+                        message=f"IIIF facsimile target is unavailable ({status}).",
+                        actual=target,
+                    )
+                )
+    return rows
+
+
+def figured_bass_report_rows(
+    files: Iterable[Path],
+    *,
+    root: Path,
+    apply: bool = False,
+) -> list[dict[str, str]]:
+    """Turn figured-bass startid checks into report rows. Does not rewrite unless ``apply``."""
+    rows: list[dict[str, str]] = []
+    for path in files:
+        result = convert_harm_startid_to_tstamp(path, apply=apply)
+        for row in result.rows:
+            if row.status == "convert" and apply:
+                severity = "info"
+                message = "Figured-bass harm was converted from startid to tstamp+staff."
+            elif row.status == "convert":
+                severity = "warning"
+                message = "Figured-bass harm uses startid and can be converted to tstamp+staff."
+            elif row.status == "skipped_cross_measure":
+                severity = "warning"
+                message = "Figured-bass startid points to a timed event in a different measure; inspect manually."
+            elif row.status == "unresolved":
+                severity = "error"
+                message = "Figured-bass startid target is missing or not a timed event."
+            else:
+                continue
+            rows.append(
+                _report_row(
+                    severity=severity,
+                    category="figured_bass",
+                    check="fb_startid_to_tstamp",
+                    file=row.file,
+                    line=str(row.line or ""),
+                    element="harm",
+                    measure_n=row.measure_n,
+                    staff_n=row.staff,
+                    message=message,
+                    expected=f'tstamp="{row.tstamp}" staff="{row.staff}"' if row.tstamp else "",
+                    actual=f'startid="#{row.startid}"',
+                    context=row.status,
+                )
+            )
+    return rows
+
+
+def page_break_facs_report_rows(
+    files: Iterable[Path],
+    *,
+    root: Path,
+    apply: bool = False,
+    overwrite: bool = False,
+) -> list[dict[str, str]]:
+    """Turn page-break facsimile-link checks into report rows. Does not rewrite unless ``apply``."""
+    rows: list[dict[str, str]] = []
+    for path in files:
+        result = link_pb_to_surface(path, apply=apply, overwrite=overwrite)
+        for row in result.rows:
+            if row.status == "ok":
+                continue
+            if row.status == "missing" and apply:
+                severity = "info"
+                message = "Page break @facs was linked to the source surface."
+            elif row.status == "missing":
+                severity = "warning"
+                message = "Page break has no @facs link to the source surface."
+            elif row.status == "mismatch" and apply and overwrite:
+                severity = "info"
+                message = "Page break @facs was updated to match the source surface."
+            elif row.status == "mismatch":
+                severity = "warning"
+                message = "Page break @facs does not match the following measure's source surface."
+            elif row.status == "unresolved":
+                severity = "error"
+                message = row.message
+            else:
+                continue
+            rows.append(
+                _report_row(
+                    severity=severity,
+                    category="facsimile",
+                    check="pb_facs_surface_link",
+                    file=row.file,
+                    line=str(row.line or ""),
+                    element="pb",
+                    measure_n=row.measure_n,
+                    xml_id=row.pb_id,
+                    message=message,
+                    expected=f'facs="#{row.expected_facs}"' if row.expected_facs else "",
+                    actual=f'facs="#{row.current_facs}"' if row.current_facs else "",
+                    context=row.status,
+                )
+            )
+    return rows
+
+
+def run_editorial_checks(
+    files: Iterable[Path],
+    *,
+    root: Path,
+    csv_out: Path,
+    json_out: Path | None = None,
+    check_ppq: bool = True,
+    publication_profile: bool = True,
+    check_relaxng: bool = True,
+    check_fb_tstamp: bool = True,
+    check_pb_facs: bool = True,
+    check_verovio: bool = True,
+    verovio_render_pages: bool = True,
+    check_iiif_links: bool = False,
+    iiif_timeout: int = 15,
+):
+    """Run the combined-score editorial check suite and return one report DataFrame.
+
+    This pass only writes report files. It does not rewrite the MEI sources.
+    """
+    import pandas as pd
+
+    files = list(files)
+    csv_out.parent.mkdir(parents=True, exist_ok=True)
+    run_checker(
+        files,
+        root=root,
+        csv_out=csv_out,
+        json_out=None,
+        check_ppq=check_ppq,
+        publication_profile=publication_profile,
+    )
+    df = load_report(csv_out)
+    extra_rows: list[dict[str, str]] = []
+    if check_fb_tstamp:
+        extra_rows.extend(figured_bass_report_rows(files, root=root, apply=False))
+    if check_pb_facs:
+        extra_rows.extend(page_break_facs_report_rows(files, root=root, apply=False))
+    if check_relaxng:
+        extra_rows.extend(run_relaxng_validation(files, root=root).rows)
+    if check_iiif_links:
+        extra_rows.extend(iiif_graphic_target_rows(files, root=root, timeout=iiif_timeout))
+    if check_verovio:
+        extra_rows.extend(
+            run_verovio_warning_check(files, root=root, render_pages=verovio_render_pages).rows
+        )
+
+    if extra_rows:
+        extra_df = pd.DataFrame(extra_rows, columns=VEROVIO_REPORT_COLUMNS)
+        df = pd.concat([df, extra_df], ignore_index=True)
+        df.to_csv(csv_out, index=False)
+
+    if json_out is not None:
+        json_out.parent.mkdir(parents=True, exist_ok=True)
+        json_out.write_text(
+            df.to_json(orient="records", force_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+    counts = Counter(str(value) for value in df.get("severity", []))
+    print(
+        f"Editorial checks: {len(files)} file(s), {len(df)} finding(s) "
+        f"(error={counts.get('error', 0)}, warning={counts.get('warning', 0)}, "
+        f"info={counts.get('info', 0)}). Wrote {csv_out}."
+    )
+    return df
+
+
 def report_summary(df):
     return (
         df.groupby(["severity", "category", "check"], dropna=False)
@@ -1588,6 +1954,13 @@ def annotate_mei_from_report(
     exclude_checks: set[str] | None = None,
     max_annotations: int = 100,
 ) -> AnnotationResult:
+    """Write selected report rows into ``<annot>`` on a copy of the MEI file.
+
+    Integrated with mei-friend-style in-editor review for small error sets.
+    For typical correction loops, prefer CSV/JSON from ``run_editorial_checks``:
+    mei-friend's ``annotationDisplayLimit`` (default 100) is much smaller than a
+    full report, and export is capped by ``max_annotations`` (default 100).
+    """
     severities = severities or {"error"}
     exclude_checks = exclude_checks or set()
     selected = report_df[report_df["severity"].isin(severities)].copy()

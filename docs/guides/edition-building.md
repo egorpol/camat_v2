@@ -1,7 +1,6 @@
 ---
 title: Handling MEI files
 ---
-
 # Handling MEI files
 
 Handling MEI files is the first CAMAT workflow. It covers the source document
@@ -15,17 +14,78 @@ IIIF acquisition, measure detection/integration, page coverage, validation,
 MEI cleanup/consistency, and facsimile-inspection helpers are now part of the
 `camat` Python package. The two repositories are intended to be joined later.
 
+Much of the current Workflow 1 tooling reflects the editorial path used for
+*Denkmäler deutscher Tonkunst*, volume 11 (Buxtehude instrumental works): page
+OMR from [musiconn.scoresearch](https://www.musiconn.de/services/musiconnscoresearch),
+BSB IIIF facsimiles, assembly into work-level MEI, correction in
+[mei-friend](https://mei-friend.mdw.ac.at/), and automated checks before
+publication. See the edition README in
+[`camat_corpus_editions` / `DdT_1_vol_11`](https://github.com/egorpol/camat_corpus_editions/tree/main/DdT_1_vol_11)
+and its [editorial workflow notes](https://github.com/egorpol/camat_corpus_editions/blob/main/DdT_1_vol_11/docs/editorial-workflow.md)
+for naming, status vocabulary, and the intended combine → check → correct loop.
+
+In that production loop, combined or corrected MEI files were edited in
+mei-friend, checked with the same passes exposed here, fixed from the report,
+and re-checked until no encoded inconsistency remained. The tutorial notebooks
+run those checks read-only; optional rewrite helpers stay in
+[`mei_corrected_full_checks.ipynb`](https://github.com/egorpol/camat_v2/blob/main/mei_corrected_full_checks.ipynb).
+
+A complementary workflow—natural-language MEI editing in a code editor together
+with [`mei_facsimile_viewer.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/mei_facsimile_viewer.ipynb)
+for visual verification—is documented in
+[`natural-language-mei-editing.md`](https://github.com/egorpol/camat_corpus/blob/main/natural-language-mei-editing.md)
+in `camat_corpus`. It is experimental and will be featured more fully in a
+later documentation pass.
+
 ## Choose a starting point
 
-| If you want to… | Start with |
-| --- | --- |
-| understand MEI elements, attributes, schemas, and document structure | [Introduction to MEI and XML](mei-introduction.md) |
-| paste or edit MEI and immediately render the score in Jupyter | [`mei_render.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/mei_render.ipynb) |
-| add a BSB IIIF facsimile and detected measure zones to one clean MEI file | [`mei_single_file_iiif_integration.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/mei_single_file_iiif_integration.ipynb) |
-| run corpus-style consistency checks and combine page files | [`mei_consistency_checks.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/mei_consistency_checks.ipynb) |
-| check corrected full-score files with schema, profile, page-link, and Verovio passes | [`mei_corrected_full_checks.ipynb`](https://github.com/egorpol/camat_v2/blob/main/mei_corrected_full_checks.ipynb) |
-| inspect notation together with linked facsimile zones | [`mei_facsimile_viewer.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/mei_facsimile_viewer.ipynb) |
-| build facsimile-linked MEI across a corpus | [Add a facsimile and measure zones](#add-a-facsimile-and-measure-zones) below |
+| If you want to…                                                                     | Start with                                                                                                                                  |
+| ------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| understand MEI elements, attributes, schemas, and document structure                 | [Introduction to MEI and XML](mei-introduction.md)                                                                                           |
+| paste or edit MEI and immediately render the score in Jupyter                        | [`mei_render.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/mei_render.ipynb)                                             |
+| inspect notation together with linked facsimile zones                                | [`mei_facsimile_viewer.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/mei_facsimile_viewer.ipynb)                         |
+| add a IIIF facsimile and detected measure zones to one clean MEI file                | [`mei_single_file_iiif_integration.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/mei_single_file_iiif_integration.ipynb) |
+| add IIIF facsimiles and measure zones to several MEI files                           | [`mei_batch_iiif_integration.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/mei_batch_iiif_integration.ipynb) |
+| run automated editorial checks on one or more MEI files (read-only)                  | [`mei_consistency_checks.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/mei_consistency_checks.ipynb) with `COMBINE_PAGES = False` |
+| join facsimile-linked page files into one score and check it                         | [`mei_consistency_checks.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/mei_consistency_checks.ipynb) with `COMBINE_PAGES = True` |
+| check corrected full-score files with optional rewrite/cleanup flags                 | [`mei_corrected_full_checks.ipynb`](https://github.com/egorpol/camat_v2/blob/main/mei_corrected_full_checks.ipynb)                         |
+| build facsimile-linked MEI across a corpus                                           | [Add a facsimile and measure zones](#add-a-facsimile-and-measure-zones) below                                                                |
+
+## Tutorial sequence
+
+Follow this order when learning Workflow 1 end to end. Each step links to the next
+guide or notebook; you can stop after any step if your file is not ready for the
+rest.
+
+1. **[Introduction to MEI and XML](mei-introduction.md)** — document structure,
+   identifiers, written vs gestural attributes, and what the later checks look for.
+2. **[`mei_render.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/mei_render.ipynb)** —
+   paste or edit MEI and render with Verovio while you work.
+3. **[`mei_facsimile_viewer.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/mei_facsimile_viewer.ipynb)** —
+   open an existing MEI (with or without facsimile data) and inspect layout and
+   links read-only.
+4. **IIIF integration** — add facsimile graphics and measure zones:
+   [`mei_single_file_iiif_integration.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/mei_single_file_iiif_integration.ipynb)
+   for one file, then
+   [`mei_batch_iiif_integration.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/mei_batch_iiif_integration.ipynb)
+   for many pages.
+5. **Editorial checks** —
+   [`mei_consistency_checks.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/mei_consistency_checks.ipynb):
+   - **`COMBINE_PAGES = False`** — check a single page right after IIIF integration,
+     several pages separately, or an already-combined full score;
+   - **`COMBINE_PAGES = True`** — optional next step when several page files belong
+     to one piece: prepare copies, join into `*_full.mei`, then run the same check
+     suite on the combined file;
+   - review **CSV/JSON reports** under `TARGET_DIR` (optional `<annot>` export is
+     integrated but limited by mei-friend's annotation display cap).
+6. **[`mei_facsimile_viewer.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/mei_facsimile_viewer.ipynb) again** —
+   inspect the checked page or combined score against the facsimile; repeat
+   edit → check → view until the report is acceptable.
+
+Maintainer notebooks such as
+[`mei_corrected_full_checks.ipynb`](https://github.com/egorpol/camat_v2/blob/main/mei_corrected_full_checks.ipynb)
+sit beside this sequence: same check passes, plus opt-in `CLEAN_*` / `FIX_*`
+rewrites for production corpora.
 
 The introductory guide was migrated from the project's earlier HfM Weimar
 wiki. The MkDocs copy is now the project version to maintain; the
@@ -67,15 +127,15 @@ MEI even when an analysis only uses note rows.
 
 ## Current boundary
 
-| Concern | Repository |
-| --- | --- |
-| DdT working data, facsimiles, annotations, and metadata | `camat_corpus` |
-| Corpus inputs, working data, run configuration, and reports | `camat_corpus` |
+| Concern                                                        | Repository                                 |
+| -------------------------------------------------------------- | ------------------------------------------ |
+| DdT working data, facsimiles, annotations, and metadata        | `camat_corpus`                           |
+| Corpus inputs, working data, run configuration, and reports    | `camat_corpus`                           |
 | Reusable IIIF, measure-zone, cleanup, and consistency pipeline | `camat_v2` / installed `camat` package |
-| MEI/facsimile link inspection | `camat_v2` / installed `camat` package |
-| General file conversion to analysis MEI | `camat_v2` |
-| MEI parsing and Python representations | `camat_v2` |
-| DataFrame and matrix analysis | `camat_v2` |
+| MEI/facsimile link inspection                                  | `camat_v2` / installed `camat` package |
+| General file conversion to analysis MEI                        | `camat_v2`                               |
+| MEI parsing and Python representations                         | `camat_v2`                               |
+| DataFrame and matrix analysis                                  | `camat_v2`                               |
 
 Until the repositories are merged, keep corpus-specific paths, inputs, images,
 annotations, and generated reports in `camat_corpus`. The installed package
@@ -103,6 +163,13 @@ the user explicitly enables the production flag, the notebook:
 4. verifies the local image against the IIIF URL that was fetched;
 5. writes and checks `{stem}_facs_zones.mei` with that IIIF graphic target.
 
+The batch notebook
+[`mei_batch_iiif_integration.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/mei_batch_iiif_integration.ipynb)
+runs the same job over a list of files (or a folder of already-named
+`bsb…_NNNNN.mei` pages) through `plan_iiif_pages` and `integrate_iiif_pages`.
+Its example is three clean Buxtehude pages in `test_corpus/`. Writes go to
+`converted_mei/iiif_batch/` and stay off until `RUN_IIIF_INTEGRATION` is True.
+
 The root-level maintainer notebooks expose the same production work at broader
 scales:
 
@@ -128,19 +195,64 @@ validate the final MEI. Individual commands such as
 require network access; reuse existing annotation XML when a repeated upload is
 not intended. See the [edition pipeline API](../api/edition_pipeline.md).
 
-## Check, combine, and annotate MEI
+## Check, combine, and review reports
 
-The copied corpus notebook
+The tutorial
 [`mei_consistency_checks.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/mei_consistency_checks.ipynb)
-prepares page-level files, runs the general consistency report, combines the
-pages, checks the combined file, and can create anchored MEI annotations from
-selected report rows. It imports the packaged `camat.mei_consistency_workflow`
-helpers; a separate `scripts/` checkout is no longer required.
+runs CAMAT's read-only editorial suite on explicit MEI paths. It supports two
+modes in one notebook:
 
-The more recent
+| Mode | Flag | Typical input |
+| --- | --- | --- |
+| Check only | `COMBINE_PAGES = False` | one `*_facs_zones.mei` page after IIIF integration, several pages checked separately, or an existing `*_full.mei` / `*_corr.mei` |
+| Combine then check | `COMBINE_PAGES = True` | several page files that belong to one piece (example: `test_corpus/buxtehude_pages/`) |
+
+After the user enables `RUN_PIPELINE`, the notebook writes **CSV/JSON reports**
+under `TARGET_DIR` (default `converted_mei/consistency_tutorial/`). In
+**check-only** mode that is typically `input_consistency_report.csv` plus
+`editorial_consistency_report.csv`. In **combine** mode it also writes prepared
+copies under `unique_ids/` and `noppq/`, a joined `{stem}_full.mei`, a
+`page_consistency_report.csv`, and `{stem}_full_consistency_report.csv`.
+`MEI_INPUTS` may list local paths, directories, or `http(s)://` links (cached on
+first use). Source files in `MEI_INPUTS` are not overwritten.
+
+**Recommended workflow:** open the CSV/JSON reports under `TARGET_DIR`, filter
+and track rows there (spreadsheet, pandas, or any text editor), correct the MEI
+in mei-friend, inspect with the facsimile viewer, and re-run until the findings
+you care about are resolved.
+
+### `<annot>` export (integrated, CSV preferred)
+
+CAMAT can also write selected findings into `<annot>` on a new
+`*_annotated.mei` via `annotate_mei_from_report(...)` and
+`ANNOTATE_COMBINED = True` in the notebook. That integration is useful for
+small, filtered error sets you want to step through inside mei-friend.
+
+In practice we rely on **CSV/JSON reports** because our correction loop runs
+through [mei-friend](https://mei-friend.mdw.ac.at/), and mei-friend only
+displays a limited number of annotations per score (`annotationDisplayLimit`,
+default **100**, maximum **300** in
+[settings](https://mei-friend.github.io/docs/basic/settings/)). A typical
+combined-score report has far more rows than that. CSV/JSON is a practical
+hand-off: easy to view, sort, filter, and edit while you fix the source MEI.
+
+CAMAT mirrors mei-friend's scale with `MAX_ANNOTATIONS` (default 100) when
+annotation export is enabled. The MEI schema itself does not cap `<annot>`
+count ([`annot` element](https://music-encoding.org/guidelines/v5/elements/annot.html));
+the limit is editor display, not encoding. For better support of large
+machine-generated validation sets in mei-friend, see
+[mei-friend/mei-friend issues](https://github.com/mei-friend/mei-friend/issues).
+
+Optional rewrite/cleanup flags stay in the maintainer notebook below.
+
+Checks include general consistency and publication-profile rules, figured-bass
+`@startid` anchors, page-break facsimile links, the packaged MEI 5.1 CMN RELAX NG
+schema, Verovio load/render warnings, and optional IIIF URL reachability.
+
+The maintainer notebook
 [`mei_corrected_full_checks.ipynb`](https://github.com/egorpol/camat_v2/blob/main/mei_corrected_full_checks.ipynb)
-checks already-combined score files. Configure its `ROOT` and
-`FULL_MEI_INPUTS`; its default flags are read-only. The passes cover:
+checks already-combined score files and can rewrite them. Configure its `ROOT`
+and `FULL_MEI_INPUTS`; its default flags are read-only. The passes cover:
 
 - internal references, identifiers, meters, durations, terms, and optional
   publication-profile rules;

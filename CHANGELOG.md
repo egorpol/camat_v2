@@ -17,11 +17,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `resolve_iiif_image_url`, `download_facsimile_image`, and `stage_mei_copy`.
   `detect_and_integrate_mei` now accepts an explicit `graphic_target` so the
   IIIF link does not have to come from the MEI filename.
+- Added `camat.iiif_page` (`plan_iiif_pages`, `integrate_iiif_pages`) and
+  `notebooks/mei_batch_iiif_integration.ipynb` for the same IIIF job over a
+  list of files. Extra Buxtehude example pages live in `test_corpus/`.
+- Added `prepare_pages_for_combine` and `run_editorial_checks` so the
+  combine-and-check notebook can run the corrected-full-MEI suite without
+  defining helpers. Example pages are in `test_corpus/buxtehude_pages/`.
 
 ### Changed
 
 - The single-file IIIF notebook uses `test_corpus/Buxtehude-Anhang-S._185_musicxml_verovio.mei`,
   no longer depends on `camat_corpus`, and can take a pasted IIIF image URL.
+  The batch notebook uses the same helpers for several pages.
+- The combine-and-check notebook no longer depends on `camat_corpus`.
 
 ## [0.2.1b1] - 2026-08-29
 

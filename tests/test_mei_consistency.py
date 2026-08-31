@@ -104,3 +104,92 @@ def test_figured_bass_and_page_break_helpers_support_dry_run_and_apply(
     assert 'tstamp="1"' in updated
     assert 'staff="1"' in updated
     assert '<pb xml:id="pb-1" facs="#surface-1" />' in updated
+
+
+def test_prepare_combine_and_editorial_check_rows(tmp_path: Path) -> None:
+    from camat import (
+        combine_meis,
+        facsimile_graphic_targets,
+        figured_bass_report_rows,
+        iiif_graphic_target_rows,
+        page_break_facs_report_rows,
+        prepare_pages_for_combine,
+        run_editorial_checks,
+    )
+
+    first = tmp_path / "page-a.mei"
+    second = tmp_path / "page-b.mei"
+    _write_editorial_fixture(first)
+    _write_editorial_fixture(second)
+
+    assert facsimile_graphic_targets(first) == ["scan.jpg"]
+    iiif_rows = iiif_graphic_target_rows([first], root=tmp_path)
+    assert any(row["check"] == "iiif_graphic_target" for row in iiif_rows)
+    assert figured_bass_report_rows([first], root=tmp_path)
+    assert page_break_facs_report_rows([first], root=tmp_path)
+
+    prepared = prepare_pages_for_combine([first, second], tmp_path / "prep")
+    assert len(prepared.files) == 2
+    combined = combine_meis(prepared.files, tmp_path / "full.mei")
+    assert combined.path.is_file()
+    assert combined.renumbered_measures >= 1
+
+    report = run_editorial_checks(
+        [combined.path],
+        root=tmp_path,
+        csv_out=tmp_path / "report.csv",
+        check_ppq=False,
+        publication_profile=False,
+        check_relaxng=False,
+        check_fb_tstamp=True,
+        check_pb_facs=True,
+        check_verovio=False,
+        check_iiif_links=True,
+    )
+    assert not report.empty
+    assert {"fb_startid_to_tstamp", "pb_facs_surface_link", "iiif_graphic_target"} <= set(
+        report["check"]
+    )
+
+
+def test_strip_accid_ges_text_and_prepare_pages(tmp_path: Path) -> None:
+    from camat import prepare_pages_for_combine
+    from camat.check_mei_consistency import strip_accid_ges_text
+
+    source = tmp_path / "page.mei"
+    source.write_text(
+        '<note xml:id="n1" pname="e" oct="4" dur="4" accid.ges="f" ppq="24" dur.ppq="24" />',
+        encoding="utf-8",
+    )
+
+    cleaned, removed = strip_accid_ges_text(source.read_text(encoding="utf-8"))
+    assert removed == 1
+    assert "accid.ges" not in cleaned
+    assert 'pname="e"' in cleaned
+
+    prepared = prepare_pages_for_combine(
+        [source],
+        tmp_path / "prep",
+        unique_xml_ids=False,
+        strip_ppq=True,
+        strip_accid_ges=True,
+    )
+    text = prepared.files[0].read_text(encoding="utf-8")
+    assert "accid.ges" not in text
+    assert "ppq" not in text
+
+
+def test_resolve_mei_inputs_accepts_http_links(tmp_path: Path, monkeypatch) -> None:
+    from camat import resolve_mei_inputs
+
+    cached = tmp_path / "remote.mei"
+    cached.write_text("<mei/>", encoding="utf-8")
+
+    def fake_resolve(source: str, *, repo_root: Path) -> Path:
+        assert source.startswith("https://")
+        return cached
+
+    monkeypatch.setattr("camat.facsimile_viewer.resolve_mei_source", fake_resolve)
+
+    resolved = resolve_mei_inputs(["https://example.org/sample.mei"], tmp_path)
+    assert resolved == [cached.resolve()]

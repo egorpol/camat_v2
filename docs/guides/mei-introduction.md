@@ -523,10 +523,12 @@ you switch between rendered pages without leaving Jupyter.
 
 When a clean MEI corresponds to a BSB source page, continue with
 [`mei_single_file_iiif_integration.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/mei_single_file_iiif_integration.ipynb)
-to add the IIIF facsimile and detected measure zones.
+for one file, or
+[`mei_batch_iiif_integration.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/mei_batch_iiif_integration.ipynb)
+for several pages.
 
 Rendering is a useful feedback loop, but a score that renders is not
 necessarily valid or editorially consistent. Continue with
-[Handling MEI files](edition-building.md#check-combine-and-annotate-mei) for schema
+[Handling MEI files](edition-building.md#check-combine-and-review-reports) for schema
 and consistency checks, or use the
 [Verovio Editor](https://editor.verovio.org/) as an external rendering tool.
