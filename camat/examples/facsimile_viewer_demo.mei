@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mei xmlns="http://www.music-encoding.org/ns/mei" meiversion="5.1">
+  <meiHead>
+    <fileDesc>
+      <titleStmt><title>CAMAT facsimile viewer demo</title></titleStmt>
+      <pubStmt><p>Bundled offline example</p></pubStmt>
+    </fileDesc>
+  </meiHead>
+  <music>
+    <facsimile>
+      <surface xml:id="demo-surface-1" n="1" ulx="0" uly="0" lrx="800" lry="1000">
+        <graphic target="facsimile_viewer_demo.svg" width="800" height="1000" mimetype="image/svg+xml"/>
+        <zone xml:id="demo-zone-1" type="measure" ulx="60" uly="150" lrx="400" lry="300"/>
+        <zone xml:id="demo-zone-2" type="measure" ulx="390" uly="150" lrx="740" lry="300"/>
+        <zone xml:id="demo-zone-3" type="measure" ulx="60" uly="590" lrx="400" lry="740"/>
+        <zone xml:id="demo-zone-4" type="measure" ulx="390" uly="590" lrx="740" lry="740"/>
+      </surface>
+    </facsimile>
+    <body>
+      <mdiv>
+        <score>
+          <scoreDef meter.count="4" meter.unit="4">
+            <staffGrp><staffDef n="1" lines="5" clef.shape="G" clef.line="2"/></staffGrp>
+          </scoreDef>
+          <section>
+            <pb xml:id="demo-pb-1" n="1" facs="#demo-surface-1"/>
+            <measure xml:id="demo-measure-1" n="1" facs="#demo-zone-1">
+              <staff n="1"><layer n="1">
+                <note xml:id="demo-note-1" pname="c" oct="4" dur="2"/>
+                <note xml:id="demo-note-2" pname="d" oct="4" dur="2"/>
+              </layer></staff>
+              <annot xml:id="demo-annot-plist" type="editorial" plist="#demo-note-2">
+                <p>This annotation uses @plist.</p>
+              </annot>
+            </measure>
+            <measure xml:id="demo-measure-2" n="2" facs="#demo-zone-2">
+              <staff n="1"><layer n="1">
+                <note xml:id="demo-note-3" pname="e" oct="4" dur="2"/>
+                <note xml:id="demo-note-4" pname="f" oct="4" dur="2"/>
+              </layer></staff>
+              <annot xml:id="demo-annot-tstamp" type="editorial" tstamp="3" staff="1">
+                <p>This annotation uses @tstamp.</p>
+              </annot>
+            </measure>
+            <sb xml:id="demo-sb-1"/>
+            <measure xml:id="demo-measure-3" n="3" facs="#demo-zone-3">
+              <staff n="1"><layer n="1">
+                <note xml:id="demo-note-5" pname="g" oct="4" dur="2"/>
+                <note xml:id="demo-note-6" pname="a" oct="4" dur="2"/>
+              </layer></staff>
+            </measure>
+            <measure xml:id="demo-measure-4" n="4" facs="#demo-zone-4">
+              <staff n="1"><layer n="1">
+                <note xml:id="demo-note-7" pname="b" oct="4" dur="2"/>
+                <note xml:id="demo-note-8" pname="c" oct="5" dur="2"/>
+              </layer></staff>
+            </measure>
+          </section>
+        </score>
+      </mdiv>
+    </body>
+  </music>
+</mei>

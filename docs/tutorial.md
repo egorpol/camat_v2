@@ -30,7 +30,7 @@ results, dfs_by_name, last_df = parse_files(
 ```
 
 The parser accepts MEI. Convert other formats first; see
-[File formats](guides/formats.md) and `notebooks/camat_formats.ipynb`.
+[Convert to MEI](guides/formats.md) and `notebooks/camat_formats.ipynb`.
 Formats Verovio does not support natively are imported by music21, exported to
 MusicXML, and then converted to final MEI by Verovio.
 

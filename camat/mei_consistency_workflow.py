@@ -59,6 +59,7 @@ class CombineResult:
     staff_names_written: int = 0
     staff_group_names_written: int = 0
     later_staff_names_removed: int = 0
+    inserted_page_score_defs: int = 0
 
 
 @dataclass
@@ -1609,6 +1610,139 @@ def _flattened_section_children(section: ET.Element) -> tuple[list[ET.Element], 
     return children, skipped_expansions
 
 
+def _opening_score_scoredef(root: ET.Element) -> ET.Element | None:
+    """Return the ``<scoreDef>`` that is a direct child of ``<score>``, if any."""
+    score = first_descendant(root, "score")
+    if score is None:
+        return None
+    return first_child(score, "scoreDef")
+
+
+def _first_element(score_def: ET.Element, tag: str) -> ET.Element | None:
+    return next((element for element in score_def.iter() if local_name(element.tag) == tag), None)
+
+
+def _scoredef_context(score_def: ET.Element) -> dict[str, object]:
+    """Summarize staff list, clefs, meter, and key from a ``<scoreDef>``."""
+    staff_ns: list[str] = []
+    clefs: dict[str, tuple[str | None, str | None]] = {}
+    meters: set[tuple[str | None, str | None]] = set()
+    keys: set[str] = set()
+
+    score_meter = (score_def.get("meter.count"), score_def.get("meter.unit"))
+    if score_meter != (None, None):
+        meters.add(score_meter)
+    if score_def.get("key.sig"):
+        keys.add(score_def.get("key.sig", ""))
+    direct_meter = first_child(score_def, "meterSig")
+    if direct_meter is not None:
+        meters.add((direct_meter.get("count"), direct_meter.get("unit")))
+    direct_key = first_child(score_def, "keySig")
+    if direct_key is not None and direct_key.get("sig"):
+        keys.add(direct_key.get("sig", ""))
+
+    for staff_def in score_def.iter():
+        if local_name(staff_def.tag) != "staffDef":
+            continue
+        staff_n = staff_def.get("n", "")
+        staff_ns.append(staff_n)
+        clef = _first_element(staff_def, "clef")
+        if clef is not None:
+            clefs[staff_n] = (clef.get("shape"), clef.get("line"))
+        meter = _first_element(staff_def, "meterSig")
+        if meter is not None:
+            meters.add((meter.get("count"), meter.get("unit")))
+        elif staff_def.get("meter.count"):
+            meters.add((staff_def.get("meter.count"), staff_def.get("meter.unit")))
+        key = _first_element(staff_def, "keySig")
+        if key is not None and key.get("sig"):
+            keys.add(key.get("sig", ""))
+
+    return {
+        "staff_ns": tuple(staff_ns),
+        "clefs": clefs,
+        "meters": frozenset(meters),
+        "keys": frozenset(keys),
+    }
+
+
+def _page_scoredef_needed(new: dict[str, object], active: dict[str, object]) -> bool:
+    """True when *new* encodes a staff/meter/key/clef change relative to *active*."""
+    new_staffs = new.get("staff_ns") or ()
+    if not new_staffs:
+        return False
+    if new_staffs != (active.get("staff_ns") or ()):
+        return True
+    new_clefs = new.get("clefs") or {}
+    active_clefs = active.get("clefs") or {}
+    for staff_n, clef in new_clefs.items():
+        if active_clefs.get(staff_n) != clef:
+            return True
+    new_meters = new.get("meters") or frozenset()
+    if new_meters and new_meters != (active.get("meters") or frozenset()):
+        return True
+    new_keys = new.get("keys") or frozenset()
+    if new_keys and new_keys != (active.get("keys") or frozenset()):
+        return True
+    return False
+
+
+def _update_scoredef_context(active: dict[str, object], new: dict[str, object]) -> None:
+    new_staffs = new.get("staff_ns") or ()
+    if new_staffs:
+        active["staff_ns"] = new_staffs
+        kept_clefs = {
+            staff_n: clef
+            for staff_n, clef in (active.get("clefs") or {}).items()
+            if staff_n in new_staffs
+        }
+        kept_clefs.update(new.get("clefs") or {})
+        active["clefs"] = kept_clefs
+    if new.get("meters"):
+        active["meters"] = new["meters"]
+    if new.get("keys"):
+        active["keys"] = new["keys"]
+
+
+def _scoredef_insert_index(children: list[ET.Element]) -> int:
+    if children and local_name(children[0].tag) == "pb":
+        return 1
+    return 0
+
+
+def _leading_scoredefs_before_measure(children: list[ET.Element], start: int) -> list[ET.Element]:
+    found: list[ET.Element] = []
+    for child in children[start:]:
+        tag = local_name(child.tag)
+        if tag == "measure":
+            break
+        if tag == "scoreDef":
+            found.append(child)
+    return found
+
+
+def _maybe_insert_page_scoredef(
+    children: list[ET.Element],
+    page_scoredef: ET.Element | None,
+    active: dict[str, object],
+) -> bool:
+    """Insert *page_scoredef* at the page join if it changes encoding context."""
+    if page_scoredef is None:
+        return False
+    new_context = _scoredef_context(page_scoredef)
+    if not _page_scoredef_needed(new_context, active):
+        return False
+    insert_at = _scoredef_insert_index(children)
+    for existing in _leading_scoredefs_before_measure(children, insert_at):
+        existing_context = _scoredef_context(existing)
+        if existing_context.get("staff_ns") and not _page_scoredef_needed(new_context, existing_context):
+            _update_scoredef_context(active, existing_context)
+            return False
+    children.insert(insert_at, copy.deepcopy(page_scoredef))
+    _update_scoredef_context(active, new_context)
+    return True
+
+
 def combine_meis(
     files: Iterable[Path],
     output_path: Path,
@@ -1622,7 +1756,17 @@ def combine_meis(
     staff_group_abbreviation: str | None = None,
     keep_original_staff_names: bool = False,
     staff_names_only_at_start: bool = True,
+    include_page_score_defs: bool = True,
 ) -> CombineResult:
+    """Join page-level MEI files into one score.
+
+    Later pages contribute facsimile surfaces and flattened ``<section>``
+    children. Each later page's opening ``<scoreDef>`` (the sibling of
+    ``<section>``, which holds that page's staff list and meter) is copied
+    into the combined section when it changes staffing, meter, key, or
+    clefs. Identical page headers are left out. Set
+    ``include_page_score_defs=False`` to keep the old section-only join.
+    """
     files = list(files)
     if not files:
         raise FileNotFoundError("No active MEI files to combine")
@@ -1635,6 +1779,14 @@ def combine_meis(
     if base_section is None:
         raise ValueError(f"No <section> found in {base_path}")
 
+    opening = _opening_score_scoredef(base_root)
+    active_context: dict[str, object] = _scoredef_context(opening) if opening is not None else {
+        "staff_ns": (),
+        "clefs": {},
+        "meters": frozenset(),
+        "keys": frozenset(),
+    }
+    inserted_page_score_defs = 0
     skipped_expansions = 0
     for page_index, path in enumerate(files[1:], start=2):
         page_root = ET.parse(path).getroot()
@@ -1650,6 +1802,13 @@ def combine_meis(
                     base_facsimile.append(copied_surface)
         section_children, page_skipped = _flattened_section_children(page_section)
         skipped_expansions += page_skipped
+        if include_page_score_defs:
+            if _maybe_insert_page_scoredef(
+                section_children,
+                _opening_score_scoredef(page_root),
+                active_context,
+            ):
+                inserted_page_score_defs += 1
         for child in section_children:
             base_section.append(child)
 
@@ -1681,6 +1840,7 @@ def combine_meis(
         staff_names_written,
         staff_group_names_written,
         later_staff_names_removed,
+        inserted_page_score_defs,
     )
 
 

@@ -9,10 +9,9 @@ symbolic music. The broader project covers edition-building, format conversion,
 Python representations, DataFrame and matrix analysis, pattern search, and
 score rendering.
 
-This repository contains conversion, parsing, representation, analysis, and
-rendering code. Edition-building and corpus-production tools currently live in
-the separate [`camat_corpus`](https://github.com/egorpol/camat_corpus)
-repository; the projects are intended to be joined later.
+This repository contains conversion, parsing, representation, analysis,
+rendering, and MEI editorial tooling. Working edition files live in separate
+volume repositories; see [Edition corpora](docs/guides/edition-corpora.md).
 
 Supports Python 3.11+
 
@@ -110,8 +109,8 @@ Workflow one now includes reusable inspection and validation components. Open
 or use `mei_corrected_full_checks.ipynb` as the maintainer probe for schema,
 publication-profile, musical-consistency, page-link, and Verovio checks.
 `single_mei_iiif_integration.ipynb` and `run_pipeline_workflow.ipynb` wrap the
-packaged single-page and batch IIIF/measure-zone pipeline. Corpus data and run
-configuration remain in `camat_corpus`.
+packaged single-page and batch IIIF/measure-zone pipeline. Working MEI for the
+DdT volumes lives in the [edition corpora](docs/guides/edition-corpora.md).
 
 ## Release Testing
 
@@ -132,6 +131,12 @@ matrix commands, smoke-test coverage, and the tag-to-PyPI checklist.
 - `CHANGELOG.md`: release notes.
 - `test_corpus/`: URL manifests for public score corpora (no checked-in
   scores). See [Test sources](docs/guides/sources.md).
+
+## Funding
+
+CAMAT is funded by the German Research Foundation (DFG), programme
+Library and Information Services — E-Research Technologies (LIS), grant
+PF 669/18-1.
 
 ## License
 

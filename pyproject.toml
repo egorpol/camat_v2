@@ -58,7 +58,7 @@ include-package-data = false
 include = ["camat*"]
 
 [tool.setuptools.package-data]
-camat = ["examples/*.mei", "schemas/*.rng"]
+camat = ["examples/*.mei", "examples/*.svg", "schemas/*.rng"]
 
 [tool.setuptools.dynamic]
 dependencies = { file = ["requirements.txt"] }

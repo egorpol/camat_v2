@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import contextlib
+import json
+import os
 from pathlib import Path
 
 import pytest
@@ -10,11 +12,15 @@ from camat.facsimile_viewer import (
     FacsimileViewerCache,
     FacsimileUnavailableError,
     InteractiveFacsimileViewer,
+    apply_facsimile_layout,
     build_facsimile_viewer,
     build_verovio_options,
     make_viewer_html,
+    embed_viewer_html,
     read_facsimile_model,
     render_verovio_pages,
+    resolve_graphic_src,
+    resolve_mei_source_info,
     score_content_hash,
 )
 
@@ -72,6 +78,18 @@ def test_read_facsimile_model_resolves_local_graphic(tmp_path: Path) -> None:
     assert len(model["surfaces"]) == 1
     assert model["linked"][0]["measure_id"] == "measure-1"
     assert model["missing_facs"] == []
+
+
+def test_resolve_graphic_src_accepts_file_uri(tmp_path: Path) -> None:
+    image_path = tmp_path / "scan.svg"
+    image_path.write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="20"/>',
+        encoding="utf-8",
+    )
+
+    result = resolve_graphic_src(image_path.as_uri(), tmp_path / "score.mei")
+
+    assert result.startswith("data:image/svg+xml;base64,")
 
 
 def test_read_facsimile_model_rejects_unresolved_measure_link(tmp_path: Path) -> None:
@@ -378,8 +396,11 @@ def test_viewer_page_controls_initialize_after_dom_attachment(tmp_path: Path) ->
     )
 
     assert 'class="score-next"' in html
-    assert "function initializeViewer()" in html
-    assert "window.setTimeout(initializeViewer, 0)" in html
+    assert "function initializeViewer(root)" in html
+    assert "function initializeAttachedViewers()" in html
+    assert 'document.querySelectorAll(\'[id="\' + viewerId + \'"]\')' in html
+    assert "window.setTimeout(initializeAttachedViewers, 0)" in html
+    assert "MutationObserver" in html
     assert "root.dataset.camatViewerInitialized" in html
     assert 'class="score-zoom-out"' in html
     assert '<button type="button" class="facsimile-zoom-out"' not in html
@@ -454,11 +475,244 @@ def test_resolve_mei_source_accepts_local_and_remote_paths(
     downloaded = tmp_path / "downloaded.mei"
     downloaded.write_text("<mei/>", encoding="utf-8")
     blob = "https://github.com/owner/repo/blob/main/score.mei"
+    refresh_flags: list[bool] = []
 
-    def fake_get_file_path(file_source: str, **_: object) -> str:
+    def fake_get_file_path(file_source: str, **kwargs: object) -> str:
         assert file_source == blob
+        refresh_flags.append(bool(kwargs.get("force_refresh")))
         return str(downloaded)
 
     monkeypatch.setattr("camat.music_utils.get_file_path", fake_get_file_path)
 
     assert resolve_mei_source(blob, cache_dir=tmp_path / "cache") == downloaded.resolve()
+    assert resolve_mei_source(
+        blob,
+        cache_dir=tmp_path / "cache",
+        refresh_remote=True,
+    ) == downloaded.resolve()
+    assert refresh_flags == [False, True]
+
+
+def test_resolve_mei_source_supports_file_uris_and_rejects_foreign_windows_paths(
+    tmp_path: Path,
+) -> None:
+    mei_path = tmp_path / "path with spaces.mei"
+    _write_facsimile_mei(mei_path)
+
+    info = resolve_mei_source_info(mei_path.as_uri())
+
+    assert info.kind == "file-uri"
+    assert info.local_path == mei_path.resolve()
+    if os.name != "nt":
+        with pytest.raises(FileNotFoundError, match="Windows path"):
+            resolve_mei_source_info(r"C:\\Editions\\score.mei", repo_root=tmp_path)
+        with pytest.raises(FileNotFoundError, match="Windows path"):
+            resolve_mei_source_info(r"\\server\share\score.mei", repo_root=tmp_path)
+
+
+def test_remote_mei_resolves_relative_graphic_against_original_url(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    downloaded = tmp_path / "downloaded.mei"
+    _write_facsimile_mei(downloaded)
+
+    monkeypatch.setattr(
+        "camat.music_utils.get_file_path",
+        lambda *_args, **_kwargs: str(downloaded),
+    )
+
+    model = read_facsimile_model("https://example.org/editions/page.mei")
+
+    assert model["source"].kind == "remote"
+    assert model["surfaces"][0]["graphic_src"] == (
+        "https://example.org/editions/scan.svg"
+    )
+
+
+def test_bundled_demo_resolves_plist_and_tstamp_annotations() -> None:
+    demo = Path(__file__).parents[1] / "camat" / "examples" / "facsimile_viewer_demo.mei"
+
+    result = build_facsimile_viewer(
+        demo,
+        verovio_options={
+            "breaks": "encoded",
+            "footer": "none",
+            "pageWidth": 2100,
+            "pageHeight": 2970,
+            "scale": 35,
+        },
+        viewer_id="annotation-test",
+    )
+    annotations = {row["id"]: row for row in result["model"]["annotations"]}
+
+    assert annotations["demo-annot-plist"]["target_ids"] == ["demo-note-2"]
+    assert annotations["demo-annot-plist"]["status"] == "resolved"
+    assert annotations["demo-annot-tstamp"]["target_ids"] == ["demo-note-4"]
+    assert annotations["demo-annot-tstamp"]["status"] == "resolved"
+    assert "Highlight annotations (2)" in result["html"]
+    assert 'data-annotation-id="demo-annot-tstamp"' in result["html"]
+    assert "applyAnnotationVisibility" in result["html"]
+
+
+def test_facsimile_layout_is_inferred_and_applied_without_writing_source(
+    tmp_path: Path,
+) -> None:
+    demo = Path(__file__).parents[1] / "camat" / "examples" / "facsimile_viewer_demo.mei"
+    source_text = demo.read_text(encoding="utf-8")
+    source_text = source_text.replace(
+        '<pb xml:id="demo-pb-1" n="1" facs="#demo-surface-1"/>', ""
+    ).replace('<sb xml:id="demo-sb-1"/>', "")
+    source_path = tmp_path / "without-breaks.mei"
+    source_path.write_text(source_text, encoding="utf-8")
+    (tmp_path / "facsimile_viewer_demo.svg").write_text(
+        (demo.parent / "facsimile_viewer_demo.svg").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    model = read_facsimile_model(source_path)
+
+    assert [row["measure_id"] for row in model["layout"]["missing_page_breaks"]] == [
+        "demo-measure-1"
+    ]
+    assert model["layout"]["missing_system_breaks"] == ["demo-measure-3"]
+
+    aligned_text, layout = apply_facsimile_layout(source_text, model)
+
+    assert source_path.read_text(encoding="utf-8") == source_text
+    assert 'facs="#demo-surface-1"' in aligned_text
+    assert "camat-inferred-sb-1" in aligned_text
+    assert layout["applied_page_breaks"] == ["demo-measure-1"]
+    assert layout["applied_system_breaks"] == ["demo-measure-3"]
+
+
+def test_interactive_refreshes_use_distinct_render_ids(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mei_path = tmp_path / "page.mei"
+    _write_facsimile_mei(mei_path)
+    viewer = InteractiveFacsimileViewer(mei_path, viewer_id="stable-viewer")
+    render_ids: list[str] = []
+
+    def fake_build(*_args: object, **kwargs: object) -> dict:
+        render_ids.append(str(kwargs["viewer_id"]))
+        return {"cache": viewer.cache}
+
+    monkeypatch.setattr(facsimile_viewer, "build_facsimile_viewer", fake_build)
+
+    viewer._build_viewer(render_score=True)
+    viewer._build_viewer(render_score=False)
+
+    assert render_ids[0].startswith("stable-viewer-render-1-")
+    assert render_ids[1].startswith("stable-viewer-render-2-")
+    assert render_ids[0] != render_ids[1]
+
+
+def test_embed_viewer_html_uses_iframe_srcdoc_and_escapes_markup() -> None:
+    wrapped = embed_viewer_html('<div id="v">quote="x" & y</div>', min_height=120)
+
+    assert wrapped.startswith('<iframe class="camat-mei-viewer-frame"')
+    assert 'sandbox="allow-scripts allow-same-origin"' in wrapped
+    assert "min-height:120px" in wrapped
+    assert "&lt;div id=&quot;v&quot;&gt;" in wrapped
+    assert "&amp; y" in wrapped
+    assert "<div id=" not in wrapped
+    assert "syncHeight" in wrapped
+
+
+def test_display_publishes_a_single_widget_with_iframe_html(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mei_path = tmp_path / "page.mei"
+    _write_facsimile_mei(mei_path)
+
+    class FakeWidgets:
+        class Layout:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+
+        class Button:
+            def __init__(self, **kwargs):
+                self.description = kwargs.get("description")
+                self.clicks = []
+
+            def on_click(self, fn) -> None:
+                self.clicks.append(fn)
+
+        class ToggleButton:
+            def __init__(self, **kwargs):
+                self.value = kwargs.get("value", False)
+
+            def observe(self, fn, names=None) -> None:
+                return None
+
+        class HTML:
+            def __init__(self, value="", layout=None):
+                self.value = value
+                self.layout = layout
+
+        class HBox:
+            def __init__(self, children):
+                self.children = children
+
+        class VBox:
+            def __init__(self, children):
+                self.children = children
+
+    displayed: list = []
+
+    def fake_display(*args: object, **_: object) -> None:
+        displayed.append(args)
+
+    viewer = InteractiveFacsimileViewer(mei_path, auto_watch_mei=False, viewer_max_height=200)
+    viewer._widgets = FakeWidgets
+    viewer._get_ipython = lambda: None
+    viewer._display = fake_display
+    monkeypatch.setattr(
+        viewer,
+        "_build_viewer",
+        lambda **_: {
+            "html": '<div id="viewer-root"></div>',
+            "summary": "ok",
+            "score_render": {"page_count": 1},
+            "rendered_score": True,
+            "model": {"has_facsimile": True},
+            "cache": viewer.cache,
+        },
+    )
+
+    returned = viewer.display()
+
+    assert returned is viewer
+    assert len(displayed) == 1
+    assert len(displayed[0]) == 1
+    assert isinstance(displayed[0][0], FakeWidgets.VBox)
+    assert displayed[0][0].children[-1] is viewer.viewer_html
+    assert viewer.viewer_html.value.startswith('<iframe class="camat-mei-viewer-frame"')
+    assert "srcdoc=" in viewer.viewer_html.value
+    assert "ok" in viewer.status_html.value
+    assert "1 Verovio score page" in viewer.status_html.value
+
+
+def test_facsimile_notebook_is_portable_and_has_no_persisted_widget_state() -> None:
+    notebook_path = (
+        Path(__file__).parents[1] / "notebooks" / "mei_facsimile_viewer.ipynb"
+    )
+    notebook = json.loads(notebook_path.read_text(encoding="utf-8"))
+    code = "\n".join(
+        "".join(cell.get("source", []))
+        for cell in notebook["cells"]
+        if cell["cell_type"] == "code"
+    )
+
+    assert "import setup_camat\nfrom camat import" in code
+    assert 'MEI_SOURCE = "camat/examples/facsimile_viewer_demo.mei"' in code
+    assert "SHOW_ANNOTATIONS = True" in code
+    assert "ALIGN_TO_FACSIMILE = False" in code
+    assert all(
+        cell.get("execution_count") is None and not cell.get("outputs")
+        for cell in notebook["cells"]
+        if cell["cell_type"] == "code"
+    )
+    assert "widgets" not in notebook.get("metadata", {})

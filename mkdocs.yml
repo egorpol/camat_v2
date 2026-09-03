@@ -11,6 +11,9 @@ docs_dir: docs
 theme:
   name: material
 
+extra_css:
+  - stylesheets/extra.css
+
 plugins:
   - search
   - mkdocstrings:
@@ -38,6 +41,7 @@ nav:
   - Start:
       - Home: index.md
       - What CAMAT is: overview.md
+      - Edition corpora: guides/edition-corpora.md
       - Notebook roadmap: notebooks.md
       - Known limitations: known-limitations.md
   - Workflows:
@@ -45,13 +49,13 @@ nav:
           - Workflow overview: guides/edition-building.md
           - Introduction to MEI and XML: guides/mei-introduction.md
       - 2. Convert to MEI:
-          - Choose a conversion route: guides/formats.md
+          - Workflow overview: guides/formats.md
           - Batch conversion: guides/batch-conversion.md
+          - Test sources: guides/sources.md
       - 3. Parse and represent MEI: guides/parsing-representations.md
       - 4. Analyse representations: guides/analysis.md
   - Further guides:
       - Backend and specialized parsing: tutorial.md
-      - Test sources: guides/sources.md
       - Release testing: releasing.md
   - Reference:
       - Overview: reference.md

@@ -4,6 +4,10 @@ title: Parse and represent MEI
 
 # Parse and represent MEI
 
+This is **CAMAT workflow 3**. Showcase notebooks for this workflow are still
+thin; this page is the current guide. A general parse-to-tables tutorial will
+follow.
+
 Parsing is the boundary between the MEI document and Python. CAMAT reads the
 score without replacing it and returns representations suited to inspection,
 filtering, plotting, and analysis.

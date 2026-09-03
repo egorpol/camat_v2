@@ -4,7 +4,7 @@ title: Test sources
 
 # Test sources
 
-CAMAT's parser and conversion tests pull scores from public GitHub corpora.
+These public corpora feed **workflow 2** (conversion) and parser tests.
 Remote entries are **raw file URLs**, not GitHub HTML pages. Local `.txt`
 manifests ignore blank lines and lines that start with `#`.
 
@@ -137,4 +137,4 @@ conda run -n py311 python scripts/test_verovio_parser_robustness.py \
 
 For conversion of mixed formats, see [Batch conversion](batch-conversion.md).
 For a single URL, pass `is_url=True` to `vrv_convert_to_mei(...)` as shown in
-[File formats](formats.md).
+[Convert to MEI](formats.md).

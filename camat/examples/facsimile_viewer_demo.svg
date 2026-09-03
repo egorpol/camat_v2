@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="1000" viewBox="0 0 800 1000">
+  <rect width="800" height="1000" fill="#f7f2e7"/>
+  <g fill="none" stroke="#4b453d" stroke-width="3">
+    <path d="M70 180H730 M70 195H730 M70 210H730 M70 225H730 M70 240H730"/>
+    <path d="M70 620H730 M70 635H730 M70 650H730 M70 665H730 M70 680H730"/>
+    <path d="M70 180V240 M390 180V240 M730 180V240"/>
+    <path d="M70 620V680 M390 620V680 M730 620V680"/>
+  </g>
+  <g fill="#4b453d">
+    <circle cx="150" cy="218" r="10"/><circle cx="235" cy="203" r="10"/>
+    <circle cx="470" cy="225" r="10"/><circle cx="565" cy="210" r="10"/>
+    <circle cx="150" cy="658" r="10"/><circle cx="235" cy="643" r="10"/>
+    <circle cx="470" cy="665" r="10"/><circle cx="565" cy="650" r="10"/>
+  </g>
+  <g fill="#5f574d" font-family="serif" font-size="24">
+    <text x="70" y="130">CAMAT facsimile viewer demo</text>
+    <text x="75" y="280">1</text><text x="400" y="280">2</text>
+    <text x="75" y="720">3</text><text x="400" y="720">4</text>
+  </g>
+</svg>

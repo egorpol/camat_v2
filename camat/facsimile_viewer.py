@@ -3,8 +3,8 @@
 Pure helpers parse MEI, render Verovio SVG pages, and return HTML. The
 :class:`InteractiveFacsimileViewer` and
 :func:`launch_interactive_facsimile_viewer` entry points add Jupyter controls
-and optional MEI file watching. The viewer accepts a local MEI path or an HTTP(S)
-link: files with facsimile surfaces, measure zones, and matching measure
+and optional MEI file watching. The viewer accepts a local MEI path, ``file://``
+URI, or HTTP(S) link: files with facsimile surfaces, measure zones, and matching measure
 ``@facs`` links get a linked two-pane view, while files without those records
 get a score-only view.
 """
@@ -18,12 +18,13 @@ import hashlib
 import json
 import math
 import mimetypes
-from pathlib import Path
+import os
+from pathlib import Path, PureWindowsPath
 import re
 import threading
 import time
 from typing import Any, Callable
-from urllib.parse import urlparse
+from urllib.parse import unquote, urljoin, urlparse
 import uuid
 import xml.etree.ElementTree as ET
 
@@ -44,6 +45,8 @@ __all__ = [
     "FacsimileViewerCache",
     "FacsimileUnavailableError",
     "InteractiveFacsimileViewer",
+    "ResolvedMeiSource",
+    "apply_facsimile_layout",
     "build_facsimile_viewer",
     "build_verovio_options",
     "display_path",
@@ -52,12 +55,15 @@ __all__ = [
     "launch_interactive_facsimile_viewer",
     "make_diagnostic_table",
     "make_viewer_html",
+    "embed_viewer_html",
     "mei_file_fingerprint",
+    "infer_facsimile_layout",
     "probe_note_pname",
     "read_facsimile_model",
     "render_verovio_pages",
     "resolve_graphic_src",
     "resolve_mei_source",
+    "resolve_mei_source_info",
     "resolve_repo_path",
     "score_content_hash",
     "verovio_options_hash",
@@ -66,6 +72,16 @@ __all__ = [
 
 class FacsimileUnavailableError(RuntimeError):
     """Raised when an MEI has no usable facsimile surface to inspect."""
+
+
+@dataclass(frozen=True)
+class ResolvedMeiSource:
+    """A local MEI path together with the provenance needed by the viewer."""
+
+    original: str
+    kind: str
+    local_path: Path
+    base_uri: str | None = None
 
 
 def find_camat_root(start: Path | None = None) -> Path:
@@ -103,38 +119,110 @@ def _default_mei_cache_dir(repo_root: Path | None = None) -> Path:
     return Path(get_download_cache_dir())
 
 
-def resolve_mei_source(
-    source: str | Path,
+def _is_windows_absolute_path(source: str) -> bool:
+    """Return whether ``source`` is a Windows drive or UNC absolute path."""
+    return PureWindowsPath(source).is_absolute()
+
+
+def _path_from_file_uri(source: str) -> Path:
+    parsed = urlparse(source)
+    if parsed.scheme.lower() != "file":
+        raise ValueError(f"Not a file URI: {source}")
+
+    path_text = unquote(parsed.path)
+    if os.name == "nt":
+        if parsed.netloc and parsed.netloc.lower() != "localhost":
+            path_text = f"//{parsed.netloc}{path_text}"
+        elif re.match(r"^/[A-Za-z]:/", path_text):
+            path_text = path_text[1:]
+    elif parsed.netloc and parsed.netloc.lower() != "localhost":
+        path_text = f"//{parsed.netloc}{path_text}"
+    return Path(path_text)
+
+
+def resolve_mei_source_info(
+    source: str | Path | ResolvedMeiSource,
     *,
     repo_root: Path | None = None,
     cache_dir: str | Path | None = None,
     timeout_seconds: int = 60,
-) -> Path:
-    """Return a local MEI path from a local file or an HTTP(S) link.
+    refresh_remote: bool = False,
+) -> ResolvedMeiSource:
+    """Resolve an MEI source while retaining its local or remote provenance."""
+    if isinstance(source, ResolvedMeiSource):
+        return source
 
-    GitHub ``blob`` pages are converted to raw-file URLs. Remote files are
-    cached under ``converted_mei/facsimile_viewer_sources/`` when this is a
-    CAMAT checkout, otherwise under the shared CAMAT download cache.
-    """
     root = (repo_root or find_camat_root()).resolve()
     source_text = str(source)
-    if source_text.startswith(("http://", "https://")):
-        from .music_utils import get_file_path
+    parsed = urlparse(source_text)
+    scheme = parsed.scheme.lower()
 
-        resolved_cache = Path(cache_dir) if cache_dir is not None else _default_mei_cache_dir(root)
-        return Path(
+    if scheme in {"http", "https"}:
+        from .music_utils import get_file_path, to_direct_download_url
+
+        resolved_cache = (
+            Path(cache_dir) if cache_dir is not None else _default_mei_cache_dir(root)
+        )
+        local_path = Path(
             get_file_path(
                 source_text,
                 timeout_seconds=timeout_seconds,
                 use_cache=True,
                 cache_dir=str(resolved_cache),
+                force_refresh=refresh_remote,
             )
         ).resolve()
+        direct_url = to_direct_download_url(source_text)
+        return ResolvedMeiSource(
+            original=source_text,
+            kind="remote",
+            local_path=local_path,
+            base_uri=direct_url,
+        )
 
-    local_path = resolve_repo_path(source, repo_root=root)
+    if scheme == "file":
+        local_path = _path_from_file_uri(source_text).expanduser().resolve()
+        kind = "file-uri"
+    else:
+        if _is_windows_absolute_path(source_text) and os.name != "nt":
+            raise FileNotFoundError(
+                f"Windows path {source_text!r} cannot be opened on this {os.name} host. "
+                "Mount the drive/share locally or use an HTTP(S) URL."
+            )
+        local_path = resolve_repo_path(source, repo_root=root)
+        kind = "local"
+
     if not local_path.is_file():
         raise FileNotFoundError(f"No MEI file at {local_path}")
-    return local_path
+    return ResolvedMeiSource(
+        original=source_text,
+        kind=kind,
+        local_path=local_path,
+        base_uri=local_path.parent.as_uri() + "/",
+    )
+
+
+def resolve_mei_source(
+    source: str | Path | ResolvedMeiSource,
+    *,
+    repo_root: Path | None = None,
+    cache_dir: str | Path | None = None,
+    timeout_seconds: int = 60,
+    refresh_remote: bool = False,
+) -> Path:
+    """Return a local MEI path from a local file, file URI, or HTTP(S) link.
+
+    GitHub ``blob`` pages are converted to raw-file URLs. Remote files are
+    cached under ``converted_mei/facsimile_viewer_sources/`` when this is a
+    CAMAT checkout, otherwise under the shared CAMAT download cache.
+    """
+    return resolve_mei_source_info(
+        source,
+        repo_root=repo_root,
+        cache_dir=cache_dir,
+        timeout_seconds=timeout_seconds,
+        refresh_remote=refresh_remote,
+    ).local_path
 
 
 def parse_int_attr(element: ET.Element, attr: str, *, context: str) -> int:
@@ -147,13 +235,25 @@ def parse_int_attr(element: ET.Element, attr: str, *, context: str) -> int:
         raise ValueError(f"Invalid @{attr}={value!r} on {context}") from exc
 
 
-def resolve_graphic_src(target: str, mei_path: Path) -> str:
+def resolve_graphic_src(
+    target: str,
+    mei_path: Path,
+    *,
+    base_uri: str | None = None,
+) -> str:
     """Return a browser-usable image source for a graphic target."""
     parsed = urlparse(target)
     if parsed.scheme in {"http", "https", "data"}:
         return target
 
-    image_path = Path(target).expanduser()
+    if base_uri and urlparse(base_uri).scheme in {"http", "https"}:
+        return urljoin(base_uri, target)
+
+    image_path = (
+        _path_from_file_uri(target).expanduser()
+        if parsed.scheme == "file"
+        else Path(target).expanduser()
+    )
     if not image_path.is_absolute():
         image_path = mei_path.parent / image_path
     image_path = image_path.resolve()
@@ -165,8 +265,261 @@ def resolve_graphic_src(target: str, mei_path: Path) -> str:
     return f"data:{mime_type};base64,{payload}"
 
 
+def _local_name(element: ET.Element) -> str:
+    return element.tag.rsplit("}", 1)[-1]
+
+
+def _ancestor_named(
+    element: ET.Element,
+    name: str,
+    parent_map: dict[ET.Element, ET.Element],
+) -> ET.Element | None:
+    current = parent_map.get(element)
+    while current is not None:
+        if _local_name(current) == name:
+            return current
+        current = parent_map.get(current)
+    return None
+
+
+def _read_annotation_models(root: ET.Element) -> list[dict]:
+    """Read score annotations without relying on Verovio's empty SVG groups."""
+    parent_map = {child: parent for parent in root.iter() for child in parent}
+    annotations = []
+    for index, annotation in enumerate(root.findall(".//m:annot", NS), start=1):
+        measure = _ancestor_named(annotation, "measure", parent_map)
+        plist = [
+            token.lstrip("#")
+            for token in (annotation.get("plist") or "").split()
+            if token.strip("#")
+        ]
+        tstamp = (annotation.get("tstamp") or "").strip()
+        startid = (annotation.get("startid") or "").lstrip("#")
+        if plist:
+            anchor_mode = "plist"
+            targets = plist
+        elif tstamp:
+            anchor_mode = "tstamp"
+            targets = []
+        elif startid:
+            anchor_mode = "startid"
+            targets = [startid]
+        else:
+            anchor_mode = "unanchored"
+            targets = []
+
+        staff = (annotation.get("staff") or "").split()
+        layer = (annotation.get("layer") or "").split()
+        staff_ancestor = _ancestor_named(annotation, "staff", parent_map)
+        layer_ancestor = _ancestor_named(annotation, "layer", parent_map)
+        if not staff and staff_ancestor is not None and staff_ancestor.get("n"):
+            staff = [staff_ancestor.get("n") or ""]
+        if not layer and layer_ancestor is not None and layer_ancestor.get("n"):
+            layer = [layer_ancestor.get("n") or ""]
+
+        text = " ".join(" ".join(annotation.itertext()).split())
+        annotations.append(
+            {
+                "id": annotation.get(XML_ID) or f"annotation-{index}",
+                "type": annotation.get("type") or "",
+                "func": annotation.get("func") or "",
+                "text": text,
+                "anchor_mode": anchor_mode,
+                "target_ids": targets,
+                "measure_id": measure.get(XML_ID) if measure is not None else None,
+                "tstamp": tstamp or None,
+                "staff": staff,
+                "layer": layer,
+                "status": "pending",
+            }
+        )
+    return annotations
+
+
+def _encoded_breaks_before(root: ET.Element) -> tuple[list[dict], list[str]]:
+    page_breaks: list[dict] = []
+    system_breaks: list[str] = []
+    pending_page_breaks: list[ET.Element] = []
+    pending_system_break = False
+    for element in root.iter():
+        name = _local_name(element)
+        if name == "pb":
+            pending_page_breaks.append(element)
+        elif name == "sb":
+            pending_system_break = True
+        elif name == "measure":
+            measure_id = element.get(XML_ID) or ""
+            for page_break in pending_page_breaks:
+                page_breaks.append(
+                    {
+                        "measure_id": measure_id,
+                        "facs": (page_break.get("facs") or "").lstrip("#"),
+                    }
+                )
+            if pending_system_break and measure_id:
+                system_breaks.append(measure_id)
+            pending_page_breaks = []
+            pending_system_break = False
+    return page_breaks, system_breaks
+
+
+def infer_facsimile_layout(model: dict) -> dict:
+    """Compare encoded layout markers with page and system hints from zones."""
+    if not model.get("has_facsimile"):
+        return {
+            "inferred_page_breaks": [],
+            "inferred_system_breaks": [],
+            "encoded_page_breaks": model.get("encoded_page_breaks", []),
+            "encoded_system_breaks": model.get("encoded_system_breaks", []),
+            "missing_page_breaks": [],
+            "missing_system_breaks": [],
+            "alignment_applied": False,
+        }
+
+    inferred_page_breaks: list[dict] = []
+    inferred_system_breaks: list[str] = []
+    rows_by_surface: dict[int, list[dict]] = {}
+    for row in model.get("linked", []):
+        surface_index = row.get("surface_index")
+        if surface_index is None or not row.get("measure_id"):
+            continue
+        rows_by_surface.setdefault(surface_index, []).append(row)
+
+    for surface_index, rows in rows_by_surface.items():
+        first = rows[0]
+        inferred_page_breaks.append(
+            {
+                "measure_id": first["measure_id"],
+                "surface_id": first["surface_id"],
+                "surface_index": surface_index,
+            }
+        )
+        heights = [
+            row["zone"]["lry"] - row["zone"]["uly"]
+            for row in rows
+            if row.get("zone")
+        ]
+        if not heights:
+            continue
+        median_height = sorted(heights)[len(heights) // 2]
+        threshold = max(50.0, median_height * 0.45)
+        band_centers: list[float] = []
+        for row in rows:
+            zone = row["zone"]
+            center = (zone["uly"] + zone["lry"]) / 2.0
+            if not band_centers:
+                band_centers.append(center)
+                continue
+            band_center = sum(band_centers) / len(band_centers)
+            if abs(center - band_center) > threshold:
+                inferred_system_breaks.append(row["measure_id"])
+                band_centers = [center]
+            else:
+                band_centers.append(center)
+
+    encoded_page_breaks = model.get("encoded_page_breaks", [])
+    encoded_system_breaks = model.get("encoded_system_breaks", [])
+    encoded_page_pairs = {
+        (row.get("measure_id"), row.get("facs")) for row in encoded_page_breaks
+    }
+    encoded_system_ids = set(encoded_system_breaks)
+    missing_page_breaks = [
+        row
+        for row in inferred_page_breaks
+        if (row["measure_id"], row["surface_id"]) not in encoded_page_pairs
+    ]
+    missing_system_breaks = [
+        measure_id
+        for measure_id in inferred_system_breaks
+        if measure_id not in encoded_system_ids
+    ]
+    return {
+        "inferred_page_breaks": inferred_page_breaks,
+        "inferred_system_breaks": inferred_system_breaks,
+        "encoded_page_breaks": encoded_page_breaks,
+        "encoded_system_breaks": encoded_system_breaks,
+        "missing_page_breaks": missing_page_breaks,
+        "missing_system_breaks": missing_system_breaks,
+        "alignment_applied": False,
+    }
+
+
+def apply_facsimile_layout(mei_text: str, model: dict) -> tuple[str, dict]:
+    """Inject missing facsimile-derived breaks into a temporary MEI document."""
+    layout = dict(model.get("layout") or infer_facsimile_layout(model))
+    root = ET.fromstring(mei_text)
+    parent_map = {child: parent for parent in root.iter() for child in parent}
+    measures = {
+        element.get(XML_ID): element
+        for element in root.findall(".//m:measure", NS)
+        if element.get(XML_ID)
+    }
+    rows_by_id = {row["measure_id"]: row for row in model.get("linked", [])}
+
+    # Existing encoded markers remain authoritative. Only surfaces without an
+    # encoded marker receive inferred temporary markers.
+    encoded_page_surfaces = {
+        row.get("facs") or rows_by_id.get(row.get("measure_id"), {}).get("surface_id")
+        for row in layout["encoded_page_breaks"]
+    }
+    encoded_page_surfaces.discard(None)
+    encoded_system_surfaces = {
+        rows_by_id[measure_id].get("surface_id")
+        for measure_id in layout["encoded_system_breaks"]
+        if measure_id in rows_by_id
+    }
+    page_targets = [
+        row
+        for row in layout["missing_page_breaks"]
+        if row["surface_id"] not in encoded_page_surfaces
+    ]
+    system_targets = [
+        measure_id
+        for measure_id in layout["missing_system_breaks"]
+        if rows_by_id.get(measure_id, {}).get("surface_id")
+        not in encoded_system_surfaces
+    ]
+
+    insertions: dict[str, list[ET.Element]] = {}
+    for index, row in enumerate(page_targets, start=1):
+        surface = model["surfaces"][row["surface_index"]]
+        insertions.setdefault(row["measure_id"], []).append(
+            ET.Element(
+                f"{{{MEI_NS}}}pb",
+                {
+                    XML_ID: f"camat-inferred-pb-{index}",
+                    "facs": f"#{row['surface_id']}",
+                    "n": str(surface.get("n") or index),
+                },
+            )
+        )
+    for index, measure_id in enumerate(system_targets, start=1):
+        insertions.setdefault(measure_id, []).append(
+            ET.Element(
+                f"{{{MEI_NS}}}sb",
+                {XML_ID: f"camat-inferred-sb-{index}"},
+            )
+        )
+
+    for measure_id, markers in insertions.items():
+        measure = measures.get(measure_id)
+        parent = parent_map.get(measure) if measure is not None else None
+        if measure is None or parent is None:
+            continue
+        position = list(parent).index(measure)
+        for marker in markers:
+            parent.insert(position, marker)
+            position += 1
+
+    ET.register_namespace("", MEI_NS)
+    layout["alignment_applied"] = bool(insertions)
+    layout["applied_page_breaks"] = [row["measure_id"] for row in page_targets]
+    layout["applied_system_breaks"] = system_targets
+    return ET.tostring(root, encoding="unicode"), layout
+
+
 def read_facsimile_model(
-    mei_path: str | Path,
+    mei_path: str | Path | ResolvedMeiSource,
     *,
     repo_root: Path | None = None,
     allow_missing_facsimile: bool = False,
@@ -178,9 +531,12 @@ def read_facsimile_model(
     model when the MEI has no facsimile or usable surfaces. Invalid
     facsimile records, such as unresolved measure links, remain errors.
     """
-    mei_path = resolve_mei_source(mei_path, repo_root=repo_root)
+    source_info = resolve_mei_source_info(mei_path, repo_root=repo_root)
+    mei_path = source_info.local_path
     tree = ET.parse(mei_path)
     root = tree.getroot()
+    annotations = _read_annotation_models(root)
+    encoded_page_breaks, encoded_system_breaks = _encoded_breaks_before(root)
 
     def score_only_model(reason: str) -> dict:
         measures = []
@@ -205,6 +561,7 @@ def read_facsimile_model(
             )
         return {
             "mei_path": mei_path,
+            "source": source_info,
             "viewer_mode": "score-only",
             "has_facsimile": False,
             "facsimile_status": reason,
@@ -218,6 +575,16 @@ def read_facsimile_model(
             "linked": [],
             "missing_facs": measures,
             "other_surface_links": [],
+            "annotations": annotations,
+            "encoded_page_breaks": encoded_page_breaks,
+            "encoded_system_breaks": encoded_system_breaks,
+            "layout": infer_facsimile_layout(
+                {
+                    "has_facsimile": False,
+                    "encoded_page_breaks": encoded_page_breaks,
+                    "encoded_system_breaks": encoded_system_breaks,
+                }
+            ),
         }
 
     def unavailable(message: str) -> dict:
@@ -286,7 +653,11 @@ def read_facsimile_model(
                 "n": surface.get("n") or str(source_index + 1),
                 "index": surface_index,
                 "graphic_target": graphic_target,
-                "graphic_src": resolve_graphic_src(graphic_target, mei_path),
+                "graphic_src": resolve_graphic_src(
+                    graphic_target,
+                    mei_path,
+                    base_uri=source_info.base_uri,
+                ),
                 "image_width": parse_int_attr(
                     graphic, "width", context=f"graphic on surface {surface_id}"
                 ),
@@ -337,8 +708,9 @@ def read_facsimile_model(
 
     linked = [row for row in measures if row["status"] == "linked"]
     first_surface = surfaces[0]
-    return {
+    model = {
         "mei_path": mei_path,
+        "source": source_info,
         "viewer_mode": "facsimile",
         "has_facsimile": True,
         "facsimile_status": None,
@@ -356,7 +728,12 @@ def read_facsimile_model(
         "other_surface_links": [
             row for row in linked if (row["surface_index"] or 0) > 0
         ],
+        "annotations": annotations,
+        "encoded_page_breaks": encoded_page_breaks,
+        "encoded_system_breaks": encoded_system_breaks,
     }
+    model["layout"] = infer_facsimile_layout(model)
+    return model
 
 
 def _remove_elements(root: ET.Element, tag_name: str) -> None:
@@ -391,15 +768,27 @@ def format_facsimile_summary(model: dict, *, repo_root: Path | None = None) -> s
             f"MEI:             {display_path(mei_path, repo_root=repo_root)}\n"
             f"Viewer mode:     score only\n"
             f"Measures:        {len(model['measures'])}\n"
-            f"Facsimile:       unavailable ({model['facsimile_status']})"
+            f"Facsimile:       unavailable ({model['facsimile_status']})\n"
+            f"Annotations:     {len(model.get('annotations', []))}"
         )
+    layout = model.get("layout", {})
+    alignment_note = (
+        "\nLayout:          temporary facsimile alignment applied"
+        if layout.get("alignment_applied")
+        else (
+            f"\nLayout hints:    {len(layout.get('missing_page_breaks', []))} missing <pb>, "
+            f"{len(layout.get('missing_system_breaks', []))} missing <sb>"
+        )
+    )
     return (
         f"MEI:             {display_path(mei_path, repo_root=repo_root)}\n"
         f"Viewer mode:     score + facsimile\n"
         f"Surfaces:        {len(model.get('surfaces', []))}\n"
         f"Measures:        {len(model['measures'])}\n"
         f"Linked zones:    {len(model['linked'])}\n"
-        f"Missing @facs:   {len(model['missing_facs'])}"
+        f"Missing @facs:   {len(model['missing_facs'])}\n"
+        f"Annotations:     {len(model.get('annotations', []))}"
+        f"{alignment_note}"
     )
 
 
@@ -411,7 +800,7 @@ class FacsimileViewerCache:
 
 
 def build_facsimile_viewer(
-    mei_path: str | Path,
+    mei_path: str | Path | ResolvedMeiSource,
     *,
     verovio_options: dict,
     initial_page: int = 1,
@@ -430,16 +819,30 @@ def build_facsimile_viewer(
     show_diagnostic_table: bool = True,
     show_verovio_warnings: bool = False,
     allow_missing_facsimile: bool = True,
+    show_annotations: bool = True,
+    annotation_display_limit: int = 300,
+    align_to_facsimile: bool = False,
 ) -> dict:
     """Render linked facsimiles or fall back to a score-only MEI viewer."""
-    resolved_path = resolve_mei_source(mei_path, repo_root=repo_root)
+    source_info = resolve_mei_source_info(mei_path, repo_root=repo_root)
+    resolved_path = source_info.local_path
     model = read_facsimile_model(
-        resolved_path,
+        source_info,
         repo_root=repo_root,
         allow_missing_facsimile=allow_missing_facsimile,
     )
+    mei_text = resolved_path.read_text(encoding="utf-8")
+    effective_options = dict(verovio_options)
+    if align_to_facsimile and model.get("has_facsimile"):
+        mei_text, model["layout"] = apply_facsimile_layout(mei_text, model)
+        effective_options["breaks"] = "encoded"
     current_score_hash = score_content_hash(resolved_path)
-    current_options_hash = verovio_options_hash(verovio_options)
+    if align_to_facsimile:
+        layout_payload = json.dumps(model.get("layout", {}), sort_keys=True)
+        current_score_hash = hashlib.sha256(
+            f"{current_score_hash}:{layout_payload}".encode("utf-8")
+        ).hexdigest()
+    current_options_hash = verovio_options_hash(effective_options)
     viewer_cache = cache if cache is not None else FacsimileViewerCache()
 
     if render_score == "auto":
@@ -455,17 +858,21 @@ def build_facsimile_viewer(
 
     if render_score or viewer_cache.score_render is None:
         score_render = render_verovio_pages(
-            resolved_path,
+            source_info,
             initial_page=initial_page,
-            options=verovio_options,
+            options=effective_options,
             repo_root=repo_root,
             show_verovio_warnings=show_verovio_warnings,
+            mei_text=mei_text,
+            annotations=model.get("annotations", []),
         )
         viewer_cache.score_hash = current_score_hash
         viewer_cache.options_hash = current_options_hash
         viewer_cache.score_render = score_render
     else:
         score_render = viewer_cache.score_render
+
+    model["annotations"] = score_render.get("annotations", model.get("annotations", []))
 
     html = make_viewer_html(
         model,
@@ -482,6 +889,8 @@ def build_facsimile_viewer(
         min_zoom_percent=min_zoom_percent,
         max_zoom_percent=max_zoom_percent,
         show_diagnostic_table=show_diagnostic_table,
+        show_annotations=show_annotations,
+        annotation_display_limit=annotation_display_limit,
     )
     return {
         "html": html,
@@ -510,8 +919,10 @@ def build_verovio_options(
     else:
         raise ValueError('orientation must be "portrait" or "landscape"')
 
-    if breaks not in {"auto", "encoded", "none"}:
-        raise ValueError('breaks must be "auto", "encoded", or "none"')
+    if breaks not in {"auto", "encoded", "line", "smart", "none"}:
+        raise ValueError(
+            'breaks must be "auto", "encoded", "line", "smart", or "none"'
+        )
 
     options = dict(base_options)
     options["adjustPageHeight"] = adjust_page_height
@@ -521,13 +932,197 @@ def build_verovio_options(
     return options
 
 
+def _element_context(root: ET.Element) -> dict[str, dict[str, str | None]]:
+    parent_map = {child: parent for parent in root.iter() for child in parent}
+    context = {}
+    for element in root.iter():
+        element_id = element.get(XML_ID)
+        if not element_id:
+            continue
+        measure = element if _local_name(element) == "measure" else _ancestor_named(
+            element, "measure", parent_map
+        )
+        staff = element if _local_name(element) == "staff" else _ancestor_named(
+            element, "staff", parent_map
+        )
+        layer = element if _local_name(element) == "layer" else _ancestor_named(
+            element, "layer", parent_map
+        )
+        context[element_id] = {
+            "measure_id": measure.get(XML_ID) if measure is not None else None,
+            "staff": staff.get("n") if staff is not None else None,
+            "layer": layer.get("n") if layer is not None else None,
+        }
+    return context
+
+
+def _meter_units_by_measure(root: ET.Element) -> dict[str, float]:
+    meter_unit = 4.0
+    result = {}
+    for element in root.iter():
+        name = _local_name(element)
+        value = None
+        if name == "scoreDef":
+            value = element.get("meter.unit")
+        elif name == "meterSig":
+            value = element.get("unit")
+        if value:
+            try:
+                meter_unit = float(value)
+            except ValueError:
+                pass
+        if name == "measure" and element.get(XML_ID):
+            result[element.get(XML_ID) or ""] = meter_unit
+    return result
+
+
+def _interpolate_timeline(
+    rows: list[dict],
+    value: float,
+    *,
+    input_key: str,
+    output_key: str,
+) -> float:
+    points = sorted(
+        (
+            (float(row[input_key]), float(row[output_key]))
+            for row in rows
+            if input_key in row and output_key in row
+        ),
+        key=lambda item: item[0],
+    )
+    if not points:
+        return value
+    if value <= points[0][0]:
+        return points[0][1]
+    for (left_x, left_y), (right_x, right_y) in zip(points, points[1:]):
+        if value <= right_x:
+            if right_x == left_x:
+                return right_y
+            ratio = (value - left_x) / (right_x - left_x)
+            return left_y + ratio * (right_y - left_y)
+    if len(points) == 1:
+        return points[0][1]
+    left_x, left_y = points[-2]
+    right_x, right_y = points[-1]
+    if right_x == left_x:
+        return right_y
+    return right_y + (value - right_x) * (right_y - left_y) / (right_x - left_x)
+
+
+def _resolve_render_annotations(
+    annotations: list[dict],
+    *,
+    root: ET.Element,
+    toolkit: Any,
+) -> list[dict]:
+    if not annotations:
+        return []
+    context = _element_context(root)
+    meter_units = _meter_units_by_measure(root)
+    timemap = toolkit.renderToTimemap()
+    if isinstance(timemap, str):
+        timemap = json.loads(timemap)
+
+    resolved_annotations = []
+    for source in annotations:
+        annotation = dict(source)
+        targets = list(annotation.get("target_ids", []))
+        status = "resolved" if targets else "unresolved"
+        if annotation.get("anchor_mode") == "tstamp":
+            measure_id = annotation.get("measure_id")
+            try:
+                beat = float(annotation.get("tstamp"))
+            except (TypeError, ValueError):
+                beat = math.nan
+            if measure_id and math.isfinite(beat) and toolkit.getPageWithElement(measure_id):
+                measure_start_ms = float(toolkit.getTimeForElement(measure_id))
+                measure_start_qstamp = _interpolate_timeline(
+                    timemap,
+                    measure_start_ms,
+                    input_key="tstamp",
+                    output_key="qstamp",
+                )
+                meter_unit = meter_units.get(measure_id, 4.0)
+                target_qstamp = measure_start_qstamp + (beat - 1.0) * (4.0 / meter_unit)
+                target_ms = _interpolate_timeline(
+                    timemap,
+                    target_qstamp,
+                    input_key="qstamp",
+                    output_key="tstamp",
+                )
+                at_time = toolkit.getElementsAtTime(int(round(target_ms)))
+                if isinstance(at_time, str):
+                    at_time = json.loads(at_time)
+                candidates = [
+                    element_id
+                    for row in timemap
+                    if abs(float(row.get("qstamp", math.inf)) - target_qstamp) < 1e-7
+                    for element_id in row.get("on", [])
+                ]
+                if not candidates:
+                    for key in ("notes", "chords", "rests"):
+                        candidates.extend(at_time.get(key, []))
+                wanted_staff = set(annotation.get("staff", []))
+                wanted_layer = set(annotation.get("layer", []))
+                targets = [
+                    element_id
+                    for element_id in candidates
+                    if (
+                        not wanted_staff
+                        or context.get(element_id, {}).get("staff") in wanted_staff
+                    )
+                    and (
+                        not wanted_layer
+                        or context.get(element_id, {}).get("layer") in wanted_layer
+                    )
+                ]
+                status = "resolved" if targets else "measure-fallback"
+            if not targets and measure_id:
+                targets = [measure_id]
+        elif not targets and annotation.get("measure_id"):
+            targets = [annotation["measure_id"]]
+            status = "measure-fallback"
+
+        existing_targets = [
+            element_id
+            for element_id in targets
+            if toolkit.getPageWithElement(element_id) > 0
+        ]
+        if existing_targets:
+            targets = existing_targets
+        elif annotation.get("measure_id") and toolkit.getPageWithElement(
+            annotation["measure_id"]
+        ):
+            targets = [annotation["measure_id"]]
+            status = "measure-fallback"
+        else:
+            targets = []
+            status = "unresolved"
+
+        pages = sorted(
+            {
+                int(toolkit.getPageWithElement(element_id))
+                for element_id in targets
+                if toolkit.getPageWithElement(element_id) > 0
+            }
+        )
+        annotation["target_ids"] = targets
+        annotation["score_pages"] = pages
+        annotation["status"] = status
+        resolved_annotations.append(annotation)
+    return resolved_annotations
+
+
 def render_verovio_pages(
-    mei_path: str | Path,
+    mei_path: str | Path | ResolvedMeiSource,
     *,
     initial_page: int,
     options: dict,
     repo_root: Path | None = None,
     show_verovio_warnings: bool = False,
+    mei_text: str | None = None,
+    annotations: list[dict] | None = None,
 ) -> dict:
     """Render all Verovio pages and return SVG strings plus page metadata.
 
@@ -535,7 +1130,8 @@ def render_verovio_pages(
     suppressed unless ``show_verovio_warnings`` is True.
     """
     mei_path = resolve_mei_source(mei_path, repo_root=repo_root)
-    mei_text = mei_path.read_text(encoding="utf-8")
+    mei_text = mei_text if mei_text is not None else mei_path.read_text(encoding="utf-8")
+    render_root = ET.fromstring(mei_text)
     with suppress_native_output(enabled=not show_verovio_warnings):
         toolkit = verovio.toolkit()
         toolkit.setOptions(options)
@@ -556,12 +1152,16 @@ def render_verovio_pages(
             if not svg.strip():
                 raise RuntimeError(f"Verovio returned an empty SVG for page {page_number}")
             pages.append({"number": page_number, "svg": svg})
+        resolved_annotations = _resolve_render_annotations(
+            annotations or [], root=render_root, toolkit=toolkit
+        )
 
     return {
         "page_count": page_count,
         "initial_page": initial_page,
         "initial_page_index": initial_page - 1,
         "pages": pages,
+        "annotations": resolved_annotations,
     }
 
 
@@ -592,9 +1192,29 @@ def make_diagnostic_table(model: dict, *, show: bool = True) -> str:
         if model.get("has_facsimile", True)
         else f"Measure/facsimile status ({len(model['measures'])} measures)"
     )
+    layout = model.get("layout", {})
+    missing_page_breaks = layout.get("missing_page_breaks", [])
+    missing_system_breaks = layout.get("missing_system_breaks", [])
+    if layout.get("alignment_applied"):
+        layout_html = (
+            '<p class="layout-diagnostic is-applied">Temporary facsimile alignment is active. '
+            f'Inserted page breaks before {escape(", ".join(layout.get("applied_page_breaks", [])) or "none")} '
+            f'and system breaks before {escape(", ".join(layout.get("applied_system_breaks", [])) or "none")}.</p>'
+        )
+    elif missing_page_breaks or missing_system_breaks:
+        page_labels = ", ".join(row["measure_id"] for row in missing_page_breaks) or "none"
+        system_labels = ", ".join(missing_system_breaks) or "none"
+        layout_html = (
+            '<p class="layout-diagnostic is-warning">Facsimile geometry suggests missing encoded layout: '
+            f'&lt;pb&gt; before {escape(page_labels)}; &lt;sb&gt; before {escape(system_labels)}. '
+            'Use align_to_facsimile=True for a non-mutating preview.</p>'
+        )
+    else:
+        layout_html = ""
     return f"""
     <details class="mei-viewer-details">
       <summary>{summary}</summary>
+      {layout_html}
       <table class="mei-viewer-table">
         <thead>
           <tr>
@@ -624,6 +1244,8 @@ def make_viewer_html(
     min_zoom_percent: int | float = 50,
     max_zoom_percent: int | float = 300,
     show_diagnostic_table: bool = True,
+    show_annotations: bool = True,
+    annotation_display_limit: int = 300,
 ) -> str:
     zoom_values = {
         "initial_score_zoom_percent": initial_score_zoom_percent,
@@ -653,6 +1275,12 @@ def make_viewer_html(
             raise ValueError(
                 f"{name} must be between min_zoom_percent and max_zoom_percent"
             )
+    if isinstance(annotation_display_limit, bool) or not isinstance(
+        annotation_display_limit, int
+    ):
+        raise TypeError("annotation_display_limit must be an integer")
+    if annotation_display_limit < 1:
+        raise ValueError("annotation_display_limit must be greater than zero")
 
     viewer_id = viewer_id or f"mei-viewer-{uuid.uuid4().hex}"
     has_facsimile = model.get("has_facsimile", True)
@@ -721,6 +1349,56 @@ def make_viewer_html(
     pairs_json = json.dumps(pairs)
     score_pages_json = json.dumps([page["number"] for page in score_pages])
     score_page_surfaces_json = json.dumps(score_page_surface_indices)
+    page_number_to_index = {
+        page["number"]: index for index, page in enumerate(score_pages)
+    }
+    all_annotations = model.get("annotations", [])
+    annotations = []
+    for source in all_annotations[:annotation_display_limit]:
+        annotation = dict(source)
+        target_ids = annotation.get("target_ids", [])
+        rendered_pages = list(annotation.get("score_pages", []))
+        if not rendered_pages:
+            for index, page in enumerate(score_pages):
+                if any(f'id="{target_id}"' in page["svg"] for target_id in target_ids):
+                    rendered_pages.append(page["number"])
+        annotation["page_index"] = (
+            page_number_to_index.get(rendered_pages[0]) if rendered_pages else None
+        )
+        annotations.append(annotation)
+    annotations_json = json.dumps(annotations)
+    annotation_buttons = []
+    for annotation in annotations:
+        anchor = annotation.get("anchor_mode", "unanchored")
+        if anchor == "tstamp":
+            anchor = f'tstamp {annotation.get("tstamp") or "?"}'
+        label = annotation.get("text") or annotation.get("id") or "Untitled annotation"
+        annotation_buttons.append(
+            f'<button type="button" class="annotation-item" '
+            f'data-annotation-id="{escape(annotation.get("id", ""), quote=True)}">'
+            f'<span class="annotation-kind">{escape(anchor)}</span>'
+            f'<span>{escape(label)}</span></button>'
+        )
+    if annotations:
+        checked = "checked" if show_annotations else ""
+        annotation_count = (
+            str(len(annotations))
+            if len(annotations) == len(all_annotations)
+            else f"{len(annotations)} of {len(all_annotations)}"
+        )
+        annotation_controls = (
+            '<label class="annotation-toggle-label">'
+            f'<input type="checkbox" class="annotation-toggle" {checked}> '
+            f'Highlight annotations ({annotation_count})</label>'
+        )
+        annotation_panel = (
+            '<details class="annotation-panel" open>'
+            f'<summary>Score annotations ({annotation_count})</summary>'
+            f'<div class="annotation-list">{"".join(annotation_buttons)}</div></details>'
+        )
+    else:
+        annotation_controls = ""
+        annotation_panel = ""
     table_html = make_diagnostic_table(model, show=show_diagnostic_table)
     disabled_prev = "disabled" if len(score_pages) <= 1 else ""
     disabled_next = "disabled" if len(score_pages) <= 1 else ""
@@ -818,6 +1496,13 @@ def make_viewer_html(
     font-size: 13px;
     color: #4b5563;
   }}
+  #{viewer_id} .annotation-toggle-label {{
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    color: #4b5563;
+    font-size: 12px;
+  }}
   #{viewer_id} .toolbar-spacer {{
     flex: 1 1 24px;
   }}
@@ -840,7 +1525,7 @@ def make_viewer_html(
   }}
   #{viewer_id} .viewer-grid {{
     display: grid;
-    grid-template-columns: minmax(360px, 1fr) minmax(320px, {facsimile_max_width}px);
+    grid-template-columns: minmax(0, 1fr) minmax(0, {facsimile_max_width}px);
     gap: 14px;
     align-items: start;
   }}
@@ -916,6 +1601,65 @@ def make_viewer_html(
     fill: var(--active) !important;
     stroke: var(--active) !important;
   }}
+  #{viewer_id}.annotations-visible .score-pane .is-annotated,
+  #{viewer_id}.annotations-visible .score-pane .is-annotated * {{
+    color: #7c3aed !important;
+    fill: #7c3aed !important;
+    stroke: #7c3aed !important;
+  }}
+  #{viewer_id} .score-pane .is-selected-annotation,
+  #{viewer_id} .score-pane .is-selected-annotation * {{
+    color: #dc2626 !important;
+    fill: #dc2626 !important;
+    stroke: #dc2626 !important;
+  }}
+  #{viewer_id} .annotation-panel {{
+    margin-top: 12px;
+    border: 1px solid var(--panel-border);
+    border-radius: 6px;
+    padding: 8px 10px;
+    font-size: 13px;
+  }}
+  #{viewer_id} .annotation-list {{
+    display: grid;
+    gap: 6px;
+    margin-top: 8px;
+    max-height: 240px;
+    overflow: auto;
+  }}
+  #{viewer_id} .annotation-item {{
+    display: grid;
+    grid-template-columns: minmax(72px, auto) 1fr;
+    gap: 8px;
+    border: 1px solid var(--panel-border);
+    border-radius: 5px;
+    background: white;
+    color: #1f2933;
+    padding: 6px 8px;
+    text-align: left;
+    cursor: pointer;
+  }}
+  #{viewer_id} .annotation-item.is-active {{
+    border-color: #dc2626;
+  }}
+  #{viewer_id} .annotation-kind {{
+    color: #6d28d9;
+    font-size: 11px;
+    font-weight: 600;
+  }}
+  #{viewer_id} .layout-diagnostic {{
+    margin: 8px 0;
+    padding: 7px 9px;
+    border-radius: 5px;
+  }}
+  #{viewer_id} .layout-diagnostic.is-warning {{
+    background: #fffbeb;
+    color: #92400e;
+  }}
+  #{viewer_id} .layout-diagnostic.is-applied {{
+    background: #ecfdf5;
+    color: #065f46;
+  }}
   #{viewer_id} .mei-viewer-details {{
     margin-top: 14px;
     font-size: 13px;
@@ -935,7 +1679,7 @@ def make_viewer_html(
   #{viewer_id} .mei-viewer-table th {{
     background: #eef2f7;
   }}
-  @media (max-width: 900px) {{
+  @media (max-width: 560px) {{
     #{viewer_id} .viewer-grid {{
       grid-template-columns: 1fr;
     }}
@@ -948,6 +1692,7 @@ def make_viewer_html(
     <button type="button" class="score-next" {disabled_next}>Next score page</button>
     <span class="score-page-label"></span>
     <span class="facsimile-page-label" aria-live="polite"></span>
+    {annotation_controls}
     <span class="toolbar-spacer"></span>
     <div class="zoom-controls" aria-label="Score zoom controls">
       <span class="zoom-label">Score zoom</span>
@@ -963,6 +1708,7 @@ def make_viewer_html(
     </div>
     {facsimile_panel}
   </div>
+  {annotation_panel}
   {table_html}
 </div>
 <script>
@@ -970,17 +1716,12 @@ def make_viewer_html(
   const viewerId = {json.dumps(viewer_id)};
   let initializationAttempts = 0;
 
-  function initializeViewer() {{
-    const root = document.getElementById(viewerId);
-    if (!root) {{
-      initializationAttempts += 1;
-      if (initializationAttempts < 50) window.setTimeout(initializeViewer, 20);
-      return;
-    }}
-    if (root.dataset.camatViewerInitialized === 'true') return;
+  function initializeViewer(root) {{
+    if (!root || root.dataset.camatViewerInitialized === 'true') return;
     root.dataset.camatViewerInitialized = 'true';
 
   const pairs = {pairs_json};
+  const annotations = {annotations_json};
   const scorePages = {score_pages_json};
   const scorePageSurfaces = {score_page_surfaces_json};
   const totalScorePages = {total_score_pages};
@@ -1001,6 +1742,7 @@ def make_viewer_html(
   const facsimileZoomOut = root.querySelector('.facsimile-zoom-out');
   const facsimileZoomReset = root.querySelector('.facsimile-zoom-reset');
   const facsimileZoomIn = root.querySelector('.facsimile-zoom-in');
+  const annotationToggle = root.querySelector('.annotation-toggle');
   const byMeasure = new Map(pairs.map((item) => [item.measureId, item]));
   const byZone = new Map(pairs.map((item) => [item.zoneId, item]));
   const initialPageIndex = {initial_page_index};
@@ -1008,6 +1750,33 @@ def make_viewer_html(
   let activeSurfaceIndex = {initial_surface_index};
   let scoreZoom = initialScoreZoom;
   let facsimileZoom = initialFacsimileZoom;
+
+  function annotationTargets(item) {{
+    return (item.target_ids || []).map((targetId) =>
+      root.querySelector(`#${{CSS.escape(targetId)}}`)
+    ).filter(Boolean);
+  }}
+
+  function applyAnnotationVisibility(visible) {{
+    root.classList.toggle('annotations-visible', visible);
+    annotations.forEach((item) => {{
+      annotationTargets(item).forEach((node) => node.classList.toggle('is-annotated', visible));
+    }});
+  }}
+
+  function selectAnnotation(item) {{
+    if (!item) return;
+    if (item.page_index !== null && item.page_index !== undefined) showScorePage(item.page_index);
+    root.querySelectorAll('.is-selected-annotation').forEach((node) => node.classList.remove('is-selected-annotation'));
+    root.querySelectorAll('.annotation-item.is-active').forEach((node) => node.classList.remove('is-active'));
+    const targets = annotationTargets(item);
+    targets.forEach((node) => node.classList.add('is-selected-annotation'));
+    const button = root.querySelector(`.annotation-item[data-annotation-id="${{CSS.escape(item.id)}}"]`);
+    if (button) button.classList.add('is-active');
+    if (targets[0]) targets[0].scrollIntoView({{block: 'center', inline: 'center', behavior: 'smooth'}});
+    const anchor = item.anchor_mode === 'tstamp' ? `tstamp ${{item.tstamp}}` : item.anchor_mode;
+    status.textContent = `Annotation ${{item.id}} | ${{anchor}} | ${{item.text || '(no text)'}}`;
+  }}
 
   function clampZoom(value) {{
     return Math.min(maxZoom, Math.max(minZoom, value));
@@ -1109,6 +1878,16 @@ def make_viewer_html(
     zone.addEventListener('click', () => activate(item, true));
   }});
 
+  root.querySelectorAll('.annotation-item').forEach((button) => {{
+    const item = annotations.find((candidate) => candidate.id === button.dataset.annotationId);
+    if (!item) return;
+    button.addEventListener('click', () => selectAnnotation(item));
+  }});
+  if (annotationToggle) {{
+    annotationToggle.addEventListener('change', () => applyAnnotationVisibility(annotationToggle.checked));
+    applyAnnotationVisibility(annotationToggle.checked);
+  }}
+
   applyScoreZoom(initialScoreZoom);
   applyFacsimileZoom(initialFacsimileZoom);
   showScorePage(initialPageIndex);
@@ -1116,13 +1895,76 @@ def make_viewer_html(
   if (initialItem) activate(initialItem);
   }}
 
+  function initializeAttachedViewers() {{
+    // Attribute selector: duplicate notebook outputs can share the same id, and
+    // getElementById() would bind only the first (often non-interactive) copy.
+    const roots = document.querySelectorAll('[id="' + viewerId + '"]');
+    if (!roots.length) {{
+      initializationAttempts += 1;
+      if (initializationAttempts < 250) window.setTimeout(initializeAttachedViewers, 20);
+      return;
+    }}
+    roots.forEach((root) => initializeViewer(root));
+  }}
+
   // Notebook frontends can evaluate an HTML output's script before its root
-  // element has been attached to the live DOM. Defer and retry initialization
-  // so page controls also work on the first render, not only after reload.
-  window.setTimeout(initializeViewer, 0);
+  // element has been attached, or clone the markup into a widget after the
+  // script ran. Retry and observe insertions so hovers work on first paint.
+  window.setTimeout(initializeAttachedViewers, 0);
+  if (typeof MutationObserver === "function" && document.documentElement) {{
+    const observer = new MutationObserver(() => initializeAttachedViewers());
+    observer.observe(document.documentElement, {{ childList: true, subtree: true }});
+    window.setTimeout(() => observer.disconnect(), 5000);
+  }}
 }})();
 </script>
 """
+
+
+def embed_viewer_html(html: str, *, min_height: int) -> str:
+    """Wrap viewer markup so Jupyter shows it once, inside a widget.
+
+    Notebook frontends treat ``IPython.display.HTML`` inside an ``Output``
+    widget as a second cell output. An iframe ``srcdoc`` on ``widgets.HTML``
+    stays in the widget, still runs hover scripts, and resizes to its content.
+    """
+    if isinstance(min_height, bool) or not isinstance(min_height, (int, float)):
+        raise TypeError("min_height must be a number")
+    if min_height <= 0:
+        raise ValueError("min_height must be greater than zero")
+    inner = f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<style>html,body{{margin:0;padding:0;background:#fff;}}</style>
+</head><body>
+{html}
+<script>
+(() => {{
+  function syncHeight() {{
+    const frame = window.frameElement;
+    if (!frame) return;
+    const height = Math.max(
+      document.documentElement.scrollHeight,
+      document.body ? document.body.scrollHeight : 0
+    );
+    frame.style.height = Math.ceil(height) + "px";
+  }}
+  syncHeight();
+  window.addEventListener("load", syncHeight);
+  if (typeof ResizeObserver === "function") {{
+    new ResizeObserver(syncHeight).observe(document.documentElement);
+  }}
+}})();
+</script>
+</body></html>
+"""
+    return (
+        '<iframe class="camat-mei-viewer-frame" '
+        f'srcdoc="{escape(inner, quote=True)}" '
+        'sandbox="allow-scripts allow-same-origin" '
+        'title="MEI facsimile viewer" '
+        'style="width:100%;border:0;display:block;'
+        f'min-height:{int(min_height)}px"></iframe>'
+    )
 
 
 def mei_file_fingerprint(path: Path | None) -> tuple[int, int] | None:
@@ -1154,7 +1996,7 @@ class InteractiveFacsimileViewer:
 
     def __init__(
         self,
-        mei_path: str | Path,
+        mei_path: str | Path | ResolvedMeiSource,
         *,
         repo_root: Path | None = None,
         viewer_id: str | None = None,
@@ -1176,6 +2018,9 @@ class InteractiveFacsimileViewer:
         show_diagnostic_table: bool = True,
         show_verovio_warnings: bool = False,
         allow_missing_facsimile: bool = True,
+        show_annotations: bool = True,
+        annotation_display_limit: int = 300,
+        align_to_facsimile: bool = False,
         auto_watch_mei: bool = True,
         auto_watch_mode: str = "events",
         watch_interval_sec: float = 2.0,
@@ -1184,8 +2029,11 @@ class InteractiveFacsimileViewer:
         note_probe_id: str | None = None,
     ) -> None:
         self.repo_root = (repo_root or find_camat_root()).resolve()
-        self.mei_path = resolve_mei_source(mei_path, repo_root=self.repo_root)
+        self.mei_source = mei_path.original if isinstance(mei_path, ResolvedMeiSource) else mei_path
+        self.source_info = resolve_mei_source_info(mei_path, repo_root=self.repo_root)
+        self.mei_path = self.source_info.local_path
         self.viewer_id = viewer_id or f"mei-viewer-live-{uuid.uuid4().hex}"
+        self._render_revision = 0
         self.verovio_initial_page = verovio_initial_page
         self.verovio_orientation = verovio_orientation
         self.verovio_portrait_size = verovio_portrait_size
@@ -1204,6 +2052,9 @@ class InteractiveFacsimileViewer:
         self.show_diagnostic_table = show_diagnostic_table
         self.show_verovio_warnings = show_verovio_warnings
         self.allow_missing_facsimile = allow_missing_facsimile
+        self.show_annotations = show_annotations
+        self.annotation_display_limit = annotation_display_limit
+        self.align_to_facsimile = align_to_facsimile
         self.auto_watch_mei = auto_watch_mei
         self.auto_watch_mode = auto_watch_mode
         self.watch_interval_sec = watch_interval_sec
@@ -1214,16 +2065,15 @@ class InteractiveFacsimileViewer:
         self.cache = FacsimileViewerCache()
         self._widgets: Any = None
         self._get_ipython: Callable | None = None
-        self._HTML: Any = None
-        self._clear_output: Any = None
         self._display: Any = None
 
-        self.status_output = None
-        self.viewer_output = None
+        self.status_html = None
+        self.viewer_html = None
         self.watch_status = None
         self.reload_zones_btn = None
         self.reload_score_btn = None
         self.watch_toggle = None
+        self.ui = None
 
         self._watch_state: dict[str, Any] = {
             "path": None,
@@ -1244,15 +2094,13 @@ class InteractiveFacsimileViewer:
         try:
             import ipywidgets as widgets
             from IPython import get_ipython
-            from IPython.display import HTML, clear_output, display
+            from IPython.display import display
         except ImportError as exc:
             raise ImportError(
                 "InteractiveFacsimileViewer requires ipywidgets and IPython"
             ) from exc
         self._widgets = widgets
         self._get_ipython = get_ipython
-        self._HTML = HTML
-        self._clear_output = clear_output
         self._display = display
 
     def _verovio_options(self) -> dict:
@@ -1271,14 +2119,16 @@ class InteractiveFacsimileViewer:
         return probe_note_pname(path, self.note_probe_id)
 
     def _build_viewer(self, *, render_score: bool | str = "auto") -> dict:
+        self._render_revision += 1
+        render_id = f"{self.viewer_id}-render-{self._render_revision}-{uuid.uuid4().hex[:8]}"
         result = build_facsimile_viewer(
-            self.mei_path,
+            self.source_info,
             verovio_options=self._verovio_options(),
             initial_page=self.verovio_initial_page,
             render_score=render_score,
             cache=self.cache,
             repo_root=self.repo_root,
-            viewer_id=self.viewer_id,
+            viewer_id=render_id,
             viewer_max_height=self.viewer_max_height,
             facsimile_max_width=self.facsimile_max_width,
             zone_opacity=self.zone_opacity,
@@ -1290,6 +2140,9 @@ class InteractiveFacsimileViewer:
             show_diagnostic_table=self.show_diagnostic_table,
             show_verovio_warnings=self.show_verovio_warnings,
             allow_missing_facsimile=self.allow_missing_facsimile,
+            show_annotations=self.show_annotations,
+            annotation_display_limit=self.annotation_display_limit,
+            align_to_facsimile=self.align_to_facsimile,
         )
         self.cache = result["cache"]
         return result
@@ -1301,17 +2154,34 @@ class InteractiveFacsimileViewer:
                 "Reload zones" if result["model"]["has_facsimile"] else "Check facsimile"
             )
         render_note = "re-rendered score" if result["rendered_score"] else "reused cached score"
-        with self.status_output:
-            self._clear_output(wait=True)
-            print(result["summary"])
-            print(
-                f"Viewer:          {score_render['page_count']} Verovio score page(s), {render_note}"
+        summary = (
+            f"{result['summary']}\n"
+            f"Viewer:          {score_render['page_count']} Verovio score page(s), {render_note}"
+        )
+        if self.status_html is not None:
+            self.status_html.value = (
+                "<pre style='margin:0;white-space:pre-wrap'>"
+                f"{escape(summary)}</pre>"
             )
-        with self.viewer_output:
-            self._clear_output(wait=True)
-            self._display(self._HTML(result["html"]))
+        if self.viewer_html is not None:
+            self.viewer_html.value = embed_viewer_html(
+                result["html"],
+                min_height=self.viewer_max_height,
+            )
 
-    def refresh_viewer(self, *, render_score: bool | str = "auto") -> dict:
+    def refresh_viewer(
+        self,
+        *,
+        render_score: bool | str = "auto",
+        refresh_source: bool = False,
+    ) -> dict:
+        if refresh_source and self.source_info.kind == "remote":
+            self.source_info = resolve_mei_source_info(
+                self.mei_source,
+                repo_root=self.repo_root,
+                refresh_remote=True,
+            )
+            self.mei_path = self.source_info.local_path
         result = self._build_viewer(render_score=render_score)
         self._show_viewer_result(result)
         return result
@@ -1516,6 +2386,12 @@ class InteractiveFacsimileViewer:
 
     def start_watch(self) -> None:
         self.stop_watch(update_label=False)
+        if self.source_info.kind == "remote":
+            self._set_watch_status(
+                "<i>Remote source — use Reload source to download it again</i>"
+            )
+            self.watch_toggle.value = False
+            return
         path = resolve_repo_path(self.mei_path, repo_root=self.repo_root)
         self._watch_state["path"] = path
         self._watch_state["reloading"] = False
@@ -1566,11 +2442,12 @@ class InteractiveFacsimileViewer:
         self._require_jupyter()
         widgets = self._widgets
 
-        self.status_output = widgets.Output()
-        self.viewer_output = widgets.Output()
+        self.status_html = widgets.HTML()
+        self.viewer_html = widgets.HTML(layout=widgets.Layout(width="100%"))
         self.watch_status = widgets.HTML(value="<i>Auto-watch off</i>")
         self.reload_zones_btn = widgets.Button(description="Reload zones", icon="refresh")
-        self.reload_score_btn = widgets.Button(description="Reload score", icon="sync")
+        reload_label = "Reload source" if self.source_info.kind == "remote" else "Reload score"
+        self.reload_score_btn = widgets.Button(description=reload_label, icon="sync")
         self.watch_toggle = widgets.ToggleButton(
             description="Auto-watch MEI", value=self.auto_watch_mei
         )
@@ -1578,10 +2455,14 @@ class InteractiveFacsimileViewer:
         controls = widgets.HBox(
             [self.reload_zones_btn, self.reload_score_btn, self.watch_toggle]
         )
-        self._display(controls, self.watch_status, self.status_output, self.viewer_output)
+        self.ui = widgets.VBox(
+            [controls, self.watch_status, self.status_html, self.viewer_html]
+        )
 
         self.reload_zones_btn.on_click(lambda _: self.refresh_viewer(render_score=False))
-        self.reload_score_btn.on_click(lambda _: self.refresh_viewer(render_score=True))
+        self.reload_score_btn.on_click(
+            lambda _: self.refresh_viewer(render_score=True, refresh_source=True)
+        )
 
         def _on_watch_toggle(change) -> None:
             if change["new"]:
@@ -1591,7 +2472,9 @@ class InteractiveFacsimileViewer:
 
         self.watch_toggle.observe(_on_watch_toggle, names="value")
 
-        self.refresh_viewer(render_score=True)
+        result = self._build_viewer(render_score=True)
+        self._show_viewer_result(result)
+        self._display(self.ui)
         if self.watch_toggle.value:
             self.start_watch()
         else:
@@ -1600,8 +2483,8 @@ class InteractiveFacsimileViewer:
 
 
 def launch_interactive_facsimile_viewer(
-    mei_path: str | Path,
+    mei_path: str | Path | ResolvedMeiSource,
     **kwargs: Any,
 ) -> InteractiveFacsimileViewer:
-    """Construct and display a Jupyter viewer for a local MEI path or HTTP(S) link."""
+    """Display a Jupyter viewer for a local path, file URI, or HTTP(S) link."""
     return InteractiveFacsimileViewer(mei_path, **kwargs).display()

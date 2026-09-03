@@ -131,6 +131,7 @@ def get_file_path(
     timeout_seconds: int = 30,
     use_cache: bool = False,
     cache_dir: Optional[str] = None,
+    force_refresh: bool = False,
 ) -> str:
     """
     Resolve a local path from a URL or verify a local path exists.
@@ -149,6 +150,8 @@ def get_file_path(
     cache_dir : str, optional
         Override the cache location. Falls back to ``CAMAT_DOWNLOAD_CACHE_DIR``
         and ``~/.cache/camat/downloads``.
+    force_refresh : bool, optional
+        Download a remote source again even when a non-empty cached file exists.
 
     Returns
     -------
@@ -167,7 +170,11 @@ def get_file_path(
         if use_cache:
             resolved_dir = get_download_cache_dir(cache_dir)
             cached_path = os.path.join(resolved_dir, _cached_download_filename(file_source))
-            if os.path.exists(cached_path) and os.path.getsize(cached_path) > 0:
+            if (
+                not force_refresh
+                and os.path.exists(cached_path)
+                and os.path.getsize(cached_path) > 0
+            ):
                 return cached_path
             requests = _get_requests_module()
             try:

@@ -1,11 +1,11 @@
 ---
-title: File formats
+title: Convert to MEI
 ---
-# File formats
+# Convert to MEI
 
-This is **CAMAT workflow 2: convert sources to MEI**. It creates the input for
-the parsing workflow; it does not turn an imported score into a reviewed
-edition.
+This is **CAMAT workflow 2**. It converts MusicXML, Humdrum, MIDI, MuseScore,
+and other symbolic formats to MEI. Conversion creates input for parsing; it
+does not turn an imported score into a reviewed edition.
 
 CAMAT analyzes **MEI**. `parse_files(...)` expects common-notation MEI and
 defaults to the Verovio parser. Convert other encodings to MEI first, then
@@ -21,7 +21,17 @@ executed as part of this docs build.
 Verovio always writes the MEI that CAMAT parses. The steps before that depend
 on the source format:
 
-![CAMAT conversion routes to MEI](../assets/format-conversion.svg)
+```mermaid
+%%{init: {"flowchart": {"htmlLabels": true, "nodeSpacing": 28, "rankSpacing": 48}, "themeVariables": {"fontSize": "18px"}}}%%
+flowchart TB
+    A[Verovio-supported format] --> V[Verovio]
+    B[Other music21-readable format] --> M21[music21]
+    M21 --> X[MusicXML]
+    C[MuseScore format] --> MS[MuseScore]
+    MS --> X
+    X --> V
+    V --> MEI[MEI]
+```
 
 | Source                 | Typical extensions                                                       | Route                                        |
 | ---------------------- | ------------------------------------------------------------------------ | -------------------------------------------- |
@@ -268,5 +278,6 @@ source file next to the MEI.
 - Tutorial notebook: [`notebooks/camat_formats.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/camat_formats.ipynb)
 - Batch conversion: [Batch conversion](batch-conversion.md) and
   [`notebooks/camat_batch_conversion.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/camat_batch_conversion.ipynb)
+- Public corpora used in the notebooks: [Test sources](sources.md)
 - API: [conversion](../api/conversion.md), [MIDI timing](../api/midi_timing.md),
   and [`vrv_convert_to_mei`](../api/verovio_render.md)

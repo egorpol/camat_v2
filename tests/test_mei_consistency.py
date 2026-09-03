@@ -8,11 +8,37 @@ import pandas as pd
 from camat import (
     Finding,
     MEI_CMN_51_SCHEMA,
+    MeiChecker,
     check_mei_files,
     convert_harm_startid_to_tstamp,
     link_pb_to_surface,
     run_checker,
 )
+
+
+def test_publication_profile_reports_missing_facsimile_system_break(
+    tmp_path: Path,
+) -> None:
+    demo = Path(__file__).parents[1] / "camat" / "examples" / "facsimile_viewer_demo.mei"
+    source = tmp_path / "missing-system-break.mei"
+    source.write_text(
+        demo.read_text(encoding="utf-8").replace('<sb xml:id="demo-sb-1"/>', ""),
+        encoding="utf-8",
+    )
+
+    findings, _, _ = MeiChecker(
+        source,
+        tmp_path,
+        publication_profile=True,
+    ).run()
+    alignment_findings = [
+        finding
+        for finding in findings
+        if finding.check == "system_break_zone_alignment"
+    ]
+
+    assert len(alignment_findings) == 1
+    assert alignment_findings[0].xml_id == "demo-measure-3"
 
 
 def _write_editorial_fixture(path: Path) -> None:
@@ -177,6 +203,148 @@ def test_strip_accid_ges_text_and_prepare_pages(tmp_path: Path) -> None:
     text = prepared.files[0].read_text(encoding="utf-8")
     assert "accid.ges" not in text
     assert "ppq" not in text
+
+
+def _write_page_score_mei(
+    path: Path,
+    *,
+    xml_id: str,
+    staff_ns: list[str],
+    meter: tuple[str, str] | None,
+    include_meter: bool = True,
+    clefs: dict[str, tuple[str, str]] | None = None,
+) -> None:
+    from xml.sax.saxutils import escape
+
+    clefs = clefs or {n: ("G", "2") for n in staff_ns}
+    staff_defs = []
+    staff_music = []
+    for n in staff_ns:
+        shape, line = clefs.get(n, ("G", "2"))
+        meter_xml = (
+            f'<meterSig count="{meter[0]}" unit="{meter[1]}"/>'
+            if include_meter and meter is not None
+            else ""
+        )
+        staff_defs.append(
+            f'<staffDef n="{escape(n)}" lines="5">'
+            f'<clef shape="{shape}" line="{line}"/>{meter_xml}</staffDef>'
+        )
+        staff_music.append(
+            f'<staff n="{escape(n)}"><layer n="1">'
+            f'<note pname="c" oct="4" dur="4"/></layer></staff>'
+        )
+    path.write_text(
+        f'''<?xml version="1.0" encoding="UTF-8"?>
+<mei xmlns="http://www.music-encoding.org/ns/mei" meiversion="5.1+CMN">
+  <meiHead><fileDesc><titleStmt><title>Combine scoreDef</title></titleStmt>
+    <pubStmt><p>Test fixture</p></pubStmt></fileDesc></meiHead>
+  <music><body><mdiv><score>
+    <scoreDef xml:id="sd-{xml_id}">
+      <staffGrp>{"".join(staff_defs)}</staffGrp>
+    </scoreDef>
+    <section>
+      <pb xml:id="pb-{xml_id}" />
+      <measure xml:id="measure-{xml_id}" n="1">{"".join(staff_music)}</measure>
+    </section>
+  </score></mdiv></body></music>
+</mei>
+''',
+        encoding="utf-8",
+    )
+
+
+def _section_scoredefs(path: Path):
+    import xml.etree.ElementTree as ET
+
+    root = ET.parse(path).getroot()
+    parent = {child: element for element in root.iter() for child in list(element)}
+    out = []
+    for element in root.iter():
+        tag = element.tag.rsplit("}", 1)[-1]
+        if tag != "scoreDef":
+            continue
+        owner = parent.get(element)
+        owner_tag = owner.tag.rsplit("}", 1)[-1] if owner is not None else ""
+        staff_ns = [
+            child.get("n")
+            for child in element.iter()
+            if child.tag.rsplit("}", 1)[-1] == "staffDef"
+        ]
+        meters = sorted(
+            {
+                f"{child.get('count')}/{child.get('unit')}"
+                for child in element.iter()
+                if child.tag.rsplit("}", 1)[-1] == "meterSig" and child.get("count")
+            }
+        )
+        out.append((owner_tag, staff_ns, meters, element.get("{http://www.w3.org/XML/1998/namespace}id")))
+    return out
+
+
+def test_combine_inserts_changed_page_scoredefs(tmp_path: Path) -> None:
+    from camat import combine_meis
+
+    page_a = tmp_path / "page-a.mei"
+    page_b = tmp_path / "page-b.mei"
+    page_c = tmp_path / "page-c.mei"
+    _write_page_score_mei(page_a, xml_id="a", staff_ns=["1", "2"], meter=("3", "4"))
+    _write_page_score_mei(page_b, xml_id="b", staff_ns=["1", "2"], meter=("4", "4"))
+    _write_page_score_mei(page_c, xml_id="c", staff_ns=["1"], meter=("4", "4"))
+
+    combined = combine_meis([page_a, page_b, page_c], tmp_path / "full.mei")
+    assert combined.inserted_page_score_defs == 2
+    scoredefs = _section_scoredefs(combined.path)
+    assert scoredefs[0][0] == "score"
+    assert scoredefs[0][1] == ["1", "2"]
+    assert scoredefs[0][2] == ["3/4"]
+    section_defs = [row for row in scoredefs if row[0] == "section"]
+    assert [row[1] for row in section_defs] == [["1", "2"], ["1"]]
+    assert [row[2] for row in section_defs] == [["4/4"], ["4/4"]]
+
+    text = combined.path.read_text(encoding="utf-8")
+    pb_b = text.index('xml:id="pb-b"')
+    sd_b = text.index('xml:id="sd-b"')
+    measure_b = text.index('xml:id="measure-b"')
+    assert pb_b < sd_b < measure_b
+
+
+def test_combine_skips_identical_page_scoredefs(tmp_path: Path) -> None:
+    from camat import combine_meis
+
+    page_a = tmp_path / "page-a.mei"
+    page_b = tmp_path / "page-b.mei"
+    _write_page_score_mei(page_a, xml_id="a", staff_ns=["1", "2"], meter=("3", "4"))
+    _write_page_score_mei(
+        page_b,
+        xml_id="b",
+        staff_ns=["1", "2"],
+        meter=("3", "4"),
+        include_meter=False,
+    )
+
+    combined = combine_meis([page_a, page_b], tmp_path / "full.mei")
+    assert combined.inserted_page_score_defs == 0
+    scoredefs = _section_scoredefs(combined.path)
+    assert len(scoredefs) == 1
+    assert scoredefs[0][0] == "score"
+
+
+def test_combine_can_disable_page_scoredef_copy(tmp_path: Path) -> None:
+    from camat import combine_meis
+
+    page_a = tmp_path / "page-a.mei"
+    page_b = tmp_path / "page-b.mei"
+    _write_page_score_mei(page_a, xml_id="a", staff_ns=["1", "2"], meter=("3", "4"))
+    _write_page_score_mei(page_b, xml_id="b", staff_ns=["1"], meter=("4", "4"))
+
+    skipped = combine_meis(
+        [page_a, page_b],
+        tmp_path / "old.mei",
+        include_page_score_defs=False,
+    )
+    assert skipped.inserted_page_score_defs == 0
+    assert [row[0] for row in _section_scoredefs(skipped.path)] == ["score"]
 
 
 def test_resolve_mei_inputs_accepts_http_links(tmp_path: Path, monkeypatch) -> None:

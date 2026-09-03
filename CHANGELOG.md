@@ -23,13 +23,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added `prepare_pages_for_combine` and `run_editorial_checks` so the
   combine-and-check notebook can run the corrected-full-MEI suite without
   defining helpers. Example pages are in `test_corpus/buxtehude_pages/`.
+- Added beginner notebooks `notebooks/mei_combine_pages.ipynb` (join page
+  files into one score) and `notebooks/mei_check_report.ipynb` (editorial
+  checks and a CSV report). `notebooks/mei_consistency_checks.ipynb` remains
+  the full combine/check toolkit.
 
 ### Changed
 
+- The facsimile notebook viewer now lives in a single widget iframe instead of
+  an ``Output`` HTML display. That stops Cursor/VS Code from drawing a second
+  stacked copy, while zone hovers still run on the first render.
 - The single-file IIIF notebook uses `test_corpus/Buxtehude-Anhang-S._185_musicxml_verovio.mei`,
   no longer depends on `camat_corpus`, and can take a pasted IIIF image URL.
   The batch notebook uses the same helpers for several pages.
 - The combine-and-check notebook no longer depends on `camat_corpus`.
+- The MkDocs home page is now a starting map for workflows 1 and 2, with
+  workflows 3 and 4 marked as placeholders. Test sources sit under Convert
+  to MEI. The conversion guide title is Convert to MEI.
+- Docs now point at the work-in-progress edition repositories
+  ([DdT vol. 11](https://github.com/egorpol/DdT_1_vol_11),
+  [DdT vol. 29/30](https://github.com/egorpol/DdT_1_vol_29_30)) via
+  [Edition corpora](docs/guides/edition-corpora.md) instead of a
+  `camat_corpus` repository.
+- The overview mermaid chart is top-to-bottom with a larger font so it stays
+  readable in the docs content column. The Convert to MEI route diagram uses
+  the same layout instead of a wide SVG.
+- The home page and README record DFG funding for the whole CAMAT project
+  (LIS, grant PF 669/18-1), not only the edition corpora.
+
+### Fixed
+
+- `combine_meis` no longer drops later pages' opening `<scoreDef>` (staff list
+  and meter). Those headers sit beside `<section>`, so a section-only join lost
+  mid-piece meter and scoring changes. The join now copies a later page's
+  opening `<scoreDef>` into the combined section when staffing, meter, key, or
+  clefs differ. Identical page headers are omitted.
+  `CombineResult.inserted_page_score_defs` reports how many were copied; the
+  consistency notebook prints that count. Pass `include_page_score_defs=False`
+  to restore the old join.
 
 ## [0.2.1b1] - 2026-08-29
 

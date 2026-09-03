@@ -413,9 +413,29 @@ def test_copied_pipeline_notebooks_use_package_imports_and_safe_defaults() -> No
     assert "ANNOTATE_COMBINED = False" in consistency
     assert "Bach-JS_Ein_feste_Burg.mei" in consistency
     assert "CHECK_IIIF_LINKS = False" in consistency
-    assert "camat_corpus" not in consistency
+    assert "from camat_corpus" not in consistency
+    assert "import camat_corpus" not in consistency
+    assert "COMBINED_STEM" in consistency
     assert "def facsimile_graphic_targets" not in consistency
     assert "def check_facsimile_iiif_links" not in consistency
+    combine_pages = code_for("notebooks/mei_combine_pages.ipynb")
+    assert "import setup_camat" in combine_pages
+    assert "test_corpus/buxtehude_pages" in combine_pages
+    assert "combine_meis" in combine_pages
+    assert "RUN_COMBINE = False" in combine_pages
+    assert "COMBINE_PAGES" not in combine_pages
+    assert "run_editorial_checks" not in combine_pages
+    assert "from camat_corpus" not in combine_pages
+    assert "ANNOTATE_COMBINED" not in combine_pages
+    check_report = code_for("notebooks/mei_check_report.ipynb")
+    assert "import setup_camat" in check_report
+    assert "run_editorial_checks" in check_report
+    assert "RUN_CHECKS = False" in check_report
+    assert "combine_meis" not in check_report
+    assert "COMBINE_PAGES" not in check_report
+    assert "from camat_corpus" not in check_report
+    assert "ANNOTATE_COMBINED" not in check_report
+    assert "CHECK_IIIF_LINKS" not in check_report
     page_dir = repo_root / "test_corpus" / "buxtehude_pages"
     assert len(list(page_dir.glob("bsb00023199_001*_facs_zones.mei"))) == 10
     assert "RUN_PIPELINE = False" in batch

@@ -612,6 +612,67 @@ class MeiChecker:
                         actual=f"#{active_surface}" if active_surface else "no preceding pb",
                     )
 
+        encoded_system_breaks: set[str] = set()
+        pending_system_break = False
+        for element in self.root.iter():
+            tag = local_name(element.tag)
+            if tag == "sb":
+                pending_system_break = True
+            elif tag == "measure":
+                if pending_system_break and element.get(XML_ID):
+                    encoded_system_breaks.add(element.get(XML_ID, ""))
+                pending_system_break = False
+
+        measures_by_surface: dict[
+            str, list[tuple[ET.Element, ET.Element]]
+        ] = defaultdict(list)
+        for measure in measures:
+            zone_id = measure.get("facs", "").lstrip("#")
+            zone = zone_elements.get(zone_id)
+            surface_id = zone_surface.get(zone_id, "")
+            if zone is not None and surface_id:
+                measures_by_surface[surface_id].append((measure, zone))
+
+        for surface_id, surface_measures in measures_by_surface.items():
+            try:
+                heights = sorted(
+                    float(zone.get("lry", "")) - float(zone.get("uly", ""))
+                    for _, zone in surface_measures
+                )
+                threshold = max(50.0, heights[len(heights) // 2] * 0.45)
+            except ValueError:
+                continue
+            band_centers: list[float] = []
+            for measure, zone in surface_measures:
+                try:
+                    center = (
+                        float(zone.get("uly", ""))
+                        + float(zone.get("lry", ""))
+                    ) / 2.0
+                except ValueError:
+                    continue
+                if not band_centers:
+                    band_centers.append(center)
+                    continue
+                band_center = sum(band_centers) / len(band_centers)
+                if abs(center - band_center) > threshold:
+                    measure_id = measure.get(XML_ID, "")
+                    if measure_id not in encoded_system_breaks:
+                        self.add(
+                            "warning",
+                            "facsimile",
+                            "system_break_zone_alignment",
+                            measure,
+                            "Facsimile measure zones begin a new vertical system "
+                            "without a preceding <sb>.",
+                            expected="preceding <sb>",
+                            actual="none",
+                            context=f"surface=#{surface_id}",
+                        )
+                    band_centers = [center]
+                else:
+                    band_centers.append(center)
+
     def _check_empty_structural_elements(self) -> None:
         assert self.root is not None
         empty_note_accidentals: list[ET.Element] = []

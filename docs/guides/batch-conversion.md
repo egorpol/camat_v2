@@ -187,7 +187,7 @@ installed command above.
 
 ## See also
 
-- [File formats](formats.md)
+- [Convert to MEI](formats.md)
 - Next workflow: [Parse and represent MEI](parsing-representations.md)
 - API: [conversion](../api/conversion.md) and
   [`vrv_convert_to_mei`](../api/verovio_render.md)

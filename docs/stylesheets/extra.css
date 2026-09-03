@@ -1,0 +1,13 @@
+/* Wide left-to-right mermaid charts shrink to the content column and
+   become unreadable. Keep diagrams at the column width and allow
+   horizontal scroll if a graph is still broader than the page. */
+.md-typeset .mermaid {
+  overflow-x: auto;
+}
+
+.md-typeset .mermaid svg {
+  display: block;
+  margin-inline: auto;
+  max-width: 100%;
+  height: auto;
+}

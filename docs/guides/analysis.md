@@ -4,6 +4,9 @@ title: Analyse representations
 
 # Analyse representations
 
+This is **CAMAT workflow 4**. There is no end-to-end analysis notebook yet;
+this page is the current guide. That tutorial will follow.
+
 CAMAT has two complementary analysis layers:
 
 1. **DataFrame analysis**, which works with musical columns and MEI identities;
