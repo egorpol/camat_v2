@@ -774,7 +774,13 @@ def draw_piano_roll(
                     "pitch_enharmonic": ("Pitch (Enharmonic)", "@pitch_enharmonic"),
                 }
                 default_order = ["pitch", "pitch_enharmonic", "voice", "measure", "xml_id", "global_onset", "local_onset", "duration", "midi"]
-                fields = [f for f in (list(hover_fields) if hover_fields is not None else default_order) if f in supported]
+                # Only show fields that exist on this ColumnDataSource. Otherwise Bokeh
+                # renders missing hover keys as "???".
+                fields = [
+                    f
+                    for f in (list(hover_fields) if hover_fields is not None else default_order)
+                    if f in supported and f in source_data
+                ]
                 tooltips = [supported[f] for f in fields]
                 try:
                     hover_tool = HoverTool(tooltips=tooltips)

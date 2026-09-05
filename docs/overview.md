@@ -91,7 +91,8 @@ See [Analyse representations](guides/analysis.md).
   provenance when an analysis result must be highlighted in notation.
 - **Specialized sources have specialized contracts.** The timeline backend for
   rap Humdrum creates `df_timeline`; it is not a common-notation `df_pitch`
-  parser.
+  parser. Mensural and timeline paths are experimental; see
+  [Known limitations](known-limitations.md).
 
 ## Where to start
 

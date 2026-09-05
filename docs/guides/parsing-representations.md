@@ -4,9 +4,12 @@ title: Parse and represent MEI
 
 # Parse and represent MEI
 
-This is **CAMAT workflow 3**. Showcase notebooks for this workflow are still
-thin; this page is the current guide. A general parse-to-tables tutorial will
-follow.
+This is **CAMAT workflow 3**. Start with
+[`mei_parse_tables.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/mei_parse_tables.ipynb)
+(parse one score to `df_pitch` / `df_events` and a piano roll), then
+[`mei_annotate_selection.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/mei_annotate_selection.ipynb)
+(select notes and write MEI annotations). Duration semantics remain in
+[`duration_semantics_examples.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/duration_semantics_examples.ipynb).
 
 Parsing is the boundary between the MEI document and Python. CAMAT reads the
 score without replacing it and returns representations suited to inspection,
@@ -94,12 +97,12 @@ that relationship.
 | `verovio` | default common-notation MEI parser |
 | `partitura` | reference implementation used for parser-parity testing |
 | `music21` | compatibility parser and conversion bridge |
-| `mensural` | specialized mensural-MEI path |
-| `timeline` | specialized rap-Humdrum timeline parser producing `df_timeline` |
+| `mensural` | experimental mensural-MEI path; not thoroughly tested |
+| `timeline` | experimental rap-Humdrum timeline parser (`df_timeline`); not thoroughly tested |
 
 Backends are not different analysis formats to choose casually. Start with
-Verovio for common-notation MEI and select another backend when its documented
-source or validation role applies.
+Verovio for common-notation MEI. Mensural and timeline paths are experimental;
+see [Known limitations](../known-limitations.md).
 
 ## Preserve identity and context
 

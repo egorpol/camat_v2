@@ -147,32 +147,63 @@ def resolve_mei_source_info(
     cache_dir: str | Path | None = None,
     timeout_seconds: int = 60,
     refresh_remote: bool = False,
-) -> ResolvedMeiSource:
-    """Resolve an MEI source while retaining its local or remote provenance."""
+    fetch: bool = True,
+    shared_cache: bool = False,
+) -> ResolvedMeiSource | None:
+    """Resolve an MEI source while retaining its local or remote provenance.
+
+    Parameters
+    ----------
+    fetch :
+        When False, a remote URL that is not already cached returns ``None``
+        instead of downloading. Local paths are unaffected.
+    shared_cache :
+        When True and ``cache_dir`` is omitted, use CAMAT's shared download
+        cache (``~/.cache/camat/downloads``), the same location ``parse_files``
+        uses with ``use_remote_cache=True``.
+    """
     if isinstance(source, ResolvedMeiSource):
         return source
 
     root = (repo_root or find_camat_root()).resolve()
-    source_text = str(source)
+    source_text = str(source).strip()
     parsed = urlparse(source_text)
     scheme = parsed.scheme.lower()
 
     if scheme in {"http", "https"}:
-        from .music_utils import get_file_path, to_direct_download_url
-
-        resolved_cache = (
-            Path(cache_dir) if cache_dir is not None else _default_mei_cache_dir(root)
+        from .music_utils import (
+            _cached_download_filename,
+            get_download_cache_dir,
+            get_file_path,
+            to_direct_download_url,
         )
-        local_path = Path(
-            get_file_path(
-                source_text,
-                timeout_seconds=timeout_seconds,
-                use_cache=True,
-                cache_dir=str(resolved_cache),
-                force_refresh=refresh_remote,
-            )
-        ).resolve()
+
+        if cache_dir is not None:
+            resolved_cache = Path(cache_dir)
+        elif shared_cache:
+            resolved_cache = Path(get_download_cache_dir())
+        else:
+            resolved_cache = _default_mei_cache_dir(root)
         direct_url = to_direct_download_url(source_text)
+        cached_path = (resolved_cache / _cached_download_filename(direct_url)).resolve()
+        if (
+            not refresh_remote
+            and cached_path.is_file()
+            and cached_path.stat().st_size > 0
+        ):
+            local_path = cached_path
+        elif not fetch:
+            return None
+        else:
+            local_path = Path(
+                get_file_path(
+                    source_text,
+                    timeout_seconds=timeout_seconds,
+                    use_cache=True,
+                    cache_dir=str(resolved_cache),
+                    force_refresh=refresh_remote,
+                )
+            ).resolve()
         return ResolvedMeiSource(
             original=source_text,
             kind="remote",
@@ -209,20 +240,28 @@ def resolve_mei_source(
     cache_dir: str | Path | None = None,
     timeout_seconds: int = 60,
     refresh_remote: bool = False,
-) -> Path:
+    fetch: bool = True,
+    shared_cache: bool = False,
+) -> Path | None:
     """Return a local MEI path from a local file, file URI, or HTTP(S) link.
 
     GitHub ``blob`` pages are converted to raw-file URLs. Remote files are
     cached under ``converted_mei/facsimile_viewer_sources/`` when this is a
-    CAMAT checkout, otherwise under the shared CAMAT download cache.
+    CAMAT checkout, otherwise under the shared CAMAT download cache. Pass
+    ``shared_cache=True`` to force the shared download cache used by
+    ``parse_files``. With ``fetch=False``, a remote URL that is not already
+    cached returns ``None`` instead of downloading.
     """
-    return resolve_mei_source_info(
+    info = resolve_mei_source_info(
         source,
         repo_root=repo_root,
         cache_dir=cache_dir,
         timeout_seconds=timeout_seconds,
         refresh_remote=refresh_remote,
-    ).local_path
+        fetch=fetch,
+        shared_cache=shared_cache,
+    )
+    return None if info is None else info.local_path
 
 
 def parse_int_attr(element: ET.Element, attr: str, *, context: str) -> int:

@@ -30,7 +30,12 @@ Later workflows (convert, parse, analyse):
 | --- | --- | --- | --- |
 | 10 | [`camat_formats.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/camat_formats.ipynb) | convert to MEI | corpus-backed MEI pass-through, direct Humdrum/MusicXML conversion, and MIDI/MuseScore bridges |
 | 11 | [`camat_batch_conversion.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/camat_batch_conversion.ipynb) | convert to MEI | mixed-route MEI files, technical validation, and a JSON report |
-| 12 | [`duration_semantics_examples.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/duration_semantics_examples.ipynb) | parse and represent MEI | note tables that distinguish segment, logical, and performed duration |
+| 12 | [`mei_parse_tables.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/mei_parse_tables.ipynb) | parse and represent MEI | one CMN MEI file → `df_pitch` / `df_events` and a filtered piano roll |
+| 13 | [`mei_annotate_selection.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/mei_annotate_selection.ipynb) | parse and represent MEI | filter notes and write `plist` / `tstamp` MEI annotations |
+| 14 | [`duration_semantics_examples.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/duration_semantics_examples.ipynb) | parse and represent MEI | note tables that distinguish segment, logical, and performed duration |
+| 15 | [`df_statistics.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/df_statistics.ipynb) | analyse representations | pitch, duration, pitch-class, transition, interval, and onset distributions from `df_pitch` |
+| 16 | [`binary_roundtrip.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/binary_roundtrip.ipynb) | analyse representations | MEI → tables / piano roll → binary → reconstruct → MEI highlight |
+| 17 | [`binary_pattern_search.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/binary_pattern_search.ipynb) | analyse representations | motif / chord / texture kernels and scaled-window pattern search |
 
 The conversion notebooks are alternatives after their shared introduction:
 use the first for one score or for learning routes, and the second for a mixed
@@ -42,8 +47,8 @@ corpus.
 | --- | --- | --- |
 | Handling MEI files | MEI/XML introduction, render, facsimile inspection, IIIF integration, page combine, editorial-check report, full combine/check toolkit, maintainer cleanup | document rewrite/cleanup in the maintainer notebook path |
 | Convert to MEI | corpus-backed single-file and batch notebooks, configurable MIDI grids, raw timing and voice-slot-to-staff diagnostics, resumability, and MuseScore | add larger-corpus performance and cache benchmarks |
-| Parse and represent MEI | duration semantics example only | add a general MEI-to-`df_pitch`/`df_events` notebook |
-| Analyse representations | no focused showcase notebook yet | add DataFrame → piano roll → binary matrix → pattern match → score overlay |
+| Parse and represent MEI | parse-to-tables, annotate selection, duration semantics | keep CMN focus; mensural/timeline remain experimental |
+| Analyse representations | DataFrame stats, binary round trip, and binary pattern search | deepen score-overlay / multi-metric search examples |
 
 ## Notebook contract
 
@@ -65,5 +70,6 @@ The root-level
 maintainer probes. They test real production behavior, including rewrite
 flags, rather than teach a portable user workflow.
 
-Implementation probes such as `testing_verovio_conversion.ipynb` are likewise
-outside the tutorial sequence.
+Implementation probes such as `testing_verovio_conversion.ipynb`,
+`testing_annot_stats.ipynb`, and `testing_binary_representations.ipynb` are
+likewise outside the tutorial sequence.

@@ -165,7 +165,10 @@ def resolve_mei_inputs(inputs: Iterable[str | Path], root: Path) -> list[Path]:
         if raw_text.startswith(("http://", "https://")):
             from .facsimile_viewer import resolve_mei_source
 
-            files.append(resolve_mei_source(raw_text, repo_root=root))
+            resolved = resolve_mei_source(raw_text, repo_root=root)
+            if resolved is None:
+                raise FileNotFoundError(f"Remote MEI is not available: {raw_text}")
+            files.append(resolved)
             continue
         path = Path(raw_path)
         if not path.is_absolute():

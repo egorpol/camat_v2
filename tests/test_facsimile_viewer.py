@@ -716,3 +716,48 @@ def test_facsimile_notebook_is_portable_and_has_no_persisted_widget_state() -> N
         if cell["cell_type"] == "code"
     )
     assert "widgets" not in notebook.get("metadata", {})
+
+def test_resolve_mei_source_fetch_false_uses_cache_or_returns_none(
+    tmp_path: Path,
+) -> None:
+    from camat.facsimile_viewer import resolve_mei_source
+    from camat.music_utils import _cached_download_filename, to_direct_download_url
+
+    url = "https://example.org/scores/demo.mei"
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    assert resolve_mei_source(url, cache_dir=cache_dir, fetch=False) is None
+
+    cached = cache_dir / _cached_download_filename(to_direct_download_url(url))
+    cached.write_text("<mei/>", encoding="utf-8")
+    assert resolve_mei_source(url, cache_dir=cache_dir, fetch=False) == cached.resolve()
+
+
+def test_resolve_mei_source_shared_cache_flag(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from camat.facsimile_viewer import resolve_mei_source
+    from camat import music_utils
+
+    shared = tmp_path / "shared"
+    shared.mkdir()
+    monkeypatch.setattr(music_utils, "get_download_cache_dir", lambda cache_dir=None: str(shared))
+
+    downloaded = shared / "file.mei"
+    calls: list[str] = []
+
+    def fake_get_file_path(file_source: str, **kwargs: object) -> str:
+        calls.append(str(kwargs.get("cache_dir")))
+        downloaded.write_text("<mei/>", encoding="utf-8")
+        return str(downloaded)
+
+    monkeypatch.setattr(music_utils, "get_file_path", fake_get_file_path)
+    path = resolve_mei_source(
+        "https://example.org/score.mei",
+        shared_cache=True,
+        fetch=True,
+    )
+    assert path == downloaded.resolve()
+    assert calls == [str(shared)]
+

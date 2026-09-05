@@ -15,15 +15,15 @@ workflow is MEI-first, and `parse_files(...)` resolves to `verovio` unless
 - `partitura` remains the ground-truth/reference backend for parity tests.
 - `music21` remains available as a compatibility backend and conversion bridge.
 
-The parser itself accepts MEI. Convert other formats first; see
+The parser itself accepts common-notation MEI. Convert other formats first; see
 [Convert to MEI](guides/formats.md). Verovio-supported formats convert directly;
 unsupported music21-readable formats follow
 `music21 -> MusicXML -> Verovio -> MEI`, so Verovio always produces the final
 analysis file.
 
-For MCFlow-style rap Humdrum timelines, use the `timeline` backend. It emits
-`df_timeline` rows with stable MEI ids and optional rhythm-analysis columns for
-duration and onset-position distributions.
+Mensural MEI and the `timeline` backend (MCFlow-style rap Humdrum, emitting
+`df_timeline`) are experimental and have not been tested thoroughly; see
+[Known limitations](known-limitations.md).
 
 ## Top-Level API
 

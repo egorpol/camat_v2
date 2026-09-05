@@ -4,8 +4,9 @@ title: Analyse representations
 
 # Analyse representations
 
-This is **CAMAT workflow 4**. There is no end-to-end analysis notebook yet;
-this page is the current guide. That tutorial will follow.
+This is **CAMAT workflow 4**. Start with DataFrame summaries on `df_pitch`, then
+move to binary matrices and pattern search when you need a discrete pitch/time
+grid.
 
 CAMAT has two complementary analysis layers:
 
@@ -17,14 +18,18 @@ Start with the least transformed representation that answers the question.
 
 ## DataFrame analysis
 
-The note table is suitable for grouping, filtering, descriptive statistics,
-and sequential analyses. CAMAT includes helpers for:
+Tutorial notebook:
+[`df_statistics.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/df_statistics.ipynb)
+(CMN only). It parses one MEI file for itself and shows:
 
 - pitch and pitch-class distributions;
-- metric, logical, or externally supplied performed-duration distributions;
-- melodic intervals and successive-pitch transitions;
-- onset positions within measures;
-- filtering and piano-roll display.
+- metric or logical duration distributions (see also
+  [`duration_semantics_examples.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/duration_semantics_examples.ipynb));
+- a monophony check before sequential analyses;
+- successive-pitch transition heatmaps and melodic intervals;
+- onset positions within measures (uses `df_events` / parse `results`).
+
+Optional comparison stays simple: one full score plus one filtered selection.
 
 For example:
 
@@ -55,6 +60,17 @@ array whose rows are pitch positions and whose columns are time-grid steps.
 
 ## Create a binary matrix with context
 
+Tutorial notebook:
+[`binary_roundtrip.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/binary_roundtrip.ipynb)
+shows the representation rotation
+
+```text
+MEI → df_pitch / piano roll → binary + metadata → reconstructed notes → MEI highlight
+```
+
+so the matrix stays linked to musical identity rather than becoming an abstract
+image.
+
 ```python
 from camat.music_utils import create_binary_matrix_bundle
 
@@ -76,6 +92,11 @@ pitch-axis orientation and bounds, and—when enabled—the source rows behind
 active cells. Store it with the matrix.
 
 ## Pattern search
+
+Tutorial notebook:
+[`binary_pattern_search.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/binary_pattern_search.ipynb)
+searches Bach with motif, chord, and texture kernels, including time-scale
+modulation of the search window.
 
 `run_pattern_search(...)` compares a source matrix with a smaller kernel using
 one or more similarity metrics. Kernels may be extracted from another matrix or
@@ -110,7 +131,10 @@ MEI -> df_pitch -> matrix + metadata -> matches -> source rows/xml:id -> score o
 
 ## Notebook coverage
 
-The current notebooks introduce conversion and duration semantics. A dedicated
-end-to-end parsing notebook and a matrix-analysis notebook are the next two
-tutorials in the [notebook roadmap](../notebooks.md).
+| Notebook | Role |
+| --- | --- |
+| [`df_statistics.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/df_statistics.ipynb) | DataFrame distributions |
+| [`binary_roundtrip.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/binary_roundtrip.ipynb) | MEI ↔ table ↔ binary rotation |
+| [`binary_pattern_search.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/binary_pattern_search.ipynb) | motif / chord / texture search |
 
+See the [notebook roadmap](../notebooks.md).

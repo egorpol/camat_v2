@@ -68,6 +68,7 @@ from .analysis_utils import (
     check_monophonic_input,
     melodic_interval_distribution,
     display_melodic_interval_distribution,
+    display_successive_pitch_transition_heatmaps,
     build_onset_position_counts,
     display_onset_position_histogram,
 )
@@ -284,6 +285,7 @@ __all__ = [
     'check_monophonic_input',
     'melodic_interval_distribution',
     'display_melodic_interval_distribution',
+    'display_successive_pitch_transition_heatmaps',
     'build_onset_position_counts',
     'display_onset_position_histogram',
     'TimelineParseResult',

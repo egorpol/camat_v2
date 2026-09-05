@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Added Workflow 4 binary notebooks `notebooks/binary_roundtrip.ipynb` (MEI →
+  `df_pitch` / piano roll → binary → reconstruct → MEI highlight) and
+  `notebooks/binary_pattern_search.ipynb` (Bach motif / chord / texture kernels
+  with scaled-window normalised-overlap search). Docs: home Workflow 4,
+  notebook roadmap, and [Analyse representations](docs/guides/analysis.md).
+
+- Added Workflow 4 tutorial notebook `notebooks/df_statistics.ipynb` (CMN):
+  self-contained parse of the Bach *Ein feste Burg* sample to `df_pitch` /
+  `df_events`, then pitch, duration, pitch-class, transition, interval, and
+  onset-position distributions. Docs: home Workflow 4 section, notebook
+  roadmap, and [Analyse representations](docs/guides/analysis.md).
+  `display_successive_pitch_transition_heatmaps` is exported from the package
+  root alongside the other distribution helpers.
+
+- Added Workflow 3 tutorial notebooks `notebooks/mei_parse_tables.ipynb` (parse
+  one CMN MEI file to `df_pitch` / `df_events` and a filtered piano roll) and
+  `notebooks/mei_annotate_selection.ipynb` (multi-voice selection, `plist` /
+  `tstamp` annotations, and optional saved selection MEI). Docs: home Workflow 3
+  section, notebook roadmap, and
+  [Parse and represent MEI](docs/guides/parsing-representations.md).
+
 - Added `launch_interactive_mei_renderer` with on-screen score zoom controls
   for the paste-and-render notebook. The renderer uses an A4-like Verovio page
   so the staff stays readable; CSS zoom then enlarges the notation rather than
@@ -30,6 +51,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `resolve_mei_source` / `resolve_mei_source_info` accept `fetch=False` (return
+  ``None`` for an uncached remote URL instead of downloading) and
+  `shared_cache=True` (use the same download cache as `parse_files`). Workflow 3
+  notebooks call the packaged helper instead of defining a local copy.
+
 - The facsimile notebook viewer now lives in a single widget iframe instead of
   an ``Output`` HTML display. That stops Cursor/VS Code from drawing a second
   stacked copy, while zone hovers still run on the first render.
@@ -48,10 +74,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The overview mermaid chart is top-to-bottom with a larger font so it stays
   readable in the docs content column. The Convert to MEI route diagram uses
   the same layout instead of a wide SVG.
+- Documented that common-notation MEI (MEI 5.1 CMN) is the supported schema.
+  Mensural and timeline/rap backends are experimental and not thoroughly tested.
 - The home page and README record DFG funding for the whole CAMAT project
   (LIS, grant PF 669/18-1), not only the edition corpora.
 
 ### Fixed
+
+- `compute_top_matches_df` no longer passes `dropna=` to `DataFrame.stack()`,
+  which pandas 2.2+/3 rejects. NA scores are dropped after stacking instead.
+
+- Bokeh piano-roll hover no longer lists fields that are missing from the
+  note table (for example `Pitch Enharmonic` when `parse_enharmonic` is
+  off), which previously showed as `???`.
 
 - `combine_meis` no longer drops later pages' opening `<scoreDef>` (staff list
   and meter). Those headers sit beside `<section>`, so a section-only join lost

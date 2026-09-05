@@ -25,6 +25,27 @@ minimum context needed for triage. Do not put vague future ideas into source
 comments or a growing TODO file; open an issue once the work is concrete enough
 to describe and verify.
 
+## Common-notation MEI is the supported schema
+
+**Status:** MEI 5.1 Common Music Notation (CMN) is the schema CAMAT is built
+and tested against. Mensural MEI and timeline/rap Humdrum are experimental.
+
+Editorial checks, IIIF/facsimile integration, page combine, the facsimile
+viewer, conversion to analysis MEI, and the default Verovio parser all assume
+**common-notation MEI**. Workflow 1 notebooks and the packaged MEI 5.1 CMN
+RELAX NG schema follow that contract.
+
+Two other paths exist but have **not been tested thoroughly**:
+
+- **mensural** — a specialized mensural-MEI backend and duration-normalization
+  helpers;
+- **timeline** — a rap-Humdrum backend (MCFlow-style examples) that produces
+  `df_timeline` rather than `df_pitch`.
+
+Treat those backends as prototypes. Do not rely on them for production
+editions or unattended analysis. The APIs are documented under
+[Backend and specialized parsing](tutorial.md).
+
 ## Experimental MIDI conversion
 
 **Status:** experimental; not suitable for unattended edition production.

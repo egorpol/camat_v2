@@ -9,6 +9,10 @@ default common-notation MEI contract. Begin with
 [Parse and represent MEI](guides/parsing-representations.md) for the standard
 `df_pitch` and `df_events` workflow.
 
+Mensural MEI and timeline/rap Humdrum parsing are **experimental** and have
+not been tested thoroughly. Common-notation MEI is the supported schema; see
+[Known limitations](known-limitations.md).
+
 ## Common-Notation Backend Choice
 
 For common music notation, CAMAT uses `verovio` as the default backend.

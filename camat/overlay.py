@@ -82,7 +82,8 @@ def compute_top_matches_df(
 
     values = pd.DataFrame(conv_df).replace([np.inf, -np.inf], np.nan)
     flat = (
-        values.stack(dropna=True)
+        values.stack()
+        .dropna()
         .reset_index()
         .rename(columns={"level_0": "row_idx", "level_1": "col_idx", 0: "score_norm"})
     )
