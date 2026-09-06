@@ -5,15 +5,17 @@ title: CAMAT Documentation
 
 CAMAT is an **MEI-centered toolbox for editorial and analytical work with
 symbolic music**. You handle or import an MEI document, then move into Python
-representations and analysis. To start install CAMAT with pip:
+representations and analysis. To start, install CAMAT with pip:
 
 ```bash
 pip install camat
 ```
 
-Python 3.11 or later. Conceptual background is in
-[What CAMAT is](overview.md). The full tutorial order is the
-[notebook roadmap](notebooks.md).
+Use Python 3.11 or later.
+
+Conceptual background is in [What CAMAT is](overview.md).
+
+The full tutorial order is the [notebook roadmap](notebooks.md).
 
 ## Choose a path
 
