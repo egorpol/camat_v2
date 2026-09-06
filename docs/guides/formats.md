@@ -7,7 +7,7 @@ This is **CAMAT workflow 2**. It converts MusicXML, Humdrum, MIDI, MuseScore,
 and other symbolic formats to MEI. Conversion creates input for parsing; it
 does not turn an imported score into a reviewed edition.
 
-CAMAT analyzes **MEI**. `parse_files(...)` expects common-notation MEI and
+CAMAT analyses **MEI**. `parse_files(...)` expects common-notation MEI and
 defaults to the Verovio parser. Convert other encodings to MEI first, then
 parse the converted file.
 

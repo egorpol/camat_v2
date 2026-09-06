@@ -3,7 +3,7 @@ title: CAMAT Documentation
 ---
 # CAMAT
 
-CAMAT is an **MEI-centered toolbox for editorial and analytical work with
+CAMAT is an **MEI-centred toolbox for editorial and analytical work with
 symbolic music**. You handle or import an MEI document, then move into Python
 representations and analysis. To start, install CAMAT with pip:
 

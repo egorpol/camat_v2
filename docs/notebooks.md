@@ -67,7 +67,7 @@ A CAMAT showcase notebook should include:
 The root-level
 `mei_corrected_full_checks.ipynb`, the older root-level
 `single_mei_iiif_integration.ipynb`, and `run_pipeline_workflow.ipynb` are
-maintainer probes. They test real production behavior, including rewrite
+maintainer probes. They test real production behaviour, including rewrite
 flags, rather than teach a portable user workflow.
 
 Implementation probes such as `testing_verovio_conversion.ipynb`,

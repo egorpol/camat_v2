@@ -86,6 +86,6 @@ python scripts/normalize_mensural_mei.py path/to/input.mei -o path/to/output.mei
 - `verovio_duration_equivalence=None`
 - `verovio_mensural_score_up=False`
 
-For strict partitura-only behavior, set:
+For strict partitura-only behaviour, set:
 
 - `allow_music21_fallback=False`

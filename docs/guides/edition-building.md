@@ -294,7 +294,7 @@ uses a full-width score-only view; when records exist it validates measure
 It is read-only: corrections remain part of the editorial workflow and must be
 saved to the source MEI. See the
 [facsimile viewer API](../api/facsimile_viewer.md) for the exact input contract,
-local-image handling, caching, and file-watch behavior.
+local-image handling, caching, and file-watch behaviour.
 
 ## Next step
 

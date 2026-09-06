@@ -13,7 +13,7 @@ That directory holds URL manifests only; it does not store score files. Pass a
 list file to `scripts/test_verovio_parser_robustness.py` or
 `camat-convert` with `--source`.
 
-## How the lists are organised
+## How the lists are organized
 
 | File | Role |
 | --- | --- |

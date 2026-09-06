@@ -59,7 +59,7 @@ https://raw.githubusercontent.com/craigsapp/beethoven-piano-sonatas/master/kern/
 
 When `source_base_dir` is supplied, both the manifest path and local entries in
 the manifest resolve from that directory. The notebook uses the repository root,
-so its behavior does not depend on where Jupyter was launched:
+so its behaviour does not depend on where Jupyter was launched:
 
 ```python
 from camat import (

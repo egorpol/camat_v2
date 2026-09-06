@@ -4,7 +4,7 @@ title: What CAMAT is
 
 # What CAMAT is
 
-CAMAT is an **MEI-centered toolbox for editorial and analytical work with
+CAMAT is an **MEI-centred toolbox for editorial and analytical work with
 symbolic music**. It is not a single converter or parser. It connects several
 workflows by using MEI as the durable musical document between them.
 
@@ -36,7 +36,7 @@ flowchart TB
     O -. xml:id .-> M
 ```
 
-MEI is the center of this diagram deliberately. DataFrames and matrices are
+MEI is the centre of this diagram deliberately. DataFrames and matrices are
 derived working representations; they do not replace the edition.
 
 ## What each layer is responsible for
