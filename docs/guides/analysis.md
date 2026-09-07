@@ -93,10 +93,15 @@ active cells. Store it with the matrix.
 
 ## Pattern search
 
-Tutorial notebook:
-[`binary_pattern_search.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/binary_pattern_search.ipynb)
-searches Bach with motif, chord, and texture kernels, including time-scale
-modulation of the search window.
+Tutorial notebooks:
+
+- [`binary_convolution_explained.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/binary_convolution_explained.ipynb)
+  — toy host/kernel placements and valid vs same padding on those windows,
+  then sliding-window intuition, stride, and kernel size / time scaling on
+  Bach *Ein feste Burg*;
+- [`binary_pattern_search.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/binary_pattern_search.ipynb)
+  — motif, chord, and texture kernels with scaled-window search and piano-roll
+  overlays.
 
 `run_pattern_search(...)` compares a source matrix with a smaller kernel using
 one or more similarity metrics. Kernels may be extracted from another matrix or
@@ -109,12 +114,17 @@ all_results, scaled_kernels, variant, last_result = run_pattern_search(
     matrix,
     kernel,
     metrics_to_run=["normalized_overlap"],
+    padding="valid",  # or "same"
     backend="none",
 )
 ```
 
 Meaningful comparison requires compatible pitch orientation and time
 resolution. Scaling a kernel is an analytical decision, not a display option.
+`padding="valid"` (default) keeps the kernel inside the host;
+`padding="same"` zero-pads the border so the score map can match the host
+size at stride 1. Stride and kernel scale factors remain the knobs for window
+motion and size.
 
 ## Return results to the score
 
@@ -135,6 +145,7 @@ MEI -> df_pitch -> matrix + metadata -> matches -> source rows/xml:id -> score o
 | --- | --- |
 | [`df_statistics.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/df_statistics.ipynb) | DataFrame distributions |
 | [`binary_roundtrip.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/binary_roundtrip.ipynb) | MEI ↔ table ↔ binary rotation |
+| [`binary_convolution_explained.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/binary_convolution_explained.ipynb) | toy grids, valid vs same padding, then sliding-window convolution intuition |
 | [`binary_pattern_search.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/binary_pattern_search.ipynb) | motif / chord / texture search |
 
 See the [notebook roadmap](../notebooks.md).

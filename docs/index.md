@@ -83,6 +83,7 @@ MEI only; see [Known limitations](known-limitations.md).
 | --- | --- | --- |
 | DataFrame statistics | [`df_statistics.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/df_statistics.ipynb) | pitch, duration, pitch-class, transition, interval, and onset distributions |
 | Binary round trip | [`binary_roundtrip.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/binary_roundtrip.ipynb) | MEI → `df_pitch` / piano roll → binary → reconstruct → MEI highlight |
+| Convolution explainer | [`binary_convolution_explained.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/binary_convolution_explained.ipynb) | toy host/kernel placements and valid vs same padding, then Bach sliding-window animation; stride and kernel-size demos |
 | Binary pattern search | [`binary_pattern_search.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/binary_pattern_search.ipynb) | motif, chord, and texture kernels with scaled-window search |
 
 Guide: [Analyse representations](guides/analysis.md).

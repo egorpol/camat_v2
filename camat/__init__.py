@@ -1,6 +1,6 @@
 __version__ = "0.2.1b1"
 
-from .pattern_search import run_pattern_search
+from .pattern_search import count_kernel_placements, pad_for_same, run_pattern_search
 from .parser_registry import (
     get_parse_files,
     list_parsers,
@@ -225,6 +225,8 @@ from .mensural_utils import (
 __all__ = [
     '__version__',
     'run_pattern_search',
+    'pad_for_same',
+    'count_kernel_placements',
     'get_parse_files',
     'list_parsers',
     'parse_files',

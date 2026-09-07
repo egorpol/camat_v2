@@ -9,6 +9,8 @@ import pandas as pd
 
 __all__ = [
     "resize_kernel",
+    "pad_for_same",
+    "count_kernel_placements",
     "summarize_best",
     "top_matches",
     "apply_threshold",
@@ -187,6 +189,70 @@ def plot_kernel(title: str, kernel: np.ndarray, *, backend: str = "plt", cmap: s
         show(fig)
 
 
+def pad_for_same(matrix: np.ndarray, kernel: np.ndarray) -> Tuple[np.ndarray, int, int]:
+    """Zero-pad so valid convolution on the result has the host shape at stride 1.
+
+    Output cell ``(i, j)`` corresponds to kernel top-left at host
+    ``(i - pad_y, j - pad_x)``, which may be negative (kernel hangs off the edge).
+    Missing cells are silence (0).
+    """
+    M = np.asarray(matrix, dtype=float)
+    K = np.asarray(kernel, dtype=float)
+    if M.ndim != 2 or K.ndim != 2:
+        raise ValueError("matrix and kernel must be 2D.")
+    r, c = K.shape
+    pad_y = r // 2
+    pad_x = c // 2
+    Mp = np.pad(M, ((pad_y, r - 1 - pad_y), (pad_x, c - 1 - pad_x)))
+    return Mp, int(pad_y), int(pad_x)
+
+
+def _normalize_padding(padding: str) -> str:
+    mode = str(padding).strip().lower()
+    if mode not in {"valid", "same"}:
+        raise ValueError("padding must be 'valid' or 'same'.")
+    return mode
+
+
+def count_kernel_placements(
+    host_shape: Tuple[int, int],
+    kernel_shape: Tuple[int, int],
+    *,
+    padding: str = "valid",
+    stride_y: int = 1,
+    stride_x: int = 1,
+) -> Tuple[int, int, int]:
+    """Return ``(n_row, n_col, n_total)`` kernel top-lefts for this padding/stride."""
+    mode = _normalize_padding(padding)
+    H, W = (int(host_shape[0]), int(host_shape[1]))
+    h, w = (int(kernel_shape[0]), int(kernel_shape[1]))
+    sy = max(1, int(stride_y))
+    sx = max(1, int(stride_x))
+    if mode == "valid":
+        n_row = max(0, H - h + 1)
+        n_col = max(0, W - w + 1)
+    else:
+        n_row = H
+        n_col = W
+    if n_row <= 0 or n_col <= 0:
+        return 0, 0, 0
+    n_row_s = len(range(0, n_row, sy))
+    n_col_s = len(range(0, n_col, sx))
+    return n_row_s, n_col_s, n_row_s * n_col_s
+
+
+def _host_axis_labels(full_labels: List, positions: List[int], pad: int) -> List:
+    n = len(full_labels)
+    labels: List = []
+    for pos in positions:
+        host_i = int(pos) - int(pad)
+        if 0 <= host_i < n:
+            labels.append(full_labels[host_i])
+        else:
+            labels.append(host_i)
+    return labels
+
+
 def build_scale_variants(kernel_scale_axes: List[str], kernel_scale_factors: List[float]) -> List[Dict[str, float]]:
     scale_variants: List[Dict[str, float]] = []
     seen_scales: set[Tuple[float, float]] = set()
@@ -216,19 +282,26 @@ def compute_metrics_for_variant(
     stride_y: int = 1,
     stride_x: int = 1,
     metrics: List[str] = None,
-) -> Tuple[Dict[str, np.ndarray], Dict[str, pd.DataFrame], List[int], List[int]]:
+    padding: str = "valid",
+) -> Tuple[Dict[str, np.ndarray], Dict[str, pd.DataFrame], List[int], List[int], int, int, np.ndarray]:
     metrics = list(metrics or [])
-    if scaled_kernel.shape[0] > matrix.shape[0] or scaled_kernel.shape[1] > matrix.shape[1]:
+    mode = _normalize_padding(padding)
+    work = np.asarray(matrix, dtype=float)
+    kernel = np.asarray(scaled_kernel, dtype=float)
+    pad_y = pad_x = 0
+    if mode == "same":
+        work, pad_y, pad_x = pad_for_same(work, kernel)
+    elif kernel.shape[0] > work.shape[0] or kernel.shape[1] > work.shape[1]:
         raise ValueError("Scaled kernel is larger than the source matrix.")
 
-    window_shape = scaled_kernel.shape
-    out_rows = matrix.shape[0] - window_shape[0] + 1
-    out_cols = matrix.shape[1] - window_shape[1] + 1
+    window_shape = kernel.shape
+    out_rows = work.shape[0] - window_shape[0] + 1
+    out_cols = work.shape[1] - window_shape[1] + 1
     if out_rows <= 0 or out_cols <= 0:
         raise ValueError("Kernel cannot slide within the source matrix.")
 
-    windows = np.lib.stride_tricks.sliding_window_view(matrix, window_shape)
-    conv_scores_full = (windows * scaled_kernel).sum(axis=(-2, -1))
+    windows = np.lib.stride_tricks.sliding_window_view(work, window_shape)
+    conv_scores_full = (windows * kernel).sum(axis=(-2, -1))
 
     row_positions = list(range(0, out_rows, max(1, int(stride_y))))
     col_positions = list(range(0, out_cols, max(1, int(stride_x))))
@@ -275,7 +348,7 @@ def compute_metrics_for_variant(
             metric_arrays['normalized_cross_correlation'] = norm_cross
             metric_dfs['normalized_cross_correlation'] = pd.DataFrame(norm_cross)
 
-    return metric_arrays, metric_dfs, row_positions, col_positions
+    return metric_arrays, metric_dfs, row_positions, col_positions, pad_y, pad_x, work
 
 
 def run_pattern_search(
@@ -295,7 +368,17 @@ def run_pattern_search(
     mpl_cmap: str = "viridis",
     plot_scaled_kernels: bool = False,
     top_n_matches: Optional[int] = 20,
+    padding: str = "valid",
 ) -> Tuple[Dict[str, Dict[str, pd.DataFrame]], Dict[str, np.ndarray], Optional[str], Optional[pd.DataFrame]]:
+    """Slide ``kernel_source`` over ``matrix_source`` and score each placement.
+
+    ``padding="valid"`` (default) keeps only placements where the kernel fits
+    inside the host. ``padding="same"`` zero-pads the host so the score map can
+    match the host size at stride 1; hanging cells are silence (0). Result
+    index/column labels are host top-left coordinates and may be negative
+    under ``"same"``.
+    """
+    padding = _normalize_padding(padding)
     if isinstance(matrix_source, pd.DataFrame):
         matrix = matrix_source.to_numpy(dtype=float)
         row_labels_full = list(matrix_source.index)
@@ -348,20 +431,23 @@ def run_pattern_search(
         if plot_scaled_kernels:
             plot_kernel(f"Scaled kernel ({variant_key})", scaled_kernel, backend=backend, cmap=mpl_cmap)
 
-        if scaled_kernel.shape[0] > matrix.shape[0] or scaled_kernel.shape[1] > matrix.shape[1]:
+        if padding == "valid" and (
+            scaled_kernel.shape[0] > matrix.shape[0] or scaled_kernel.shape[1] > matrix.shape[1]
+        ):
             # Skip variants larger than source
             continue
 
-        metric_arrays, metric_dfs, row_positions, col_positions = compute_metrics_for_variant(
+        metric_arrays, metric_dfs, row_positions, col_positions, pad_y, pad_x, work = compute_metrics_for_variant(
             matrix,
             scaled_kernel,
             stride_y=stride_y,
             stride_x=stride_x,
             metrics=selected_metrics,
+            padding=padding,
         )
 
-        row_labels = [row_labels_full[pos] for pos in row_positions]
-        col_labels = [col_labels_full[pos] for pos in col_positions]
+        row_labels = _host_axis_labels(row_labels_full, row_positions, pad_y)
+        col_labels = _host_axis_labels(col_labels_full, col_positions, pad_x)
 
         for metric_key in selected_metrics:
             metric_label = available_metrics[metric_key]['label']
@@ -413,10 +499,9 @@ def run_pattern_search(
         scaled_kernels[variant_key] = scaled_kernel
         last_variant_key = variant_key
 
-        # Save last raw conv for convenience
+        # Save last raw conv for convenience (same working matrix as the metrics)
         if 'normalized_overlap' in metric_arrays:
-            kernel_weight = float(scaled_kernel.sum())
-            conv_scores_full = np.lib.stride_tricks.sliding_window_view(matrix, scaled_kernel.shape)
+            conv_scores_full = np.lib.stride_tricks.sliding_window_view(work, scaled_kernel.shape)
             conv_scores_full = (conv_scores_full * scaled_kernel).sum(axis=(-2, -1))
             conv_raw = conv_scores_full[np.ix_(row_positions, col_positions)]
             last_conv_raw_df = pd.DataFrame(conv_raw, index=row_labels, columns=col_labels)

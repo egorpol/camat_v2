@@ -7,7 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Convolution explainer notebook: denser toy host/kernel catalog, nonempty
+  random windows, a labelled overlap heatmap, and valid vs same padding on
+  those same toy placements before the Bach demos. Large animation outputs
+  are no longer stored in the notebook file.
+
+- `run_pattern_search(..., padding="valid"|"same")` exposes the convolution
+  boundary mode used in the explainer (`valid` remains the default).
+
 ### Added
+
+- Added Workflow 4 notebook `notebooks/binary_convolution_explained.ipynb`:
+  toy host/kernel placements, then a Bach sliding-window convolution explainer
+  with animation, stride / padding (`valid` vs `same`), and kernel time-scale
+  demos. Cross-linked from `binary_pattern_search` and the analysis guide.
 
 - Added Workflow 4 binary notebooks `notebooks/binary_roundtrip.ipynb` (MEI →
   `df_pitch` / piano roll → binary → reconstruct → MEI highlight) and
