@@ -29,6 +29,9 @@ classifiers = [
 ]
 dynamic = ["dependencies"]
 
+[project.optional-dependencies]
+test = ["pytest>=8"]
+
 [project.scripts]
 camat-convert = "camat.conversion:main"
 camat-check-mei = "camat.check_mei_consistency:main"

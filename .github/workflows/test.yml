@@ -32,8 +32,7 @@ jobs:
           cache: pip
           cache-dependency-path: |
             requirements.txt
-            requirements-test.txt
-            requirements-release.txt
+            pyproject.toml
       - name: Build, install, and test wheel in a fresh venv
         run: >-
           python scripts/test_release_matrix.py

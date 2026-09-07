@@ -1,3 +1,0 @@
--r requirements-test.txt
-build>=1.2
-twine>=5

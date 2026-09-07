@@ -163,7 +163,7 @@ def _build_wheel(*, reuse: bool) -> Path:
     _run([sys.executable, "-m", "venv", build_env], cwd=REPO_ROOT)
     python = _venv_python(build_env)
     _run([python, "-m", "pip", "install", "--upgrade", "pip"], cwd=REPO_ROOT)
-    _run([python, "-m", "pip", "install", "-r", REPO_ROOT / "requirements-release.txt"], cwd=REPO_ROOT)
+    _run([python, "-m", "pip", "install", "build>=1.2", "twine>=5"], cwd=REPO_ROOT)
     _run([python, "-m", "build", "--wheel", "--outdir", DIST_ROOT], cwd=REPO_ROOT)
     wheels = sorted(DIST_ROOT.glob("camat-*.whl"))
     if len(wheels) != 1:
@@ -184,8 +184,10 @@ def _test_version(version: str, interpreter: str, wheel: Path, *, reuse: bool) -
     _run([interpreter, "-m", "venv", env_dir], cwd=REPO_ROOT)
     python = _venv_python(env_dir)
     _run([python, "-m", "pip", "install", "--upgrade", "pip"], cwd=run_dir)
-    _run([python, "-m", "pip", "install", "-r", REPO_ROOT / "requirements-test.txt"], cwd=run_dir)
-    _run([python, "-m", "pip", "install", "--force-reinstall", wheel], cwd=run_dir)
+    _run(
+        [python, "-m", "pip", "install", "--force-reinstall", f"{wheel}[test]"],
+        cwd=run_dir,
+    )
     _run([python, "-m", "pip", "check"], cwd=run_dir)
 
     test_env = dict(os.environ)

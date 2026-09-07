@@ -36,8 +36,8 @@ By default every run:
 2. Builds a wheel in an isolated build environment.
 3. Checks the wheel metadata with Twine.
 4. Creates a fresh venv for each requested Python version.
-5. Installs `requirements-test.txt` and the wheel, allowing pip to resolve the
-   wheel's declared `requirements.txt` dependencies.
+5. Installs the wheel with the `test` extra (`pytest`) in a fresh venv,
+   allowing pip to resolve the wheel's declared `requirements.txt` dependencies.
 6. Runs `pip check`.
 7. Runs `tests/release/test_installed_package.py` from outside the checkout and
    verifies that `camat` was imported from the installed wheel.

@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Dropped the extra `requirements-test.txt` and `requirements-release.txt`
+  files. Pytest is the package `test` extra; the release runner installs
+  `build` and `twine` directly.
+
 - Convolution explainer notebook: denser toy host/kernel catalog, nonempty
   random windows, a labelled overlap heatmap, and valid vs same padding on
   those same toy placements before the Bach demos. Large animation outputs
