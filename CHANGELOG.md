@@ -7,19 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Changed
-
-- Dropped the extra `requirements-test.txt` and `requirements-release.txt`
-  files. Pytest is the package `test` extra; the release runner installs
-  `build` and `twine` directly.
-
-- Convolution explainer notebook: denser toy host/kernel catalog, nonempty
-  random windows, a labelled overlap heatmap, and valid vs same padding on
-  those same toy placements before the Bach demos. Large animation outputs
-  are no longer stored in the notebook file.
-
-- `run_pattern_search(..., padding="valid"|"same")` exposes the convolution
-  boundary mode used in the explainer (`valid` remains the default).
+## [0.2.1] - 2026-09-07
 
 ### Added
 
@@ -76,6 +64,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Dropped the extra `requirements-test.txt` and `requirements-release.txt`
+  files. Pytest is the package `test` extra; the release runner installs
+  `build` and `twine` directly.
+
+- Convolution explainer notebook: denser toy host/kernel catalog, nonempty
+  random windows, a labelled overlap heatmap, and valid vs same padding on
+  those same toy placements before the Bach demos. Large animation outputs
+  are no longer stored in the notebook file.
+
+- `run_pattern_search(..., padding="valid"|"same")` exposes the convolution
+  boundary mode used in the explainer (`valid` remains the default).
+
 - `resolve_mei_source` / `resolve_mei_source_info` accept `fetch=False` (return
   ``None`` for an uncached remote URL instead of downloading) and
   `shared_cache=True` (use the same download cache as `parse_files`). Workflow 3
@@ -88,9 +88,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   no longer depends on `camat_corpus`, and can take a pasted IIIF image URL.
   The batch notebook uses the same helpers for several pages.
 - The combine-and-check notebook no longer depends on `camat_corpus`.
-- The MkDocs home page is now a starting map for workflows 1 and 2, with
-  workflows 3 and 4 marked as placeholders. Test sources sit under Convert
-  to MEI. The conversion guide title is Convert to MEI.
+- The MkDocs home page is now a starting map for all four workflows. Test
+  sources sit under Convert to MEI. The conversion guide title is Convert to MEI.
 - Docs now point at the work-in-progress edition repositories
   ([DdT vol. 11](https://github.com/egorpol/DdT_1_vol_11),
   [DdT vol. 29/30](https://github.com/egorpol/DdT_1_vol_29_30)) via
@@ -588,7 +587,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-[Unreleased]: https://github.com/egorpol/camat_v2/compare/v0.1.10...HEAD
+[Unreleased]: https://github.com/egorpol/camat_v2/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/egorpol/camat_v2/compare/v0.2.0...v0.2.1
+[0.2.0]: https://github.com/egorpol/camat_v2/compare/v0.1.13...v0.2.0
+[0.1.13]: https://github.com/egorpol/camat_v2/compare/v0.1.12...v0.1.13
+[0.1.12]: https://github.com/egorpol/camat_v2/compare/v0.1.11...v0.1.12
+[0.1.11]: https://github.com/egorpol/camat_v2/compare/v0.1.10...v0.1.11
 [0.1.10]: https://github.com/egorpol/camat_v2/compare/v0.1.9...v0.1.10
 [0.1.9]: https://github.com/egorpol/camat_v2/compare/v0.1.8...v0.1.9
 [0.1.8]: https://github.com/egorpol/camat_v2/compare/v0.1.7...v0.1.8

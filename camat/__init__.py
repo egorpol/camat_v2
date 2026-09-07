@@ -1,4 +1,4 @@
-__version__ = "0.2.1b1"
+__version__ = "0.2.1"
 
 from .pattern_search import count_kernel_placements, pad_for_same, run_pattern_search
 from .parser_registry import (
