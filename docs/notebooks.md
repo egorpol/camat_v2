@@ -6,7 +6,8 @@ title: Notebook roadmap
 
 The notebooks are executable companions to the conceptual guides. Each should
 answer one main question, declare its input and output, and avoid relying on
-state created by another notebook.
+state created by another notebook. See [Getting started](getting-started.md#run-the-showcase-notebooks)
+for Jupyter installation, kernel selection, and first-run downloads.
 
 ## Recommended order
 
@@ -15,57 +16,36 @@ Workflow 1 — **Handling MEI files** — tutorial sequence:
 | Order | Notebook | Main result |
 | --- | --- | --- |
 | 1 | [Introduction to MEI and XML](guides/mei-introduction.md) | MEI/XML structure and editorial concepts |
-| 2 | [`mei_render.ipynb`](../notebooks/mei_render.ipynb) | paste or edit MEI and render interactively with Verovio |
-| 3 | [`mei_facsimile_viewer.ipynb`](../notebooks/mei_facsimile_viewer.ipynb) | read-only inspection of MEI with optional measure–facsimile linking |
-| 4 | [`mei_single_file_iiif_integration.ipynb`](../notebooks/mei_single_file_iiif_integration.ipynb) | IIIF facsimile + measure zones on one clean MEI |
-| 5 | [`mei_batch_iiif_integration.ipynb`](../notebooks/mei_batch_iiif_integration.ipynb) | same IIIF job over many page files |
-| 6 | [`mei_combine_pages.ipynb`](../notebooks/mei_combine_pages.ipynb) | join page MEI files into one `*_full.mei` |
-| 7 | [`mei_check_report.ipynb`](../notebooks/mei_check_report.ipynb) | editorial checks and a CSV report |
-| 8 | [`mei_consistency_checks.ipynb`](../notebooks/mei_consistency_checks.ipynb) | full toolkit: combine + check + extra flags |
-| 9 | [`mei_facsimile_viewer.ipynb`](../notebooks/mei_facsimile_viewer.ipynb) again | inspect the checked or combined MEI |
+| 2 | [Render MEI](../notebooks/mei_render.ipynb) | paste or edit MEI and render interactively with Verovio |
+| 3 | [Inspect scores and facsimiles](../notebooks/mei_facsimile_viewer.ipynb) | read-only inspection of MEI with optional measure–facsimile linking |
+| 4 | [Link one page to IIIF](../notebooks/mei_single_file_iiif_integration.ipynb) | IIIF facsimile + measure zones on one clean MEI |
+| 5 | [Link a batch to IIIF](../notebooks/mei_batch_iiif_integration.ipynb) | same IIIF job over many page files |
+| 6 | [Combine MEI pages](../notebooks/mei_combine_pages.ipynb) | join page MEI files into one `*_full.mei` |
+| 7 | [Create an editorial report](../notebooks/mei_check_report.ipynb) | editorial checks and a CSV report |
+| 8 | [Combine and check MEI](../notebooks/mei_consistency_checks.ipynb) | full toolkit: combine + check + extra flags |
+| 9 | [Inspect scores and facsimiles](../notebooks/mei_facsimile_viewer.ipynb) again | inspect the checked or combined MEI |
 
 Later workflows (convert, parse, analyse):
 
 | Order | Notebook | Workflow | Main result |
 | --- | --- | --- | --- |
-| 10 | [`camat_formats.ipynb`](../notebooks/camat_formats.ipynb) | convert to MEI | corpus-backed MEI pass-through, direct Humdrum/MusicXML conversion, and MIDI/MuseScore bridges |
-| 11 | [`camat_batch_conversion.ipynb`](../notebooks/camat_batch_conversion.ipynb) | convert to MEI | mixed-route MEI files, technical validation, and a JSON report |
-| 12 | [`mei_parse_tables.ipynb`](../notebooks/mei_parse_tables.ipynb) | parse and represent MEI | one CMN MEI file → `df_pitch` / `df_events` and a filtered piano roll |
-| 13 | [`mei_annotate_selection.ipynb`](../notebooks/mei_annotate_selection.ipynb) | parse and represent MEI | filter notes and write `plist` / `tstamp` MEI annotations |
-| 14 | [`duration_semantics_examples.ipynb`](../notebooks/duration_semantics_examples.ipynb) | parse and represent MEI | note tables that distinguish segment, logical, and performed duration |
-| 15 | [`df_statistics.ipynb`](../notebooks/df_statistics.ipynb) | analyse representations | pitch, duration, pitch-class, transition, interval, and onset distributions from `df_pitch` |
-| 16 | [`binary_roundtrip.ipynb`](../notebooks/binary_roundtrip.ipynb) | analyse representations | MEI → tables / piano roll → binary → reconstruct → MEI highlight |
-| 17 | [`binary_convolution_explained.ipynb`](../notebooks/binary_convolution_explained.ipynb) | analyse representations | toy host/kernel placements and valid vs same padding, then sliding-window convolution on Bach |
-| 18 | [`binary_pattern_search.ipynb`](../notebooks/binary_pattern_search.ipynb) | analyse representations | motif / chord / texture kernels and scaled-window pattern search |
+| 10 | [Convert one score](../notebooks/camat_formats.ipynb) | convert to MEI | corpus-backed MEI pass-through, direct Humdrum/MusicXML conversion, and MIDI/MuseScore bridges |
+| 11 | [Convert a mixed corpus](../notebooks/camat_batch_conversion.ipynb) | convert to MEI | mixed-route MEI files, technical validation, and a JSON report |
+| 12 | [Parse MEI to tables](../notebooks/mei_parse_tables.ipynb) | parse and represent MEI | one CMN MEI file → `df_pitch` / `df_events` and a filtered piano roll |
+| 13 | [Annotate a note selection](../notebooks/mei_annotate_selection.ipynb) | parse and represent MEI | filter notes and write `plist` / `tstamp` MEI annotations |
+| 14 | [Understand note durations](../notebooks/duration_semantics_examples.ipynb) | parse and represent MEI | note tables that distinguish segment, logical, and performed duration |
+| 15 | [Explore DataFrame statistics](../notebooks/df_statistics.ipynb) | analyse representations | pitch, duration, pitch-class, transition, interval, and onset distributions from `df_pitch` |
+| 16 | [Round trip through a binary matrix](../notebooks/binary_roundtrip.ipynb) | analyse representations | MEI → tables / piano roll → binary → reconstruct → MEI highlight |
+| 17 | [Understand binary convolution](../notebooks/binary_convolution_explained.ipynb) | analyse representations | toy host/kernel placements and valid vs same padding, then sliding-window convolution on Bach |
+| 18 | [Search for musical patterns](../notebooks/binary_pattern_search.ipynb) | analyse representations | motif / chord / texture kernels and scaled-window pattern search |
 
 The conversion notebooks are alternatives after their shared introduction:
 use the first for one score or for learning routes, and the second for a mixed
 corpus.
 
-## Coverage and next tutorials
-
-| CAMAT workflow | Current coverage | Next documentation task |
-| --- | --- | --- |
-| Handling MEI files | MEI/XML introduction, render, facsimile inspection, IIIF integration, page combine, editorial-check report, full combine/check toolkit, maintainer cleanup | document rewrite/cleanup in the maintainer notebook path |
-| Convert to MEI | corpus-backed single-file and batch notebooks, configurable MIDI grids, raw timing and voice-slot-to-staff diagnostics, resumability, and MuseScore | add larger-corpus performance and cache benchmarks |
-| Parse and represent MEI | parse-to-tables, annotate selection, duration semantics | keep CMN focus; mensural/timeline remain experimental |
-| Analyse representations | DataFrame stats, binary round trip, convolution explainer, and pattern search | deepen score-overlay / multi-metric search examples |
-
-## Notebook contract
-
-A CAMAT showcase notebook should include:
-
-1. its workflow number and a link to the companion guide;
-2. a small offline input, with network or external-tool examples kept optional;
-3. a short statement of what each representation means;
-4. explicit names for the MEI source, `df_pitch`, `df_events`, matrix, and
-   matrix metadata rather than a chain of ambiguous `df` variables;
-5. a final “what was produced?” summary and the next notebook or guide;
-6. a clean-kernel execution check before publication.
-
 ## Workflow 1 maintainer notebooks
 
-The archived notebooks in `CAMAT_old/` —
+The notebooks in [the development archive](../CAMAT_old/README.md) —
 `mei_corrected_full_checks.ipynb`, `single_mei_iiif_integration.ipynb`, and
 `run_pipeline_workflow.ipynb` — are maintainer probes. They test real production behaviour, including rewrite
 flags, rather than teach a portable user workflow.

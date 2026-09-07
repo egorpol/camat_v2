@@ -96,8 +96,8 @@ See [Analyse representations](guides/analysis.md).
 
 ## Where to start
 
-The [home page](index.md) is the starting map, including tutorial notebooks for
-workflows 1 and 2. Each workflow has a hub:
+The [home page](index.md) is the starting map for all four workflows. Each
+workflow has a hub and companion notebooks:
 
 | Workflow | Hub |
 | --- | --- |

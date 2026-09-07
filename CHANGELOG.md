@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Added an offline getting-started guide, Jupyter setup, contribution guidance,
+  citation metadata, and archive/provenance notes.
+- Bundled the MEI schema's ECL-2.0 license and third-party notices in package
+  distributions, and added a JupyterLab `notebooks` installation extra.
+- Release checks now validate dated notes before publication, mark GitHub
+  prereleases explicitly, and retain tested dependency versions as CI artifacts.
+
+### Changed
+
+- Simplified the README, documentation home, and API index; replaced the
+  unconfigured hosted documentation link with repository documentation links.
+- Updated notebook link labels and stale fixture/viewer descriptions while
+  preserving all saved notebook outputs.
+- Excluded the incomplete test subset from source distributions; contributors
+  run tests from a Git checkout with its fixtures and archived probes.
+
 ## [0.2.1] - 2026-09-07
 
 ### Added

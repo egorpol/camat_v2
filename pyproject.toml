@@ -8,8 +8,8 @@ version = "0.2.1"
 description = "CAMAT: tools for symbolic music parsing, analysis, and rendering."
 readme = "README.md"
 requires-python = ">=3.11"
-license = "MIT"
-license-files = ["LICENSE"]
+license = "MIT AND ECL-2.0"
+license-files = ["LICENSE", "LICENSES/*.txt", "THIRD_PARTY_NOTICES.md"]
 authors = [
   { name = "Egor Polyakov" },
 ]
@@ -30,7 +30,8 @@ classifiers = [
 dynamic = ["dependencies"]
 
 [project.optional-dependencies]
-test = ["pytest>=8"]
+test = ["pytest>=8", "packaging>=24"]
+notebooks = ["jupyterlab>=4"]
 
 [project.scripts]
 camat-convert = "camat.conversion:main"
@@ -52,7 +53,7 @@ Homepage = "https://github.com/egorpol/camat_v2"
 Repository = "https://github.com/egorpol/camat_v2"
 Issues = "https://github.com/egorpol/camat_v2/issues"
 Changelog = "https://github.com/egorpol/camat_v2/blob/main/CHANGELOG.md"
-Documentation = "https://camat.readthedocs.io/"
+Documentation = "https://github.com/egorpol/camat_v2/blob/main/docs/index.md"
 
 [tool.setuptools]
 include-package-data = false

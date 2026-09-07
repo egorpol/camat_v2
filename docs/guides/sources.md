@@ -9,8 +9,10 @@ Remote entries are **raw file URLs**, not GitHub HTML pages. Local `.txt`
 manifests ignore blank lines and lines that start with `#`.
 
 Companion lists live in [`test_corpus/`](../../test_corpus).
-That directory holds URL manifests only; it does not store score files. Pass a
-list file to `scripts/test_verovio_parser_robustness.py` or
+That directory holds URL manifests and local Buxtehude MEI fixtures, including
+page files used by the editorial notebooks. See its
+[fixture and provenance notes](../../test_corpus/README.md).
+Pass a list file to `scripts/test_verovio_parser_robustness.py` or
 `camat-convert` with `--source`.
 
 ## How the lists are organized

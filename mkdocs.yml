@@ -26,7 +26,7 @@ plugins:
             - .
           options:
             docstring_style: numpy
-            show_source: true
+            show_source: false
 
 markdown_extensions:
   - admonition
@@ -43,6 +43,7 @@ markdown_extensions:
 nav:
   - Start:
       - Home: index.md
+      - Getting started: getting-started.md
       - What CAMAT is: overview.md
       - Edition corpora: guides/edition-corpora.md
       - Notebook roadmap: notebooks.md
@@ -59,7 +60,6 @@ nav:
       - 4. Analyse representations: guides/analysis.md
   - Further guides:
       - Backend and specialized parsing: tutorial.md
-      - Release testing: releasing.md
   - Reference:
       - Overview: reference.md
       - API:
@@ -83,3 +83,7 @@ nav:
           - Pattern search: api/pattern_search.md
           - Timeline backend: api/timeline_backend.md
           - Verovio render: api/verovio_render.md
+  - Project:
+      - About and citation: about.md
+      - Contributing: contributing.md
+      - Release testing: releasing.md

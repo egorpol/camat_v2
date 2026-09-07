@@ -189,6 +189,13 @@ def _test_version(version: str, interpreter: str, wheel: Path, *, reuse: bool) -
         cwd=run_dir,
     )
     _run([python, "-m", "pip", "check"], cwd=run_dir)
+    installed = subprocess.run(
+        [str(python), "-m", "pip", "list", "--format=json"],
+        cwd=run_dir, check=True, capture_output=True, text=True,
+    )
+    (run_dir / "installed-dependencies.json").write_text(
+        json.dumps(json.loads(installed.stdout), indent=2) + "\n", encoding="utf-8",
+    )
 
     test_env = dict(os.environ)
     test_env.pop("CAMAT_PARSER", None)

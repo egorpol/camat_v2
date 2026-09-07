@@ -1,92 +1,43 @@
 ---
-title: Reference
+title: API reference
 ---
 
-# Reference
+# API reference
 
-## Backend Guidance
+Start with the [top-level API](api/camat.md) for common entry points available
+through `import camat`. The pages below contain the full module documentation.
 
-For common music notation, `verovio` is the default backend. CAMAT's analysis
-workflow is MEI-first, and `parse_files(...)` resolves to `verovio` unless
-`CAMAT_PARSER` or `parsing_backend` selects another backend.
+## Handle and inspect MEI
 
-- `verovio` parses common-notation MEI into the shared `df_pitch` and
-  `df_events` result shape.
-- `partitura` remains the ground-truth/reference backend for parity tests.
-- `music21` remains available as a compatibility backend and conversion bridge.
+- [Edition and IIIF pipeline](api/edition_pipeline.md): facsimile integration and edition preparation.
+- [MEI consistency and cleanup](api/mei_consistency.md): editorial validation and maintenance.
+- [Facsimile viewer](api/facsimile_viewer.md): linked score and image inspection.
+- [Verovio rendering](api/verovio_render.md): SVG scores, annotations, and highlights.
 
-The parser itself accepts common-notation MEI. Convert other formats first; see
-[Convert to MEI](guides/formats.md). Verovio-supported formats convert directly;
-unsupported music21-readable formats follow
-`music21 -> MusicXML -> Verovio -> MEI`, so Verovio always produces the final
-analysis file.
+## Convert and parse
 
-Mensural MEI and the `timeline` backend (MCFlow-style rap Humdrum, emitting
-`df_timeline`) are experimental and have not been tested thoroughly; see
-[Known limitations](known-limitations.md).
+- [Conversion](api/conversion.md): individual files and mixed corpora.
+- [MIDI timing](api/midi_timing.md): raw performance timing without notation quantization.
+- [Parser registry](api/parser_registry.md) and [parser utilities](api/parser_utils.md): backend selection, source expansion, and summaries.
+- [Verovio backend](api/verovio_backend.md): the default for common-notation MEI.
+- [Partitura backend](api/partitura_backend.md): reference backend for parity tests.
+- [Music21 backend](api/music21_backend.md) and [rendering](api/music21_render.md): compatibility helpers.
 
-## Top-Level API
+Convert non-MEI sources before using the default parser; see
+[Convert to MEI](guides/formats.md).
 
-::: camat
+## Analyse representations
 
-## Module Reference
+- [Analysis utilities](api/analysis_utils.md): distributions, intervals, and piano rolls.
+- [Binary matrix designer](api/binary_matrix_designer.md): pitch/time representations.
+- [Pattern search](api/pattern_search.md): kernels, placements, and similarity.
+- [Overlays](api/overlay.md): connect matches to source notes.
+- [Music utilities](api/music_utils.md): shared musical helpers.
 
-### Analysis utilities
+## Experimental notation paths
 
-::: camat.analysis_utils
+- [Mensural utilities](api/mensural_utils.md).
+- [Timeline backend](api/timeline_backend.md): rap-Humdrum parsing and `df_timeline`.
 
-### Binary matrix designer
-
-::: camat.binary_matrix_designer
-
-### Mensural utilities
-
-::: camat.mensural_utils
-
-### MEI facsimile viewer
-
-::: camat.facsimile_viewer
-
-### Music21 backend
-
-::: camat.music21_backend
-
-### Music21 render
-
-::: camat.music21_render
-
-### Music utilities
-
-::: camat.music_utils
-
-### Overlay
-
-::: camat.overlay
-
-### Parser registry
-
-::: camat.parser_registry
-
-### Parser utilities
-
-::: camat.parser_utils
-
-### Partitura backend
-
-::: camat.partitura_backend
-
-### Verovio backend
-
-::: camat.verovio_backend
-
-### Pattern search
-
-::: camat.pattern_search
-
-### Timeline backend
-
-::: camat.timeline_backend
-
-### Verovio render
-
-::: camat.verovio_render
+These paths have a different scope from common-notation MEI. Read the
+[known limitations](known-limitations.md) before using them.

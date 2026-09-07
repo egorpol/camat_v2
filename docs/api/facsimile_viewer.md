@@ -112,8 +112,10 @@ also reruns Verovio.
 Verovio 6.2.1 preserves `<annot>` records internally and emits an SVG
 `<g class="annot">` for annotations anchored with either `@plist` or
 `@tstamp`. It does not engrave text stored in an annotation `<p>`, however.
-The current CAMAT viewer does not add its own annotation overlay, so this text
-is not visible in either pane.
+CAMAT reads these annotations from the MEI and adds its own annotation list
+and score highlights. Annotation display is enabled by default; use
+`show_annotations=False` to hide it. This viewer layer is separate from
+Verovio's engraved SVG text.
 
 The executable companion is
 [`notebooks/mei_facsimile_viewer.ipynb`](../../notebooks/mei_facsimile_viewer.ipynb).

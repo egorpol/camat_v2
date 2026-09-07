@@ -4,26 +4,9 @@ title: Known limitations
 
 # Known limitations and issue tracking
 
-This page records broad, confirmed constraints users need to see before using
-CAMAT. Actionable bugs, proposed fixes, and feature work belong in
-[GitHub Issues](https://github.com/egorpol/camat_v2/issues), where they can be
-assigned, discussed, linked to pull requests, and closed with an auditable
-history.
-
-Git itself tracks source changes; it is not an issue tracker. A professional
-repository workflow uses both:
-
-- this page for stable user-facing limitations;
-- one GitHub issue per reproducible defect or bounded enhancement;
-- labels such as `bug`, `enhancement`, `workflow:midi`, and
-  `workflow:facsimile` for filtering;
-- milestones only when an issue is committed to a particular release;
-- pull requests that close issues with `Fixes #123` when the fix is verified.
-
-The repository's **Bug report** and **Feature request** templates collect the
-minimum context needed for triage. Do not put vague future ideas into source
-comments or a growing TODO file; open an issue once the work is concrete enough
-to describe and verify.
+These are the current scope limits and confirmed constraints. Report a
+reproducible defect or propose an improvement through
+[GitHub Issues](https://github.com/egorpol/camat_v2/issues).
 
 ## Common-notation MEI is the supported schema
 
@@ -73,5 +56,6 @@ surface. Remote MEI and remote `<graphic>` targets require network access when
 they are first loaded.
 
 Verovio preserves `<annot>` records anchored by `@plist` or `@tstamp`, but does
-not engrave their paragraph text. The facsimile viewer currently has no custom
-annotation popover or overlay, so annotation text is not visible.
+not engrave their paragraph text. CAMAT supplies an annotation list and score
+highlights in its viewer, controlled by `show_annotations`; see
+[annotation rendering](api/facsimile_viewer.md#annotation-rendering).

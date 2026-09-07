@@ -39,12 +39,30 @@ By default every run:
 5. Installs the wheel with the `test` extra (`pytest`) in a fresh venv,
    allowing pip to resolve the wheel's declared `requirements.txt` dependencies.
 6. Runs `pip check`.
-7. Runs `tests/release/test_installed_package.py` from outside the checkout and
+7. Saves the resolved package versions to
+   `.release-runs/py<version>/installed-dependencies.json`.
+8. Runs `tests/release/test_installed_package.py` from outside the checkout and
    verifies that `camat` was imported from the installed wheel.
 
 Use `--allow-missing` only for partial development checks. A release run should
 not skip any interpreter. `--reuse` is available for debugging, but should not
 be used as release evidence.
+
+## Tested dependency baseline
+
+The automated matrix runs on Ubuntu with Python 3.11–3.14. Windows and macOS
+are not yet covered by CI. Each wheel test resolves the declared dependencies
+for its interpreter, runs `pip check`, and records the installed versions in
+`installed-dependencies.json`. GitHub Actions retains these files in
+`dependency-baseline-<python-version>` artifacts, tied to the workflow run and
+commit. Download them from the run's **Artifacts** section when reproducing a
+release environment.
+
+This records tested combinations; it is not a lockfile or a claim that every
+older dependency version works. Dependency minimums should be added when
+supported by API requirements and tests. The `notebooks` extra adds JupyterLab;
+several plotting and widget libraries remain runtime dependencies because the
+current package imports them through its public API.
 
 ## Smoke-test coverage
 
@@ -79,7 +97,19 @@ requests, and manual dispatches. It includes:
 - a strict MkDocs build on Python 3.11, matching Read the Docs.
 
 The tag-driven release workflow calls this whole workflow first. Release
-building and PyPI publishing wait for all six jobs to pass.
+building and PyPI publishing wait for all six jobs to pass. Before building,
+`scripts/prepare_release.py` checks the tag, both package version declarations,
+and a nonempty, dated changelog section. The validated notes are passed to the
+GitHub release as an artifact. Prerelease versions such as `0.2.2b1` are marked
+as GitHub prereleases and do not replace the latest stable release.
+
+Check the metadata locally without publishing anything:
+
+```bash
+python scripts/prepare_release.py --tag v0.2.1
+```
+
+Use the tag for the version being prepared.
 
 To run the additional checks locally from the repository root:
 
@@ -110,10 +140,32 @@ branch, tag or commit containing that snapshot. During local editing, links
 still refer to the current commit; new files become available on GitHub after
 they are committed and pushed.
 
-Before launch, merge the intended release to `main`, publish a matching
-version/tag, and verify the Read the Docs version configuration and links.
-Preparing the branch and running these checks does not publish the package,
-deploy documentation, or change repository visibility.
+## Documentation hosting
+
+The repository contains the build configuration, but a Read the Docs project
+must also be created. Until a hosted build is verified, the README and package
+metadata link to documentation in the repository.
+
+For the public launch:
+
+1. Once the repository is public, connect a Read the Docs Community account to
+   GitHub and grant its GitHub App access to this repository.
+2. In Read the Docs, choose **Add project**, select the repository, and use
+   its existing `.readthedocs.yaml`. Build the `main` branch.
+3. Confirm the actual project URL; `camat.readthedocs.io` in `mkdocs.yml` is
+   the intended address, not evidence that the project exists. Update
+   `site_url` if the assigned address differs.
+4. Activate the intended release tag, configure the stable/default version,
+   and check the site in a logged-out browser, including notebook links.
+5. Replace repository documentation links in `README.md`, `pyproject.toml`,
+   and GitHub About with the verified hosted URL.
+
+Read the Docs Community requires a public repository; private repositories
+use Read the Docs Business. See the official
+[project setup](https://docs.readthedocs.com/platform/stable/intro/add-project.html)
+and [Git integration](https://docs.readthedocs.com/platform/stable/reference/git-integration.html)
+guides. Preparing these files does not create a hosted project or change the
+repository's visibility.
 
 ## Release checklist
 

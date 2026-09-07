@@ -72,3 +72,11 @@ jobs:
           python scripts/test_release_matrix.py
           --versions "${{ matrix.python-version }}"
           --python "${{ matrix.python-version }}=python"
+      - name: Retain tested dependency versions
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependency-baseline-${{ matrix.python-version }}
+          path: .release-runs/**/installed-dependencies.json
+          include-hidden-files: true
+          if-no-files-found: warn
