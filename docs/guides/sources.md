@@ -8,7 +8,7 @@ These public corpora feed **workflow 2** (conversion) and parser tests.
 Remote entries are **raw file URLs**, not GitHub HTML pages. Local `.txt`
 manifests ignore blank lines and lines that start with `#`.
 
-Companion lists live in [`test_corpus/`](https://github.com/egorpol/camat_v2/tree/main/test_corpus).
+Companion lists live in [`test_corpus/`](../../test_corpus).
 That directory holds URL manifests only; it does not store score files. Pass a
 list file to `scripts/test_verovio_parser_robustness.py` or
 `camat-convert` with `--source`.
@@ -17,10 +17,10 @@ list file to `scripts/test_verovio_parser_robustness.py` or
 
 | File | Role |
 | --- | --- |
-| [`test_corpus/mei_test_copora_links.txt`](https://github.com/egorpol/camat_v2/blob/main/test_corpus/mei_test_copora_links.txt) | Main MEI robustness corpus. Complete works and complete movements from public encoding projects (**1739** raw URLs). |
-| [`test_corpus/verovio_partitura_parity_sources.txt`](https://github.com/egorpol/camat_v2/blob/main/test_corpus/verovio_partitura_parity_sources.txt) | Small, diverse set for Verovio / Partitura parser parity. One source per encoding family, not another movement from an already-covered corpus. |
-| [`test_corpus/non_mei_test_copora_links.txt`](https://github.com/egorpol/camat_v2/blob/main/test_corpus/non_mei_test_copora_links.txt) | Conversion probe for non-MEI formats: Humdrum, MusicXML, MuseScore, and MIDI (**56** raw URLs). |
-| [`notebooks/data/batch_sources.txt`](https://github.com/egorpol/camat_v2/blob/main/notebooks/data/batch_sources.txt) | Small URL-only source-list example copied from the canonical non-MEI manifest. |
+| [`test_corpus/mei_test_copora_links.txt`](../../test_corpus/mei_test_copora_links.txt) | Main MEI robustness corpus. Complete works and complete movements from public encoding projects (**1739** raw URLs). |
+| [`test_corpus/verovio_partitura_parity_sources.txt`](../../test_corpus/verovio_partitura_parity_sources.txt) | Small, diverse set for Verovio / Partitura parser parity. One source per encoding family, not another movement from an already-covered corpus. |
+| [`test_corpus/non_mei_test_copora_links.txt`](../../test_corpus/non_mei_test_copora_links.txt) | Conversion probe for non-MEI formats: Humdrum, MusicXML, MuseScore, and MIDI (**56** raw URLs). |
+| [`notebooks/data/batch_sources.txt`](../../notebooks/data/batch_sources.txt) | Small URL-only source-list example copied from the canonical non-MEI manifest. |
 
 The MEI list prefers complete works. Incipits, single-voice extracts, measure-position stubs, expanded/OMR duplicates, and demo files are omitted even when the same repo contains them.
 

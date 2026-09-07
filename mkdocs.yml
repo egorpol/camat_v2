@@ -8,6 +8,9 @@ repo_name: camat_v2
 
 docs_dir: docs
 
+hooks:
+  - scripts/docs_hooks.py
+
 theme:
   name: material
 

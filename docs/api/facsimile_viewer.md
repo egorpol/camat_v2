@@ -116,7 +116,7 @@ The current CAMAT viewer does not add its own annotation overlay, so this text
 is not visible in either pane.
 
 The executable companion is
-[`notebooks/mei_facsimile_viewer.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/mei_facsimile_viewer.ipynb).
+[`notebooks/mei_facsimile_viewer.ipynb`](../../notebooks/mei_facsimile_viewer.ipynb).
 
 ## API
 

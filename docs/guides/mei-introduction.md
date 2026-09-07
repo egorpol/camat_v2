@@ -515,16 +515,16 @@ document.
 
 ## Try and check the example
 
-Open [`mei_render.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/mei_render.ipynb),
+Open [`mei_render.ipynb`](../../notebooks/mei_render.ipynb),
 replace the example text with your own MEI, and select **Render MEI**. Use the
 score zoom controls to enlarge the notation without rendering again. The
 notebook uses the same packaged Verovio helpers as the rest of CAMAT and lets
 you switch between rendered pages without leaving Jupyter.
 
 When a clean MEI corresponds to a BSB source page, continue with
-[`mei_single_file_iiif_integration.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/mei_single_file_iiif_integration.ipynb)
+[`mei_single_file_iiif_integration.ipynb`](../../notebooks/mei_single_file_iiif_integration.ipynb)
 for one file, or
-[`mei_batch_iiif_integration.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/mei_batch_iiif_integration.ipynb)
+[`mei_batch_iiif_integration.ipynb`](../../notebooks/mei_batch_iiif_integration.ipynb)
 for several pages.
 
 Rendering is a useful feedback loop, but a score that renders is not

@@ -5,11 +5,11 @@ title: Parse and represent MEI
 # Parse and represent MEI
 
 This is **CAMAT workflow 3**. Start with
-[`mei_parse_tables.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/mei_parse_tables.ipynb)
+[`mei_parse_tables.ipynb`](../../notebooks/mei_parse_tables.ipynb)
 (parse one score to `df_pitch` / `df_events` and a piano roll), then
-[`mei_annotate_selection.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/mei_annotate_selection.ipynb)
+[`mei_annotate_selection.ipynb`](../../notebooks/mei_annotate_selection.ipynb)
 (select notes and write MEI annotations). Duration semantics remain in
-[`duration_semantics_examples.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/duration_semantics_examples.ipynb).
+[`duration_semantics_examples.ipynb`](../../notebooks/duration_semantics_examples.ipynb).
 
 Parsing is the boundary between the MEI document and Python. CAMAT reads the
 score without replacing it and returns representations suited to inspection,
@@ -79,7 +79,7 @@ The stable core columns are:
 Optional enrichment adds note attachments such as tie, slur, tuplet, fermata,
 articulation, ornament, and technical information. Tie handling changes whether
 encoded segments or logical notes occupy rows; see
-[`duration_semantics_examples.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/duration_semantics_examples.ipynb).
+[`duration_semantics_examples.ipynb`](../../notebooks/duration_semantics_examples.ipynb).
 
 ## `df_events`
 

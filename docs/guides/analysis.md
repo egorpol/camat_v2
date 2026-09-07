@@ -19,12 +19,12 @@ Start with the least transformed representation that answers the question.
 ## DataFrame analysis
 
 Tutorial notebook:
-[`df_statistics.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/df_statistics.ipynb)
+[`df_statistics.ipynb`](../../notebooks/df_statistics.ipynb)
 (CMN only). It parses one MEI file for itself and shows:
 
 - pitch and pitch-class distributions;
 - metric or logical duration distributions (see also
-  [`duration_semantics_examples.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/duration_semantics_examples.ipynb));
+  [`duration_semantics_examples.ipynb`](../../notebooks/duration_semantics_examples.ipynb));
 - a monophony check before sequential analyses;
 - successive-pitch transition heatmaps and melodic intervals;
 - onset positions within measures (uses `df_events` / parse `results`).
@@ -61,7 +61,7 @@ array whose rows are pitch positions and whose columns are time-grid steps.
 ## Create a binary matrix with context
 
 Tutorial notebook:
-[`binary_roundtrip.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/binary_roundtrip.ipynb)
+[`binary_roundtrip.ipynb`](../../notebooks/binary_roundtrip.ipynb)
 shows the representation rotation
 
 ```text
@@ -95,11 +95,11 @@ active cells. Store it with the matrix.
 
 Tutorial notebooks:
 
-- [`binary_convolution_explained.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/binary_convolution_explained.ipynb)
+- [`binary_convolution_explained.ipynb`](../../notebooks/binary_convolution_explained.ipynb)
   — toy host/kernel placements and valid vs same padding on those windows,
   then sliding-window intuition, stride, and kernel size / time scaling on
   Bach *Ein feste Burg*;
-- [`binary_pattern_search.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/binary_pattern_search.ipynb)
+- [`binary_pattern_search.ipynb`](../../notebooks/binary_pattern_search.ipynb)
   — motif, chord, and texture kernels with scaled-window search and piano-roll
   overlays.
 
@@ -143,9 +143,9 @@ MEI -> df_pitch -> matrix + metadata -> matches -> source rows/xml:id -> score o
 
 | Notebook | Role |
 | --- | --- |
-| [`df_statistics.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/df_statistics.ipynb) | DataFrame distributions |
-| [`binary_roundtrip.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/binary_roundtrip.ipynb) | MEI ↔ table ↔ binary rotation |
-| [`binary_convolution_explained.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/binary_convolution_explained.ipynb) | toy grids, valid vs same padding, then sliding-window convolution intuition |
-| [`binary_pattern_search.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/binary_pattern_search.ipynb) | motif / chord / texture search |
+| [`df_statistics.ipynb`](../../notebooks/df_statistics.ipynb) | DataFrame distributions |
+| [`binary_roundtrip.ipynb`](../../notebooks/binary_roundtrip.ipynb) | MEI ↔ table ↔ binary rotation |
+| [`binary_convolution_explained.ipynb`](../../notebooks/binary_convolution_explained.ipynb) | toy grids, valid vs same padding, then sliding-window convolution intuition |
+| [`binary_pattern_search.ipynb`](../../notebooks/binary_pattern_search.ipynb) | motif / chord / texture search |
 
 See the [notebook roadmap](../notebooks.md).

@@ -11,7 +11,7 @@ CAMAT analyses **MEI**. `parse_files(...)` expects common-notation MEI and
 defaults to the Verovio parser. Convert other encodings to MEI first, then
 parse the converted file.
 
-Companion notebook: [`notebooks/camat_formats.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/camat_formats.ipynb).
+Companion notebook: [`notebooks/camat_formats.ipynb`](../../notebooks/camat_formats.ipynb).
 Open that file in Jupyter or Cursor from the checkout. It selects real MEI,
 Humdrum, MusicXML, and MIDI URLs from the `test_corpus` manifests; it is not
 executed as part of this docs build.
@@ -275,9 +275,9 @@ source file next to the MEI.
 ## See also
 
 - Next workflow: [Parse and represent MEI](parsing-representations.md)
-- Tutorial notebook: [`notebooks/camat_formats.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/camat_formats.ipynb)
+- Tutorial notebook: [`notebooks/camat_formats.ipynb`](../../notebooks/camat_formats.ipynb)
 - Batch conversion: [Batch conversion](batch-conversion.md) and
-  [`notebooks/camat_batch_conversion.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/camat_batch_conversion.ipynb)
+  [`notebooks/camat_batch_conversion.ipynb`](../../notebooks/camat_batch_conversion.ipynb)
 - Public corpora used in the notebooks: [Test sources](sources.md)
 - API: [conversion](../api/conversion.md), [MIDI timing](../api/midi_timing.md),
   and [`vrv_convert_to_mei`](../api/verovio_render.md)

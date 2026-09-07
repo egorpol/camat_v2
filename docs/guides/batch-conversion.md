@@ -13,8 +13,8 @@ the public `convert_sources(...)` API or `camat-convert` command.
 
 Companion notebooks:
 
-- Corpus-backed direct conversion: [`notebooks/camat_formats.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/camat_formats.ipynb)
-- Batch conversion: [`notebooks/camat_batch_conversion.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/camat_batch_conversion.ipynb)
+- Corpus-backed direct conversion: [`notebooks/camat_formats.ipynb`](../../notebooks/camat_formats.ipynb)
+- Batch conversion: [`notebooks/camat_batch_conversion.ipynb`](../../notebooks/camat_batch_conversion.ipynb)
 
 ## When to use which
 

@@ -17,9 +17,21 @@ Supports Python 3.11+
 
 ## Installation
 
+For the latest published release:
+
 ```bash
 pip install camat
 ```
+
+For this checkout, including unreleased beta changes, run from the repository
+root in your Python environment:
+
+```bash
+python -m pip install -e .
+```
+
+Use the checkout installation for its notebooks and documentation; the PyPI
+release may not include those changes yet.
 
 ## What Is Included
 

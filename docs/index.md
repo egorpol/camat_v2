@@ -5,13 +5,19 @@ title: CAMAT Documentation
 
 CAMAT is an **MEI-centred toolbox for editorial and analytical work with
 symbolic music**. You handle or import an MEI document, then move into Python
-representations and analysis. To start, install CAMAT with pip:
+representations and analysis. These docs follow the code in this checkout.
+For the matching package and tutorial notebooks, run from the repository root:
 
 ```bash
-pip install camat
+python -m pip install -e .
 ```
 
 Use Python 3.11 or later.
+
+`python -m pip install camat` installs the latest published PyPI release,
+which may not include this checkout's beta changes. See
+[Documentation and package versions](releasing.md#documentation-and-package-versions)
+for how the release and development docs are kept in step.
 
 Conceptual background is in [What CAMAT is](overview.md).
 
@@ -36,15 +42,15 @@ Jupyter. Open the notebooks from this checkout.
 
 | Step      | Notebook                                                                                                                                                                                                                                                                      | Result                                      |
 | --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------- |
-| Render    | [`mei_render.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/mei_render.ipynb)                                                                                                                                                                               | paste or edit MEI and see the score         |
-| Inspect   | [`mei_facsimile_viewer.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/mei_facsimile_viewer.ipynb)                                                                                                                                                           | score, with facsimile zones when they exist |
-| Facsimile | [`mei_single_file_iiif_integration.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/mei_single_file_iiif_integration.ipynb) / [`mei_batch_iiif_integration.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/mei_batch_iiif_integration.ipynb) | IIIF graphic and measure zones              |
-| Combine   | [`mei_combine_pages.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/mei_combine_pages.ipynb)                                                                                                                                                                 | page files joined into one`*_full.mei`    |
-| Check     | [`mei_check_report.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/mei_check_report.ipynb)                                                                                                                                                                   | CSV editorial report                        |
+| Render    | [`mei_render.ipynb`](../notebooks/mei_render.ipynb)                                                                                                                                                                               | paste or edit MEI and see the score         |
+| Inspect   | [`mei_facsimile_viewer.ipynb`](../notebooks/mei_facsimile_viewer.ipynb)                                                                                                                                                           | score, with facsimile zones when they exist |
+| Facsimile | [`mei_single_file_iiif_integration.ipynb`](../notebooks/mei_single_file_iiif_integration.ipynb) / [`mei_batch_iiif_integration.ipynb`](../notebooks/mei_batch_iiif_integration.ipynb) | IIIF graphic and measure zones              |
+| Combine   | [`mei_combine_pages.ipynb`](../notebooks/mei_combine_pages.ipynb)                                                                                                                                                                 | page files joined into one`*_full.mei`    |
+| Check     | [`mei_check_report.ipynb`](../notebooks/mei_check_report.ipynb)                                                                                                                                                                   | CSV editorial report                        |
 
 The workflow hub is [Handling MEI files](guides/edition-building.md). Extra
 flags live in
-[`mei_consistency_checks.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/mei_consistency_checks.ipynb).
+[`mei_consistency_checks.ipynb`](../notebooks/mei_consistency_checks.ipynb).
 
 ### Workflow 2 — convert to MEI
 
@@ -54,8 +60,8 @@ reviewed edition. MIDI → music21 → Verovio is
 
 | Step                     | Notebook                                                                                                                | Result                                 |
 | ------------------------ | ----------------------------------------------------------------------------------------------------------------------- | -------------------------------------- |
-| One score, learn routes  | [`camat_formats.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/camat_formats.ipynb)                   | MEI via Verovio, music21, or MuseScore |
-| Many files, mixed corpus | [`camat_batch_conversion.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/camat_batch_conversion.ipynb) | converted MEI plus a JSON report       |
+| One score, learn routes  | [`camat_formats.ipynb`](../notebooks/camat_formats.ipynb)                   | MEI via Verovio, music21, or MuseScore |
+| Many files, mixed corpus | [`camat_batch_conversion.ipynb`](../notebooks/camat_batch_conversion.ipynb) | converted MEI plus a JSON report       |
 
 Guides: [Convert to MEI](guides/formats.md),
 [Batch conversion](guides/batch-conversion.md),
@@ -68,9 +74,9 @@ Mensural and timeline backends are [experimental](known-limitations.md).
 
 | Step | Notebook | Result |
 | --- | --- | --- |
-| Parse to tables | [`mei_parse_tables.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/mei_parse_tables.ipynb) | `df_pitch`, `df_events`, filtered piano roll |
-| Annotate a selection | [`mei_annotate_selection.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/mei_annotate_selection.ipynb) | `plist` / `tstamp` MEI annotations |
-| Duration semantics | [`duration_semantics_examples.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/duration_semantics_examples.ipynb) | segment vs logical vs performed duration |
+| Parse to tables | [`mei_parse_tables.ipynb`](../notebooks/mei_parse_tables.ipynb) | `df_pitch`, `df_events`, filtered piano roll |
+| Annotate a selection | [`mei_annotate_selection.ipynb`](../notebooks/mei_annotate_selection.ipynb) | `plist` / `tstamp` MEI annotations |
+| Duration semantics | [`duration_semantics_examples.ipynb`](../notebooks/duration_semantics_examples.ipynb) | segment vs logical vs performed duration |
 
 Guide: [Parse and represent MEI](guides/parsing-representations.md).
 
@@ -81,10 +87,10 @@ MEI only; see [Known limitations](known-limitations.md).
 
 | Step | Notebook | Result |
 | --- | --- | --- |
-| DataFrame statistics | [`df_statistics.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/df_statistics.ipynb) | pitch, duration, pitch-class, transition, interval, and onset distributions |
-| Binary round trip | [`binary_roundtrip.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/binary_roundtrip.ipynb) | MEI → `df_pitch` / piano roll → binary → reconstruct → MEI highlight |
-| Convolution explainer | [`binary_convolution_explained.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/binary_convolution_explained.ipynb) | toy host/kernel placements and valid vs same padding, then Bach sliding-window animation; stride and kernel-size demos |
-| Binary pattern search | [`binary_pattern_search.ipynb`](https://github.com/egorpol/camat_v2/blob/main/notebooks/binary_pattern_search.ipynb) | motif, chord, and texture kernels with scaled-window search |
+| DataFrame statistics | [`df_statistics.ipynb`](../notebooks/df_statistics.ipynb) | pitch, duration, pitch-class, transition, interval, and onset distributions |
+| Binary round trip | [`binary_roundtrip.ipynb`](../notebooks/binary_roundtrip.ipynb) | MEI → `df_pitch` / piano roll → binary → reconstruct → MEI highlight |
+| Convolution explainer | [`binary_convolution_explained.ipynb`](../notebooks/binary_convolution_explained.ipynb) | toy host/kernel placements and valid vs same padding, then Bach sliding-window animation; stride and kernel-size demos |
+| Binary pattern search | [`binary_pattern_search.ipynb`](../notebooks/binary_pattern_search.ipynb) | motif, chord, and texture kernels with scaled-window search |
 
 Guide: [Analyse representations](guides/analysis.md).
 

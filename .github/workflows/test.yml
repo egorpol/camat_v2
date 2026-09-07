@@ -1,4 +1,4 @@
-name: Python compatibility
+name: Tests and documentation
 
 on:
   workflow_call:
@@ -6,12 +6,46 @@ on:
   push:
     branches:
       - main
+      - "beta/**"
   pull_request:
 
 permissions:
   contents: read
 
 jobs:
+  checkout-tests:
+    name: Unit and regression tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            pyproject.toml
+      - run: python -m pip install ".[test]"
+      - run: python -m pytest tests --ignore=tests/release -q
+
+  docs:
+    name: Strict documentation build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            pyproject.toml
+            docs/requirements.txt
+      - run: python -m pip install . -r docs/requirements.txt
+      - run: python -m mkdocs build --strict
+
   installed-wheel-smoke:
     name: Python ${{ matrix.python-version }}
     runs-on: ubuntu-latest

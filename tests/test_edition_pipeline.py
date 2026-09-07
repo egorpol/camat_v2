@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import json
 import struct
 import sys
@@ -373,10 +374,10 @@ def test_copied_pipeline_notebooks_use_package_imports_and_safe_defaults() -> No
             if cell["cell_type"] == "code"
         )
 
-    single = code_for("single_mei_iiif_integration.ipynb")
+    single = code_for("CAMAT_old/single_mei_iiif_integration.ipynb")
     tutorial = code_for("notebooks/mei_single_file_iiif_integration.ipynb")
     batch_tutorial = code_for("notebooks/mei_batch_iiif_integration.ipynb")
-    batch = code_for("run_pipeline_workflow.ipynb")
+    batch = code_for("CAMAT_old/run_pipeline_workflow.ipynb")
 
     assert "from camat import" in single
     assert "RUN_IIIF_INTEGRATION = False" in single
@@ -405,6 +406,23 @@ def test_copied_pipeline_notebooks_use_package_imports_and_safe_defaults() -> No
         ).is_file()
     consistency = code_for("notebooks/mei_consistency_checks.ipynb")
     assert "import setup_camat" in consistency
+    # Check active values, rather than accepting a portable path in a comment.
+    assignments = {
+        node.targets[0].id: node.value
+        for node in ast.parse(consistency).body
+        if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name)
+    }
+    inputs = ast.literal_eval(assignments["MEI_INPUTS"])
+    assert inputs
+    for source in inputs:
+        assert not Path(source).is_absolute()
+        assert (repo_root / source).exists()
+    target = Path(ast.literal_eval(assignments["TARGET_DIR"]))
+    assert not target.is_absolute()
+    assert (repo_root / target).resolve().is_relative_to(repo_root / "converted_mei")
+    assert ast.literal_eval(assignments["STRIP_PPQ"]) is False
+    assert ast.literal_eval(assignments["STRIP_ACCID_GES"]) is False
+    assert "/home/" not in consistency and "/Users/" not in consistency
     assert "test_corpus/buxtehude_pages" in consistency
     assert "run_editorial_checks" in consistency
     assert "combine_meis" in consistency

@@ -70,10 +70,50 @@ silently selecting an older Verovio release.
 
 ## Continuous integration and publishing
 
-`.github/workflows/test.yml` runs the same release runner in a Python
-3.11–3.14 matrix for pushes to `main`, pull requests, and manual dispatches.
-The tag-driven release workflow calls that compatibility workflow first. Wheel
-building and PyPI publishing cannot begin until all four jobs pass.
+`.github/workflows/test.yml` runs on pushes to `main` and `beta/**`, pull
+requests, and manual dispatches. It includes:
+
+- the installed-wheel release runner on Python 3.11–3.14;
+- the full checkout unit/regression suite on Python 3.11 (the oldest supported
+  version), excluding the installed-wheel suite that runs separately;
+- a strict MkDocs build on Python 3.11, matching Read the Docs.
+
+The tag-driven release workflow calls this whole workflow first. Release
+building and PyPI publishing wait for all six jobs to pass.
+
+To run the additional checks locally from the repository root:
+
+```bash
+python -m pip install -e ".[test]" -r docs/requirements.txt
+python -m pytest tests --ignore=tests/release -q
+python -m mkdocs build --strict
+```
+
+## Documentation and package versions
+
+The documentation describes its source checkout. MkDocs reads the package
+version from `pyproject.toml` and displays it in the site title. To try the
+same code, install that checkout with `python -m pip install -e .`.
+`python -m pip install camat` selects the latest published release; it does
+not install unpublished beta changes. Use `--pre` only after a matching
+prerelease has actually been published.
+
+Links to notebooks, source manifests and archived probes are relative paths
+in the Markdown sources, so GitHub resolves them on the branch being viewed.
+For the built site, `scripts/docs_hooks.py` validates those repository paths
+and links them to the exact Git commit used for the build. This works for
+beta, main, release tags and detached CI/Read the Docs checkouts without
+hardcoding `main` in every page.
+
+When building a source snapshot without `.git`, set `CAMAT_DOCS_REF` to the
+branch, tag or commit containing that snapshot. During local editing, links
+still refer to the current commit; new files become available on GitHub after
+they are committed and pushed.
+
+Before launch, merge the intended release to `main`, publish a matching
+version/tag, and verify the Read the Docs version configuration and links.
+Preparing the branch and running these checks does not publish the package,
+deploy documentation, or change repository visibility.
 
 ## Release checklist
 
@@ -81,7 +121,8 @@ building and PyPI publishing cannot begin until all four jobs pass.
    `camat/__init__.py`.
 2. Move the relevant changelog entries from `Unreleased` into a dated version
    section.
-3. Run `python scripts/test_release_matrix.py` and retain the passing summary.
+3. Run the checkout tests, strict docs build, and
+   `python scripts/test_release_matrix.py`; retain the passing summary.
 4. Optionally rerun the large Verovio parity and robustness corpora.
 5. Commit the release changes and create a matching `v<version>` tag.
 6. Push the tag; the release workflow retests all supported Python versions

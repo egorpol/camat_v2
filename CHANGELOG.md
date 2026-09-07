@@ -23,6 +23,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Added full checkout regression tests and a strict documentation build to CI,
+  including beta branch pushes and the existing tag-to-PyPI release gate.
+- Documentation now displays the checkout's package version and resolves
+  repository links against the build commit, with checked relative links that
+  also work when reading the Markdown on GitHub.
+
 - Added Workflow 4 notebook `notebooks/binary_convolution_explained.ipynb`:
   toy host/kernel placements, then a Bach sliding-window convolution explainer
   with animation, stride / padding (`valid` vs `same`), and kernel time-scale
@@ -99,6 +105,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (LIS, grant PF 669/18-1), not only the edition corpora.
 
 ### Fixed
+
+- Restored offline defaults in the facsimile viewer and consistency-check
+  tutorials, cleared saved outputs, and moved report output back into the
+  checkout's ignored directory. Updated tests and documentation links for
+  maintainer notebooks moved into `CAMAT_old/`.
 
 - `compute_top_matches_df` no longer passes `dropna=` to `DataFrame.stack()`,
   which pandas 2.2+/3 rejects. NA scores are dropped after stacking instead.
