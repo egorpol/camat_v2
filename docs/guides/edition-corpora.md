@@ -18,6 +18,17 @@ Tutorial notebooks in this checkout use small portable examples under
 `test_corpus/`. Point the same notebooks at a clone of an edition repository
 when you are working on a volume.
 
+## Student assistants
+
+The following student assistants contribute to CAMAT's edition corpora:
+
+- Francy Häring
+- Jan-Raphael Kemnitzer
+- Jingyu Tu
+- Lea Meret Beck
+- Ragna Conrads
+- You Zhou
+
 ## Volumes in progress
 
 ### DdT 1, vol. 11 — Buxtehude instrumental works

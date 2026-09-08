@@ -4,8 +4,28 @@ title: About CAMAT
 
 # About CAMAT
 
-CAMAT is developed by Egor Polyakov. Its editorial tools grew out of work on
-the [edition corpora](guides/edition-corpora.md).
+## Authors
+
+- **Egor Polyakov** — research and development.
+- **Martin Pfleiderer** — supervision.
+- **Pia Steuck** — student assistant.
+
+The student assistants supporting CAMAT's editions are credited under
+[Edition corpora](guides/edition-corpora.md#student-assistants).
+
+## Origins
+
+The predecessor of CAMAT was a basic MusicXML parsing tool developed in
+2021–2022. Its teaching materials are available on the
+[Computergestützte Musikanalyse website](https://analyse.hfm-weimar.de/doku.php?id=en:noten).
+
+The current CAMAT is a new implementation with its own codebase and a broader,
+MEI-centred scope. The earlier project provides historical context; its
+tutorials describe the predecessor. For the current toolbox, use
+[these documentation workflows](index.md) and the [notebook roadmap](notebooks.md).
+
+The current editorial tools grew out of work on the
+[edition corpora](guides/edition-corpora.md).
 
 ## Funding
 

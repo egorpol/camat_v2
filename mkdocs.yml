@@ -1,6 +1,7 @@
 site_name: CAMAT
 site_description: "MEI-centered editorial, conversion, parsing, and analysis workflows"
-site_url: https://camat.readthedocs.io
+site_author: Egor Polyakov, Martin Pfleiderer, and Pia Steuck
+site_url: !ENV [READTHEDOCS_CANONICAL_URL, "https://camat-v2.readthedocs.io/en/stable/"]
 strict: true
 
 repo_url: https://github.com/egorpol/camat_v2

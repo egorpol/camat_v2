@@ -142,30 +142,33 @@ they are committed and pushed.
 
 ## Documentation hosting
 
-The repository contains the build configuration, but a Read the Docs project
-must also be created. Until a hosted build is verified, the README and package
-metadata link to documentation in the repository.
+CAMAT's documentation is hosted on Read the Docs:
 
-For the public launch:
+- [Stable documentation](https://camat-v2.readthedocs.io/en/stable/) describes
+  the published release and is the main README, package metadata, and GitHub
+  About destination.
+- [Development documentation](https://camat-v2.readthedocs.io/en/latest/)
+  follows `main`, including changes that have not been released yet.
 
-1. Once the repository is public, connect a Read the Docs Community account to
-   GitHub and grant its GitHub App access to this repository.
-2. In Read the Docs, choose **Add project**, select the repository, and use
-   its existing `.readthedocs.yaml`. Build the `main` branch.
-3. Confirm the actual project URL; `camat.readthedocs.io` in `mkdocs.yml` is
-   the intended address, not evidence that the project exists. Update
-   `site_url` if the assigned address differs.
-4. Activate the intended release tag, configure the stable/default version,
-   and check the site in a logged-out browser, including notebook links.
-5. Replace repository documentation links in `README.md`, `pyproject.toml`,
-   and GitHub About with the verified hosted URL.
+Pushing to `main` updates the development docs. It does not move the `stable`
+version to that commit: stable follows the release selected by Read the Docs.
+For example, documentation added after the `v0.2.1` tag appears under `latest`
+until a subsequent release includes it. Link new pages to `latest` explicitly
+until they exist in stable, rather than adding a broken stable URL.
 
-Read the Docs Community requires a public repository; private repositories
-use Read the Docs Business. See the official
-[project setup](https://docs.readthedocs.com/platform/stable/intro/add-project.html)
-and [Git integration](https://docs.readthedocs.com/platform/stable/reference/git-integration.html)
-guides. Preparing these files does not create a hosted project or change the
-repository's visibility.
+The build settings live in `.readthedocs.yaml`. MkDocs takes `site_url` from
+`READTHEDOCS_CANONICAL_URL`, with the stable CAMAT URL as a local-build fallback,
+so generated canonical links use the deployed domain and version path. See
+[Read the Docs' MkDocs configuration guide](https://docs.readthedocs.com/platform/stable/intro/mkdocs.html).
+
+For each release:
+
+1. Confirm the release tag is active in Read the Docs and its build succeeds.
+2. Check that `stable` selects the intended release and is the default public
+   documentation version.
+3. Open the stable site in a logged-out browser and check notebook links and
+   any newly added pages. Move explicit development links to stable when their
+   content is included in the release.
 
 ## Release checklist
 

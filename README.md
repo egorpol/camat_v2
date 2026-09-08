@@ -18,14 +18,23 @@ python -m pip install camat
 
 ## Explore
 
-- [Documentation](https://github.com/egorpol/camat_v2/blob/main/docs/index.md) — workflows, setup, and API reference.
-- [Getting started](https://github.com/egorpol/camat_v2/blob/main/docs/getting-started.md) — a small offline example and Jupyter setup.
-- [Notebook roadmap](https://github.com/egorpol/camat_v2/blob/main/docs/notebooks.md) — executable examples showcasing CAMAT's capabilities.
-- [Known limitations](https://github.com/egorpol/camat_v2/blob/main/docs/known-limitations.md) — supported notation and experimental features.
+- [Documentation](https://camat-v2.readthedocs.io/en/stable/) — stable-release workflows and API reference.
+- [Getting started (development docs)](https://camat-v2.readthedocs.io/en/latest/getting-started/) — an offline example and Jupyter setup for the current checkout.
+- [Notebook roadmap](https://camat-v2.readthedocs.io/en/stable/notebooks/) — executable examples showcasing CAMAT's capabilities.
+- [Known limitations](https://camat-v2.readthedocs.io/en/stable/known-limitations/) — supported notation and experimental features.
 
 For bugs and suggestions, use [GitHub Issues](https://github.com/egorpol/camat_v2/issues).
 See [Contributing](https://github.com/egorpol/camat_v2/blob/main/CONTRIBUTING.md)
 to work on the project.
+
+## Authors and origins
+
+Egor Polyakov — research and development; Martin Pfleiderer — supervision.
+Pia Steuck — student assistant.
+
+CAMAT's predecessor was a basic MusicXML parsing tool developed in 2021–2022;
+see the [earlier project and tutorials](https://analyse.hfm-weimar.de/doku.php?id=en:noten).
+The current MEI-centred toolbox is a new implementation with a broader scope.
 
 ## Funding and license
 

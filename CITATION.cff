@@ -5,6 +5,10 @@ title: "CAMAT: tools for symbolic music parsing, analysis, and rendering"
 authors:
   - family-names: Polyakov
     given-names: Egor
+  - family-names: Pfleiderer
+    given-names: Martin
+  - family-names: Steuck
+    given-names: Pia
 repository-code: "https://github.com/egorpol/camat_v2"
 url: "https://github.com/egorpol/camat_v2"
 abstract: "An MEI-centred Python toolbox for editorial work, format conversion, parsing, analysis, and score rendering."

@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Credited Egor Polyakov (research and development) and Martin Pfleiderer
+  (supervision), and documented the 2021–2022 MusicXML tool as CAMAT's predecessor.
+- Credited Pia Steuck as CAMAT's student assistant and the six student
+  assistants supporting its edition corpora.
 - Added an offline getting-started guide, Jupyter setup, contribution guidance,
   citation metadata, and archive/provenance notes.
 - Bundled the MEI schema's ECL-2.0 license and third-party notices in package
@@ -18,8 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Simplified the README, documentation home, and API index; replaced the
-  unconfigured hosted documentation link with repository documentation links.
+- Simplified the README, documentation home, and API index; linked the README
+  and package metadata to the deployed Read the Docs site, with stable and
+  development documentation distinguished explicitly.
 - Updated notebook link labels and stale fixture/viewer descriptions while
   preserving all saved notebook outputs.
 - Excluded the incomplete test subset from source distributions; contributors

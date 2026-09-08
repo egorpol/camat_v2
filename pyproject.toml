@@ -12,6 +12,8 @@ license = "MIT AND ECL-2.0"
 license-files = ["LICENSE", "LICENSES/*.txt", "THIRD_PARTY_NOTICES.md"]
 authors = [
   { name = "Egor Polyakov" },
+  { name = "Martin Pfleiderer" },
+  { name = "Pia Steuck" },
 ]
 keywords = ["music", "symbolic-music", "analysis", "music21", "partitura", "verovio"]
 classifiers = [
@@ -53,7 +55,7 @@ Homepage = "https://github.com/egorpol/camat_v2"
 Repository = "https://github.com/egorpol/camat_v2"
 Issues = "https://github.com/egorpol/camat_v2/issues"
 Changelog = "https://github.com/egorpol/camat_v2/blob/main/CHANGELOG.md"
-Documentation = "https://github.com/egorpol/camat_v2/blob/main/docs/index.md"
+Documentation = "https://camat-v2.readthedocs.io/en/stable/"
 
 [tool.setuptools]
 include-package-data = false
