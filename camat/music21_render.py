@@ -300,8 +300,12 @@ def render_with_verovio_from_musicxml(musicxml_str: str, *, scale: int = 55) -> 
     Returns (mei_string, svg_pages)
     """
     tk = verovio.toolkit()
-    tk.setOptions({'from': 'musicxml', 'scale': int(scale), 'adjustPageHeight': True})
-    tk.loadData(musicxml_str)
+    tk.setInputFrom('musicxml')
+    tk.setOptions({'scale': int(scale), 'adjustPageHeight': True})
+    if not tk.loadData(musicxml_str):
+        raise ValueError("Verovio could not load the MusicXML input.")
+    if tk.getPageCount() == 0:
+        raise ValueError("Verovio produced no pages from the MusicXML input.")
     mei_str = tk.getMEI()
     svg_pages = []
     for p in range(1, tk.getPageCount() + 1):

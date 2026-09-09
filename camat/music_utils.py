@@ -1315,9 +1315,16 @@ def _determine_resolution(
     else:
         raise ValueError("Invalid resolution_method. Choose from 'auto', 'manual', 'standard'.")
 
-    if resolution <= 0:
-        raise ValueError("Resolution must be a positive number.")
+    if not np.isfinite(resolution) or resolution <= 0:
+        raise ValueError("Resolution must be a finite positive number.")
     return resolution
+
+
+def _binary_grid_positions(times: np.ndarray, resolution: float) -> np.ndarray:
+    """Snap floating-point noise at grid boundaries before floor/ceil."""
+    positions = np.asarray(times, dtype=float) / resolution
+    nearest = np.rint(positions)
+    return np.where(np.isclose(positions, nearest, rtol=0, atol=1e-9), nearest, positions)
 
 
 def _serialize_binary_meta_value(value: Any) -> Any:
@@ -1629,8 +1636,8 @@ def create_binary_matrix_slice_bundle(
     Build a notebook-friendly summary of one raw binary matrix slice.
     """
     total_rows, total_cols = np.asarray(matrix).shape
-    row_start_idx = max(0, int(row_start))
-    col_start_idx = max(0, int(col_start))
+    row_start_idx = min(total_rows, max(0, int(row_start)))
+    col_start_idx = min(total_cols, max(0, int(col_start)))
     row_end_idx = max(row_start_idx, min(row_start_idx + int(n_rows), total_rows))
     col_end_idx = max(col_start_idx, min(col_start_idx + int(n_cols), total_cols))
 
@@ -1752,6 +1759,7 @@ def create_binary_matrix_bundle(
     dfs_by_name: Optional[Dict[str, pd.DataFrame]] = None,
     results: Optional[Sequence[Dict[str, Any]]] = None,
     source_name: Optional[str] = None,
+    measure_offsets: Optional[Sequence[float]] = None,
     resolution_method: str = "auto",
     manual_resolution: Optional[float] = None,
     y_mode: str = "minmax",
@@ -1776,6 +1784,10 @@ def create_binary_matrix_bundle(
         Parsed results returned by ``parse_files``. Used to recover measure offsets.
     source_name : str, optional
         Explicit display name when ``source`` is a DataFrame.
+    measure_offsets : sequence of float, optional
+        Explicit measure boundaries, taking precedence over name-based lookup
+        in ``results``. Use this for filtered/copied DataFrames with a different
+        display name; the function does not guess which parsed score they belong to.
     default_hover_fields : sequence of str, optional
         Safe fields appended after ``hover_fields``. Defaults to
         ``["row", "col", "selected_area", "source_rows"]``.
@@ -1795,14 +1807,16 @@ def create_binary_matrix_bundle(
             )
         source_df = dfs_by_name[resolved_source_name]
 
-    measure_offsets: Optional[List[float]] = None
-    if results is not None:
+    resolved_measure_offsets = (
+        [float(offset) for offset in measure_offsets] if measure_offsets is not None else None
+    )
+    if resolved_measure_offsets is None and results is not None:
         for item in results:
             if item.get("name") != resolved_source_name:
                 continue
             offsets = item.get("measure_offsets")
             if offsets is not None:
-                measure_offsets = [float(offset) for offset in offsets]
+                resolved_measure_offsets = [float(offset) for offset in offsets]
             break
 
     matrix, meta = create_binary_matrix(
@@ -1834,7 +1848,7 @@ def create_binary_matrix_bundle(
         source_df=source_df,
         matrix=matrix,
         meta=meta,
-        measure_offsets=measure_offsets,
+        measure_offsets=resolved_measure_offsets,
         hover_fields=normalized_hover_fields,
         decoded_df=decoded_df,
         reconstructed_df=reconstructed_df,
@@ -1885,6 +1899,14 @@ def create_binary_matrix(
         Subset of DataFrame columns to store in provenance. Defaults to all columns when
         include_provenance is True.
 
+    Notes
+    -----
+    Columns cover time from zero through the latest sounding note end. Onsets
+    are floored and ends are ceiled to the grid (floating-point noise within
+    1e-9 cells of a boundary is snapped). Notes crossing zero are clipped;
+    zero-duration events and notes ending before zero occupy no cells. MIDI,
+    onset, duration, and resolution must be finite; durations cannot be negative.
+
     Returns
     -------
     (matrix, meta)
@@ -1897,6 +1919,13 @@ def create_binary_matrix(
     missing = required_columns.difference(df.columns)
     if missing:
         raise ValueError(f"DataFrame is missing required columns: {sorted(missing)}")
+    if df.empty:
+        raise ValueError("DataFrame must contain at least one note row.")
+    numeric = df[["MIDI", "Global Onset", "Duration"]].to_numpy(dtype=float)
+    if not np.isfinite(numeric).all():
+        raise ValueError("MIDI, Global Onset, and Duration must be finite numbers.")
+    if (numeric[:, 2] < 0).any():
+        raise ValueError("Duration must be nonnegative.")
 
     resolution = _determine_resolution(
         df,
@@ -1904,9 +1933,17 @@ def create_binary_matrix(
         manual_resolution=manual_resolution,
     )
 
-    # Determine time axis
-    total_duration = float(df["Global Onset"].max() + df["Duration"].max())
-    num_cols = int(np.ceil(total_duration / resolution))
+    # Columns start at time 0. Zero-duration events occupy no time, and notes
+    # crossing time 0 are clipped rather than wrapped via negative array indices.
+    onsets, durations = numeric[:, 1], numeric[:, 2]
+    ends = onsets + durations
+    sounding = (durations > 0) & (ends > 0)
+    if not sounding.any():
+        raise ValueError("No positive-duration notes intersect time >= 0.")
+    total_duration = float(ends[sounding].max())
+    start_positions = _binary_grid_positions(onsets, resolution)
+    end_positions = _binary_grid_positions(ends, resolution)
+    num_cols = int(np.ceil(end_positions[sounding].max()))
     time_end = num_cols * resolution
 
     # Compute smallest positive duration in data for reporting
@@ -2001,15 +2038,15 @@ def create_binary_matrix(
 
     # Fill matrix
     for source_pos, (_, row) in enumerate(df.iterrows()):
+        if not sounding[source_pos]:
+            continue
         midi_value = int(row["MIDI"])
         if mode != "chroma" and not (y_min <= midi_value <= y_max):
             # Ignore notes outside requested range
             continue
         r = row_index_for_midi(midi_value)
-        start_col = int(np.floor(float(row["Global Onset"]) / resolution))
-        end_col = int(np.ceil(float(row["Global Onset"] + row["Duration"]) / resolution))
-        if end_col <= start_col:
-            end_col = start_col + 1
+        start_col = max(0, int(np.floor(start_positions[source_pos])))
+        end_col = int(np.ceil(end_positions[source_pos]))
         end_col = min(end_col, num_cols)
         if 0 <= r < num_rows:
             matrix[r, start_col:end_col] = 1
@@ -2228,8 +2265,8 @@ def plot_binary_matrix(
                     "col_stop": col_stop,
                     "x_start": float(col_start * float(meta.get("resolution", 1.0))),
                     "x_end": float(col_stop * float(meta.get("resolution", 1.0))),
-                    "y_start": float(y_min + display_row_start),
-                    "y_end": float(y_min + display_row_start + (row_stop - row_start)),
+                    "y_start": float(y_min + display_row_start - 0.5),
+                    "y_end": float(y_min + display_row_start + (row_stop - row_start) - 0.5),
                     "name": str(item.get("name", "")).strip(),
                     "color": str(item.get("color", "#ff00ff")),
                     "alpha": float(item.get("alpha", 0.2)),
@@ -2246,7 +2283,7 @@ def plot_binary_matrix(
         width_inches = width_pixels / dpi
         height_inches = height_pixels / dpi
         fig, ax = plt.subplots(figsize=(width_inches, height_inches))
-        extent = [0, time_end, y_min, y_max]
+        extent = [0, time_end, y_min - 0.5, y_max + 0.5]
         ax.imshow(
             matrix_for_display,
             aspect="auto",
@@ -2454,7 +2491,7 @@ def plot_binary_matrix(
                 ]
 
                 hover_source_data["x"].append(float(time_start + (resolution / 2.0)))
-                hover_source_data["y"].append(float(y_min + display_row + 0.5))
+                hover_source_data["y"].append(float(y_min + display_row))
                 hover_source_data["w"].append(float(resolution))
                 hover_source_data["h"].append(1.0)
                 hover_source_data["row"].append(str(int(raw_row)))
@@ -2532,8 +2569,8 @@ def plot_binary_matrix(
                 pass
 
             # Ranges
-            plot.y_range.start = y_min
-            plot.y_range.end = y_min + rows
+            plot.y_range.start = y_min - 0.5
+            plot.y_range.end = y_min + rows - 0.5
             plot.x_range.start = 0
             plot.x_range.end = time_end
 
@@ -2541,7 +2578,7 @@ def plot_binary_matrix(
             plot.image(
                 image=[matrix_for_bokeh],
                 x=0,
-                y=y_min,
+                y=y_min - 0.5,
                 dw=time_end,
                 dh=rows,
                 color_mapper=color_mapper,
@@ -3003,11 +3040,11 @@ def binary_matrix_to_df(
 
 
 def _normalize_df(df: pd.DataFrame) -> pd.DataFrame:
-    out = df.copy()
+    out = df[["MIDI", "Global Onset", "Duration"]].copy()
     out["MIDI"] = out["MIDI"].astype(int)
     out["Global Onset"] = out["Global Onset"].astype(float).round(6)
     out["Duration"] = out["Duration"].astype(float).round(6)
-    return out.sort_values(["Global Onset", "MIDI"]).reset_index(drop=True)
+    return out.sort_values(["Global Onset", "MIDI", "Duration"]).reset_index(drop=True)
 
 
 def binary_matrix_to_df_from_meta(
@@ -3022,6 +3059,8 @@ def binary_matrix_to_df_from_meta(
     - flipped=False for matrices whose top row maps to the lowest MIDI
     - flipped=True for matrices whose top row maps to the highest MIDI, or for flipped views
     """
+    if str(meta.get("y_mode", "minmax")).lower() == "chroma":
+        raise ValueError("Chroma does not identify MIDI octaves; use binary_slice_to_df or source provenance.")
     resolution = float(meta["resolution"])
     if flipped is None:
         flipped = str(meta.get("origin", "lower")).lower() == "upper"
@@ -3075,7 +3114,8 @@ def binary_matrix_to_df_from_bounds(
 
 def round_trip_sanity_check(sample_df: pd.DataFrame, *, resolution: float = 0.5) -> tuple[bool, pd.DataFrame]:
     """
-    Convert df -> binary (at resolution) -> df and report equality after normalization.
+    Convert df -> binary -> df and compare MIDI, onset, and duration (including
+    duplicate events). Source-only columns such as Voice and xml_id are excluded.
     Returns (ok, reconstructed_df).
     """
     mat, meta = create_binary_matrix(
@@ -3084,15 +3124,8 @@ def round_trip_sanity_check(sample_df: pd.DataFrame, *, resolution: float = 0.5)
         manual_resolution=resolution,
         y_mode="minmax",
     )
-    # Try both orientations to be robust
-    df_back_data = binary_matrix_to_df_from_meta(mat, meta, flipped=False)
-    df_back_view = binary_matrix_to_df_from_meta(np.flipud(mat), meta, flipped=True)
-    if _normalize_df(sample_df).equals(_normalize_df(df_back_data)):
-        return True, df_back_data
-    if _normalize_df(sample_df).equals(_normalize_df(df_back_view)):
-        return True, df_back_view
-    # Fallback: return the data-oriented reconstruction
-    return False, df_back_data
+    df_back = binary_matrix_to_df_from_meta(mat, meta)
+    return _normalize_df(sample_df).equals(_normalize_df(df_back)), df_back
 
 
 

@@ -40,6 +40,7 @@ __all__ = [
     "vrv_mask_mei_to_ids",
     "vrv_render_selection_excerpt",
     "vrv_render_symbolic_selection",
+    "vrv_render_source_context",
     "vrv_insert_annot",
     "vrv_has_mei_export",
     "vrv_set_additional_css",
@@ -991,6 +992,53 @@ def _vrv_ids_from_selection(selection: Any) -> List[str]:
     if not ids:
         raise ValueError("selection contains no usable MEI xml_id values")
     return ids
+
+
+def vrv_render_source_context(
+    selection: Any,
+    *,
+    mei_xml: Optional[str] = None,
+    highlight_color: str = "#cf268c",
+    selected_pages_only: bool = True,
+    display: bool = True,
+) -> List[str]:
+    """Highlight source IDs on complete score pages, retaining notation context.
+
+    All notes, rests, staves, clefs, signatures and relationships on each page
+    remain as encoded. Only the selected note shapes receive highlight CSS.
+    By default return complete pages containing a selection; no event masking
+    or within-page crop is applied. The previously loaded score is restored.
+    Use ``vrv_render_symbolic_selection`` for an isolated, masked selection.
+    """
+    import xml.etree.ElementTree as ET
+
+    ids = _vrv_ids_from_selection(selection)
+    original_mei = vrv_get_mei()
+    source_mei = mei_xml if mei_xml is not None else original_mei
+    root = ET.fromstring(source_mei)
+    source_ids = {element.get(f"{{{XML_NS}}}id") for element in root.iter()}
+    missing = [pointer for pointer in ids if pointer.lstrip("#") not in source_ids]
+    if missing:
+        raise ValueError(f"Selected IDs not found in source MEI: {missing}")
+    pages: List[str] = []
+    try:
+        vrv_set_mei(source_mei)
+        for svg in vrv_render_all_pages():
+            resolved = _vrv_resolve_svg_ids_in_svg(
+                svg, ids, include_bbox_ids=False, include_derived_ids=False,
+            )
+            if selected_pages_only and not any(resolved.values()):
+                continue
+            pages.append(vrv_inject_highlight_css(
+                svg, ids, color=highlight_color, shape_only=True,
+                extra_shape_selectors=_vrv_collect_beam_shape_selectors(svg, ids),
+            ))
+    finally:
+        vrv_set_mei(original_mei)
+    if display:
+        for svg in pages:
+            vrv_display_svg(svg)
+    return pages
 
 
 def vrv_render_symbolic_selection(

@@ -161,3 +161,39 @@ class VerovioHighlightCssTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_source_context_preserves_all_notes_rests_and_signatures_and_restores_score():
+    from camat import verovio_render as vrv
+
+    source = (Path(__file__).resolve().parents[1] / "camat/examples/binary_roundtrip_voices.mei").read_text()
+    # A nonempty key signature ensures the renderer retains its actual glyphs.
+    source = source.replace('key.sig="0"', 'key.sig="1"')
+    vrv.vrv_load_from_file(str(FIXTURE_MEI))
+    original = vrv.vrv_get_mei()
+    vrv.vrv_set_options(header="none", breaks="none")
+    pages = vrv.vrv_render_source_context(["toy-0", "toy-3"], mei_xml=source, display=False)
+    assert len(pages) == 1
+    root = ET.fromstring(pages[0])
+    groups = list(root.iter())
+    note_ids = {element.get("id") for element in groups if "note" in element.get("class", "").split()}
+    assert {f"toy-{i}" for i in range(9)} <= note_ids
+    for role, expected in [("rest", 7), ("clef", 3), ("meterSig", 3), ("keySig", 3)]:
+        assert sum(role in element.get("class", "").split() for element in groups) >= expected
+    assert "#toy-0 path" in pages[0] and "#toy-3 path" in pages[0]
+    assert "#toy-2 path" not in pages[0]  # other notes remain visible but are not highlighted
+    namespace = {"mei": "http://www.music-encoding.org/ns/mei"}
+    before = ET.fromstring(original).findall(".//mei:note", namespace)
+    after = ET.fromstring(vrv.vrv_get_mei()).findall(".//mei:note", namespace)
+    assert [note.attrib for note in after] == [note.attrib for note in before]
+
+
+def test_source_context_rejects_unknown_ids_without_replacing_score():
+    import pytest
+    from camat import verovio_render as vrv
+
+    vrv.vrv_load_from_file(str(FIXTURE_MEI))
+    before = vrv.vrv_get_mei()
+    with pytest.raises(ValueError, match="not found"):
+        vrv.vrv_render_source_context(["nonexistent"], display=False)
+    assert vrv.vrv_get_mei() == before
