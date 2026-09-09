@@ -67,6 +67,7 @@ nav:
           - Top-level API: api/camat.md
           - Analysis utils: api/analysis_utils.md
           - Binary matrix designer: api/binary_matrix_designer.md
+          - Binary convolution: api/binary_convolution.md
           - Conversion: api/conversion.md
           - Edition and IIIF pipeline: api/edition_pipeline.md
           - MEI consistency and cleanup: api/mei_consistency.md

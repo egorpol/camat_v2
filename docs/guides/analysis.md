@@ -97,14 +97,17 @@ Tutorial notebooks:
 
 - [`binary_convolution_explained.ipynb`](../../notebooks/binary_convolution_explained.ipynb)
   — toy host/kernel placements and valid vs same padding on those windows,
-  then sliding-window intuition, stride, and kernel size / time scaling on
-  Bach *Ein feste Burg*;
+  then sliding-window intuition, stride, and kernel scaling (time, pitch, or
+  both) on Bach *Ein feste Burg*. Helpers: `convolution_map` /
+  `score_kernel_at` in [pattern search](../api/pattern_search.md) and
+  [binary convolution](../api/binary_convolution.md) plots;
 - [`binary_pattern_search.ipynb`](../../notebooks/binary_pattern_search.ipynb)
   — motif, chord, and texture kernels with scaled-window search and piano-roll
   overlays.
 
-`run_pattern_search(...)` compares a source matrix with a smaller kernel using
-one or more similarity metrics. Kernels may be extracted from another matrix or
+`convolution_map(...)` is the explicit overlap heatmap for one kernel.
+`run_pattern_search(...)` is the full search entry point, with optional scale
+factors and extra metrics. Kernels may be extracted from another matrix or
 drawn interactively with `binary_matrix_designer(...)`.
 
 ```python
@@ -120,7 +123,62 @@ all_results, scaled_kernels, variant, last_result = run_pattern_search(
 ```
 
 Meaningful comparison requires compatible pitch orientation and time
-resolution. Scaling a kernel is an analytical decision, not a display option.
+resolution. Pitch and time augmentation have independent policies:
+
+- `kernel_pitch_mode="fixed"` keeps pitch rows unchanged, ignoring the pitch
+  factor. `"intervals"` maps each row once to a scaled position, keeping each
+  note one row thick and preserving chords. `"stretch"` enlarges rows as an
+  image, so notes can become bands of adjacent pitches.
+- `kernel_time_mode="events"` scales binary note-run boundaries before filling
+  the new grid. `"resample"` samples the time cells using the selected method.
+- `kernel_resize_method="nearest"` samples cell centres; `"bilinear"` retains
+  legacy corner-aligned interpolation; `"area"` averages source-cell coverage.
+  This method affects pitch only for `stretch` and time only for `resample`.
+- `kernel_rounding="nearest"` (halves to even), `"floor"`, or `"ceil"` quantizes
+  interval positions and event boundaries. Compression can merge pitches and
+  can drop notes that quantize to zero duration. Collisions merge by maximum.
+
+For musical motif experiments, the notebooks explicitly use:
+
+```python
+all_results, scaled_kernels, variant, last_result = run_pattern_search(
+    matrix, kernel,
+    metrics_to_run=["normalized_overlap"],
+    kernel_scale_factors=[0.75, 1.0, 1.5, 2.0],
+    kernel_scale_axes=["x", "y", "both"],
+    kernel_pitch_mode="intervals",
+    kernel_time_mode="events",
+    kernel_rounding="nearest",
+    backend="none",
+)
+```
+
+On a semitone grid, six rows span five pitch intervals. Interval scaling at ×2
+therefore gives eleven rows, with each source pitch mapped to one output row.
+Row 0 is the anchor; scaling changes chromatic distances, not diatonic steps.
+Combining `intervals` (or `fixed`) with `events` preserves input monophony.
+Bilinear/area time sampling can blend consecutive notes into the same column,
+even if pitch rows are individually preserved. A sustain-only binary grid cannot
+recover voice identity or consecutive same-pitch articulations.
+
+The library's compatibility defaults remain `stretch` + `resample` + `nearest`:
+integer enlargement repeats every cell exactly, so `(6, 16)` at ×2 on both
+axes becomes `(12, 32)`. `resize_kernel` accepts the corresponding shorter
+keywords `pitch_mode`, `time_mode`, `method`, and `rounding`. It returns weights;
+search can threshold them with `binarize_scaled_kernel` / `binarize_threshold`,
+or keep fractional values. Geometric target sizes still use
+`max(1, round(n * factor))`, independently of interval/event rounding.
+
+Nondefault policies appear in search variant keys so results identify their
+augmentation settings. `plot_kernel_augmentations` in
+[binary convolution](../api/binary_convolution.md) compares named recipes on a
+common cell scale and returns the plotted kernels. Enlarging a query does not
+enlarge the host, so a low score on the original host does not imply a bad
+augmentation. The explainer checks exact arrays and independently planted copies.
+
+`normalized_overlap` measures containment: extra host notes are not penalized,
+and 1.0 does not imply equal matrices. `normalized_cross_correlation` considers
+both active and inactive cells (and returns 0 for constant windows/kernels).
 `padding="valid"` (default) keeps the kernel inside the host;
 `padding="same"` zero-pads the border so the score map can match the host
 size at stride 1. Stride and kernel scale factors remain the knobs for window

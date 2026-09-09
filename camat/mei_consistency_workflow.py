@@ -12,7 +12,6 @@ import hashlib
 import json
 import re
 import subprocess
-import sys
 import xml.etree.ElementTree as ET
 from collections import Counter
 from dataclasses import asdict, dataclass
@@ -30,6 +29,7 @@ from .check_mei_consistency import (
 )
 from .convert_harm_startid_to_tstamp import convert_file as convert_harm_startid_to_tstamp
 from .link_pb_to_surface import link_file as link_pb_to_surface
+from .verovio_guard import python_executable
 
 
 MEI_NS = "http://www.music-encoding.org/ns/mei"
@@ -996,7 +996,7 @@ print(f"__VEROVIO_LOADED__={int(loaded)}")
 """
     for path in files:
         result = subprocess.run(
-            [sys.executable, "-c", child_code, str(path), "1" if render_pages else "0"],
+            [python_executable(), "-c", child_code, str(path), "1" if render_pages else "0"],
             cwd=root,
             text=True,
             capture_output=True,

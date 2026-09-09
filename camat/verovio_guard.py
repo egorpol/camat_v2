@@ -6,9 +6,68 @@ import sys
 import tempfile
 import textwrap
 import xml.etree.ElementTree as ET
+from pathlib import Path
 from typing import Any, Dict, Mapping, Optional, Tuple
 
-__all__ = ["guarded_load_into_verovio_toolkit"]
+__all__ = ["guarded_load_into_verovio_toolkit", "python_executable"]
+
+
+def python_executable() -> str:
+    """Return a Python interpreter path that is safe to pass to ``subprocess``.
+
+    Some host environments (Cursor's agent, some AppImage wrappers) rewrite
+    ``sys.executable`` to a non-Python binary. Prefer that path when it still
+    looks like Python; otherwise use the interpreter next to ``sys.prefix``.
+    """
+    current = Path(sys.executable)
+    if _looks_like_python(current):
+        return str(current)
+
+    version = f"{sys.version_info.major}.{sys.version_info.minor}"
+    prefixes = (
+        sys.prefix,
+        getattr(sys, "base_prefix", sys.prefix),
+        getattr(sys, "exec_prefix", sys.prefix),
+    )
+    candidates: list[Path] = []
+    if os.name == "nt":
+        for root in prefixes:
+            root_path = Path(root)
+            candidates.extend(
+                (
+                    root_path / "python.exe",
+                    root_path / "Scripts" / "python.exe",
+                )
+            )
+    else:
+        for root in prefixes:
+            bindir = Path(root) / "bin"
+            candidates.extend(
+                (
+                    bindir / f"python{version}",
+                    bindir / "python3",
+                    bindir / "python",
+                )
+            )
+
+    seen: set[str] = set()
+    for candidate in candidates:
+        try:
+            resolved = str(candidate.resolve())
+        except OSError:
+            continue
+        if resolved in seen or not candidate.is_file():
+            continue
+        seen.add(resolved)
+        if os.access(candidate, os.X_OK) and _looks_like_python(candidate):
+            return resolved
+    return sys.executable
+
+
+def _looks_like_python(path: Path) -> bool:
+    name = path.name.lower()
+    return name.startswith("python")
+
 
 _MEI_NS = "http://www.music-encoding.org/ns/mei"
 _XML_NS = "http://www.w3.org/XML/1998/namespace"
@@ -37,7 +96,7 @@ def _probe_verovio_load(data: str, *, input_from: str) -> Dict[str, Any]:
         with os.fdopen(fd, "w", encoding="utf-8", errors="ignore") as handle:
             handle.write(data)
         proc = subprocess.run(
-            [sys.executable, "-X", "faulthandler", "-c", _PROBE_SCRIPT, path, input_from],
+            [python_executable(), "-X", "faulthandler", "-c", _PROBE_SCRIPT, path, input_from],
             capture_output=True,
             text=True,
             check=False,

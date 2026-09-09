@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Kernel augmentation now has independent pitch policies (`fixed`, `intervals`,
+  `stretch`), binary event-boundary time scaling, area sampling, and selectable
+  interval/event rounding. Search exposes the same controls and identifies
+  nondefault policies in variant keys. `plot_kernel_augmentations` compares
+  named recipes; both binary-search notebooks default to interval/event scaling
+  for one-row notes while retaining geometric options for experiments.
+
+- Added `convolution_map`, `score_kernel_at`, and `kernel_placement_starts` to
+  pattern search, plus `camat.binary_convolution` teaching plots and the toy
+  kernel catalog used by the convolution explainer notebook.
+
 - Credited Egor Polyakov (research and development) and Martin Pfleiderer
   (supervision), and documented the 2021–2022 MusicXML tool as CAMAT's predecessor.
 - Credited Pia Steuck as CAMAT's student assistant and the six student
@@ -22,6 +33,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Moved convolution-explainer helpers out of
+  `notebooks/binary_convolution_explained.ipynb` into the package. The toy
+  padding section reuses the host generated in the first teaching cell. The
+  Bach section now states how pitch/time resolution is chosen; stride is
+  explained as a search filter on onset and transposition grids; animation
+  encoding shows a `tqdm.notebook` bar. Kernel scaling now covers time, pitch,
+  and both (factors through ×2), with separate checks for exact cell repetition
+  and a planted doubled copy; the redundant filmstrip cell is gone.
+
+- Binary kernel resizing now defaults to nearest-cell sampling, preserving
+  exact integer enlargement. Legacy interpolation remains available through
+  `resize_kernel(..., method="bilinear")` and
+  `run_pattern_search(..., kernel_resize_method="bilinear")`. Fractional scales,
+  pitch-row enlargement, and containment scores are explained in both search
+  notebooks and the analysis guide.
+
 - Simplified the README, documentation home, and API index; linked the README
   and package metadata to the deployed Read the Docs site, with stable and
   development documentation distinguished explicitly.
@@ -29,6 +56,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   preserving all saved notebook outputs.
 - Excluded the incomplete test subset from source distributions; contributors
   run tests from a Git checkout with its fixtures and archived probes.
+
+### Fixed
+
+- Binary search applies stride before scoring and contracts overlap without
+  allocating a full placement-by-kernel product, using shared overlap code for
+  teaching maps and search. Invalid resize factors now fail explicitly.
+
+- Verovio subprocess checks now spawn the environment's real Python interpreter
+  when a host tool rewrites `sys.executable` to a non-Python binary.
 
 ## [0.2.1] - 2026-09-07
 

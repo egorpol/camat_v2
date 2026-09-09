@@ -1,6 +1,13 @@
 __version__ = "0.2.1"
 
-from .pattern_search import count_kernel_placements, pad_for_same, run_pattern_search
+from .pattern_search import (
+    convolution_map,
+    count_kernel_placements,
+    kernel_placement_starts,
+    pad_for_same,
+    run_pattern_search,
+    score_kernel_at,
+)
 from .parser_registry import (
     get_parse_files,
     list_parsers,
@@ -225,6 +232,9 @@ from .mensural_utils import (
 __all__ = [
     '__version__',
     'run_pattern_search',
+    'convolution_map',
+    'score_kernel_at',
+    'kernel_placement_starts',
     'pad_for_same',
     'count_kernel_placements',
     'get_parse_files',
