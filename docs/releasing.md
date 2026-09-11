@@ -106,7 +106,7 @@ as GitHub prereleases and do not replace the latest stable release.
 Check the metadata locally without publishing anything:
 
 ```bash
-python scripts/prepare_release.py --tag v0.2.1
+python scripts/prepare_release.py --tag v0.2.2
 ```
 
 Use the tag for the version being prepared.

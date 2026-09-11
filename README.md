@@ -109,7 +109,7 @@ camat_v2/
 | Page                                                                             | What it covers                                                       |
 | -------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
 | [Documentation home](https://camat-v2.readthedocs.io/en/stable/)                  | Workflow map and starting points                                     |
-| [Getting started](https://camat-v2.readthedocs.io/en/latest/getting-started/)     | Install, offline example, and Jupyter setup for the current checkout |
+| [Getting started](https://camat-v2.readthedocs.io/en/stable/getting-started/)     | Install, offline example, and Jupyter setup                      |
 | [What CAMAT is](https://camat-v2.readthedocs.io/en/stable/overview/)              | How the four workflows fit together                                  |
 | [Notebook roadmap](https://camat-v2.readthedocs.io/en/stable/notebooks/)          | Executable examples in recommended order                             |
 | [API reference](https://camat-v2.readthedocs.io/en/stable/reference/)             | Python modules and entry points                                      |
