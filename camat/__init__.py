@@ -1,4 +1,4 @@
-__version__ = "0.2.3b1"
+__version__ = "0.2.3"
 
 from .pattern_search import (
     convolution_map,
