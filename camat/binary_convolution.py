@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 import tempfile
 from pathlib import Path
 from typing import Iterable, Mapping, Sequence
@@ -568,13 +569,37 @@ def animate_sliding_window(
     return anim, scores
 
 
+def _stdout_tqdm(total, desc, unit="frame"):
+    """Text bar that JupyterLab still streams while Matplotlib is blocking."""
+    from tqdm import tqdm
+
+    return tqdm(
+        total=total,
+        desc=desc,
+        unit=unit,
+        file=sys.stdout,
+        dynamic_ncols=True,
+        mininterval=0.2,
+    )
+
+
 def _notebook_tqdm(total, desc, unit="frame"):
-    """Prefer ``tqdm.notebook`` in Jupyter; fall back to ``tqdm.auto``."""
+    """Prefer ``tqdm.notebook`` in Jupyter; fall back to a stdout bar.
+
+    Importing ``tqdm.notebook`` can succeed even when ipywidgets' ``IProgress``
+    is missing, so construction is what we probe. Jupyter4NFDI and similar
+    JupyterLab sessions also need that import to run in a notebook cell so the
+    widget frontend is registered before encoding starts.
+    """
     try:
-        from tqdm.notebook import tqdm
+        from ipywidgets import IntProgress  # noqa: F401
+        from tqdm.notebook import tqdm as notebook_tqdm
     except ImportError:
-        from tqdm.auto import tqdm
-    return tqdm(total=total, desc=desc, unit=unit)
+        return _stdout_tqdm(total, desc, unit)
+    try:
+        return notebook_tqdm(total=total, desc=desc, unit=unit)
+    except Exception:
+        return _stdout_tqdm(total, desc, unit)
 
 
 def display_anim_html(
@@ -591,7 +616,8 @@ def display_anim_html(
     ``dpi`` is pixels per inch of the figure (raise this if the movie looks
     blurry). ``jpeg_quality`` is 1–95 (raise this if you see blocky artifacts).
     When ``progress`` is true, a ``tqdm.notebook`` bar tracks Matplotlib's
-    frame encoding (the slow part of building the HTML player).
+    frame encoding (the slow part of building the HTML player). If notebook
+    widgets are unavailable, a stdout bar is used instead.
     """
     from IPython.display import HTML, display
 
@@ -606,8 +632,10 @@ def display_anim_html(
             return
         if total_frames is not None and pbar.total != total_frames:
             pbar.reset(total=total_frames)
-        pbar.n = int(current_frame) + 1
-        pbar.refresh()
+        target = int(current_frame) + 1
+        delta = target - pbar.n
+        if delta:
+            pbar.update(delta)
 
     try:
         with tempfile.TemporaryDirectory() as tmp:

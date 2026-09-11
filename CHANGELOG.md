@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Added `camat-fetch-tutorials` (`camat.notebook_workspace`) to copy only
+  `notebooks/` and `test_corpus/` for cloud Jupyter. Workflow 1 and conversion
+  notebooks install CAMAT and fetch that workspace when they are opened on
+  their own. Documented Jupyter4NFDI and Colab in
+  [Cloud notebooks](docs/cloud-notebooks.md). Packaged `camat/examples/` scores
+  now resolve from an installed wheel without a source checkout.
 - Added focused [Statistics](docs/guides/statistics.md),
   [Pattern search](docs/guides/pattern-search.md), and
   [Binary representations](docs/guides/binary-representations.md) guides,
@@ -38,17 +44,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and moved student-assistant credits to Project → About and citation.
 - Updated the project credits: Martin Pfleiderer is principal investigator,
   and Pia Steuck is research assistant.
-
-## [0.2.3b1] - 2026-09-11
-
-### Added
-
-- Added `camat-fetch-tutorials` (`camat.notebook_workspace`) to copy only
-  `notebooks/` and `test_corpus/` for cloud Jupyter. Workflow 1 and conversion
-  notebooks install CAMAT and fetch that workspace when they are opened on
-  their own. Documented Jupyter4NFDI and Colab in
-  [Cloud notebooks](docs/cloud-notebooks.md). Packaged `camat/examples/` scores
-  now resolve from an installed wheel without a source checkout.
+- Import `tqdm.notebook` in the convolution-explainer setup cell so JupyterLab
+  and Jupyter4NFDI register the widget frontend before animation encoding.
+  If notebook widgets are missing, encoding falls back to a stdout bar.
+- Dropped the embedded sliding-window animation HTML from
+  [`binary_convolution_explained.ipynb`](notebooks/binary_convolution_explained.ipynb)
+  so the notebook stays under GitHub's size recommendation. Re-run that cell
+  locally to regenerate the movies.
 
 ## [0.2.2] - 2026-09-11
 
@@ -771,7 +773,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ---
 
 [Unreleased]: https://github.com/egorpol/camat_v2/compare/v0.2.2...HEAD
-[0.2.3b1]: https://github.com/egorpol/camat_v2/compare/v0.2.2...HEAD
 [0.2.2]: https://github.com/egorpol/camat_v2/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/egorpol/camat_v2/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/egorpol/camat_v2/compare/v0.1.13...v0.2.0

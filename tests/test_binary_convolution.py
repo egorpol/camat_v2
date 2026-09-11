@@ -85,6 +85,52 @@ def test_scale_plot_and_search_share_pitch_time_and_rounding_controls(monkeypatc
         plt.close("all")
 
 
+def test_notebook_tqdm_falls_back_when_ipywidgets_missing(monkeypatch):
+    import sys
+
+    import tqdm as tqdm_std
+
+    import camat.binary_convolution as bc
+
+    monkeypatch.setitem(sys.modules, "ipywidgets", None)
+    pbar = bc._notebook_tqdm(10, "Encoding frames")
+    try:
+        assert type(pbar) is tqdm_std.tqdm
+        assert pbar.total == 10
+        pbar.update(3)
+        assert pbar.n == 3
+    finally:
+        pbar.close()
+
+
+def test_notebook_tqdm_falls_back_when_widget_construction_fails(monkeypatch):
+    import sys
+    import types
+
+    import tqdm as tqdm_std
+
+    import camat.binary_convolution as bc
+
+    widgets = types.ModuleType("ipywidgets")
+    widgets.IntProgress = object
+    fake_notebook = types.ModuleType("tqdm.notebook")
+
+    def boom(*args, **kwargs):
+        raise ImportError("IProgress not found")
+
+    fake_notebook.tqdm = boom
+    monkeypatch.setitem(sys.modules, "ipywidgets", widgets)
+    monkeypatch.setitem(sys.modules, "tqdm.notebook", fake_notebook)
+
+    pbar = bc._notebook_tqdm(4, "Encoding frames")
+    try:
+        assert type(pbar) is tqdm_std.tqdm
+        pbar.update(1)
+        assert pbar.n == 1
+    finally:
+        pbar.close()
+
+
 def test_recipe_comparison_returns_displayed_kernels_without_mutating_recipes(monkeypatch):
     from matplotlib import pyplot as plt
 
