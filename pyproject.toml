@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "camat"
-version = "0.2.2"
+version = "0.2.3b1"
 description = "CAMAT: tools for symbolic music parsing, analysis, and rendering."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -49,6 +49,7 @@ camat-integrate-annotation-file = "camat.integrate_measure_annotations:main"
 camat-integrate-annotations = "camat.upload_and_integrate_measure_annotations:main"
 camat-run-pipeline = "camat.run_pipeline:main"
 camat-validate-iiif = "camat.validate_iiif_vs_local:main"
+camat-fetch-tutorials = "camat.notebook_workspace:main"
 
 [project.urls]
 Homepage = "https://github.com/egorpol/camat_v2"

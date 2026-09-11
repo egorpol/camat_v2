@@ -7,7 +7,9 @@ title: Notebook roadmap
 The notebooks are executable companions to the conceptual guides. Each should
 answer one main question, declare its input and output, and avoid relying on
 state created by another notebook. See [Getting started](getting-started.md#run-the-showcase-notebooks)
-for Jupyter installation, kernel selection, and first-run downloads.
+for local Jupyter installation and [Cloud notebooks](cloud-notebooks.md) for
+Jupyter4NFDI and Colab. [`cloud_setup.ipynb`](../notebooks/cloud_setup.ipynb)
+installs CAMAT and copies only the tutorial folders.
 
 ## Recommended order
 

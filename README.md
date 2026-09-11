@@ -38,8 +38,17 @@ Requires Python 3.11 or later.
 python -m pip install camat
 ```
 
-From a git checkout, install the package together with JupyterLab to run the
-showcase notebooks:
+To run the showcase notebooks without cloning the whole repository:
+
+```bash
+camat-fetch-tutorials
+```
+
+That command copies `notebooks/` and `test_corpus/` into `camat_tutorials/`.
+See [Cloud notebooks](https://camat-v2.readthedocs.io/en/stable/cloud-notebooks/)
+for Jupyter4NFDI and Google Colab.
+
+To work on CAMAT itself:
 
 ```bash
 git clone https://github.com/egorpol/camat_v2.git
@@ -80,8 +89,8 @@ Parsed 8 notes
 default parser for common-notation MEI. Convert other formats first, then
 parse the resulting MEI.
 
-Command-line tools such as `camat-convert` and `camat-check-mei` are installed
-with the package.
+Command-line tools such as `camat-convert`, `camat-check-mei`, and
+`camat-fetch-tutorials` are installed with the package.
 
 ## What's in this repository
 
@@ -110,6 +119,7 @@ camat_v2/
 | -------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
 | [Documentation home](https://camat-v2.readthedocs.io/en/stable/)                  | Workflow map and starting points                                     |
 | [Getting started](https://camat-v2.readthedocs.io/en/stable/getting-started/)     | Install, offline example, and Jupyter setup                      |
+| [Cloud notebooks](https://camat-v2.readthedocs.io/en/stable/cloud-notebooks/)     | Jupyter4NFDI and Colab: copy tutorials without a full clone      |
 | [What CAMAT is](https://camat-v2.readthedocs.io/en/stable/overview/)              | How the four workflows fit together                                  |
 | [Notebook roadmap](https://camat-v2.readthedocs.io/en/stable/notebooks/)          | Executable examples in recommended order                             |
 | [API reference](https://camat-v2.readthedocs.io/en/stable/reference/)             | Python modules and entry points                                      |

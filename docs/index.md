@@ -10,7 +10,8 @@ prepare a musical document, convert other formats to MEI, then explore its
 notes through tables, matrices, and notation.
 
 Start with [Getting started](getting-started.md) for installation, an offline
-example, and Jupyter setup. The [notebook roadmap](notebooks.md) collects the
+example, and Jupyter setup. Use [Cloud notebooks](cloud-notebooks.md) on
+Jupyter4NFDI or Colab. The [notebook roadmap](notebooks.md) collects the
 executable tutorials in order.
 
 ## Choose a workflow

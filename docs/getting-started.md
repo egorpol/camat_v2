@@ -55,8 +55,20 @@ example with a local MEI path. Convert other formats first using
 ## Run the showcase notebooks
 
 The notebooks live in the repository, separately from the PyPI package.
-Clone the repository (or download and extract its ZIP), then install that
-checkout so its code and tutorials match:
+Install CAMAT and copy **only** the tutorials and example files:
+
+```bash
+python -m pip install camat
+camat-fetch-tutorials
+python -m jupyterlab camat_tutorials/notebooks
+```
+
+That sparse copy does not include documentation sources, tests, or the
+development archive. On [Jupyter4NFDI](https://hub.nfdi-jupyter.de) or
+Google Colab, see [Cloud notebooks](cloud-notebooks.md).
+
+To develop CAMAT itself, clone the repository so the installed code and
+tutorials match:
 
 ```bash
 git clone https://github.com/egorpol/camat_v2.git
@@ -69,7 +81,8 @@ python -m jupyterlab notebooks
 ```
 
 On Windows, use the PowerShell activation command above. In JupyterLab,
-select **Python (CAMAT)** as the notebook kernel. Start with
+select **Python (CAMAT)** as the notebook kernel when you used the development
+install. Start with
 [Render MEI](../notebooks/mei_render.ipynb),
 [Inspect a score and facsimile](../notebooks/mei_facsimile_viewer.ipynb), or
 [Duration semantics](../notebooks/duration_semantics_examples.ipynb) for

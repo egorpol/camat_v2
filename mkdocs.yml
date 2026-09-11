@@ -49,6 +49,7 @@ nav:
   - Start:
       - Home: index.md
       - Getting started: getting-started.md
+      - Cloud notebooks: cloud-notebooks.md
       - What CAMAT is: overview.md
       - Edition corpora: guides/edition-corpora.md
       - Notebook roadmap: notebooks.md

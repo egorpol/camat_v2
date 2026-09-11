@@ -85,12 +85,10 @@ class ResolvedMeiSource:
 
 
 def find_camat_root(start: Path | None = None) -> Path:
-    """Return the CAMAT checkout when Jupyter or tests start in a subdirectory."""
-    start = (start or Path.cwd()).resolve()
-    for candidate in (start, *start.parents):
-        if (candidate / "pyproject.toml").is_file() and (candidate / "camat").is_dir():
-            return candidate
-    return start
+    """Return the CAMAT checkout or tutorial workspace, else ``start`` / cwd."""
+    from .notebook_workspace import find_camat_root as _find
+
+    return _find(start)
 
 
 def resolve_repo_path(path: str | Path, *, repo_root: Path | None = None) -> Path:
@@ -111,12 +109,40 @@ def display_path(path: Path, *, repo_root: Path | None = None) -> str:
 
 
 def _default_mei_cache_dir(repo_root: Path | None = None) -> Path:
+    from .notebook_workspace import is_source_checkout, is_tutorial_workspace
+
     root = (repo_root or find_camat_root()).resolve()
-    if (root / "pyproject.toml").is_file() and (root / "camat").is_dir():
+    if is_source_checkout(root) or is_tutorial_workspace(root):
         return root / "converted_mei" / "facsimile_viewer_sources"
     from .music_utils import get_download_cache_dir
 
     return Path(get_download_cache_dir())
+
+
+def _packaged_example_path(source: str | Path) -> Path | None:
+    """Return a filesystem path for ``camat/examples/<file>`` from the wheel."""
+    posix = Path(source).as_posix()
+    prefix = "camat/examples/"
+    if not posix.startswith(prefix):
+        return None
+    name = posix[len(prefix) :]
+    if not name or "/" in name or name.startswith("."):
+        return None
+    from importlib.resources import as_file, files
+
+    resource = files("camat").joinpath("examples", name)
+    if not resource.is_file():
+        return None
+    from .music_utils import get_download_cache_dir
+
+    cache = Path(get_download_cache_dir()) / "packaged_examples"
+    cache.mkdir(parents=True, exist_ok=True)
+    target = cache / name
+    with as_file(resource) as extracted:
+        data = extracted.read_bytes()
+    if not target.is_file() or target.read_bytes() != data:
+        target.write_bytes(data)
+    return target.resolve()
 
 
 def _is_windows_absolute_path(source: str) -> bool:
@@ -222,6 +248,11 @@ def resolve_mei_source_info(
             )
         local_path = resolve_repo_path(source, repo_root=root)
         kind = "local"
+        if not local_path.is_file():
+            packaged = _packaged_example_path(source_text)
+            if packaged is not None:
+                local_path = packaged
+                kind = "packaged"
 
     if not local_path.is_file():
         raise FileNotFoundError(f"No MEI file at {local_path}")
