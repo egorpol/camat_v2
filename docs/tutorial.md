@@ -6,7 +6,7 @@ title: Backend and specialized parsing
 
 This guide covers backend choice and source types that do not follow the
 default common-notation MEI contract. Begin with
-[Parse and represent MEI](guides/parsing-representations.md) for the standard
+[Parse music into CAMAT representations](guides/parsing-representations.md) for the standard
 `df_pitch` and `df_events` workflow.
 
 Mensural MEI and timeline/rap Humdrum parsing are **experimental** and have

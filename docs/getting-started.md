@@ -4,6 +4,38 @@ title: Getting started
 
 # Getting started
 
+## Choose a workflow
+
+CAMAT has three workflows that can be used independently. An existing MEI
+edition can go straight to parsing; sources in other formats first pass through
+conversion as part of editing and preparing music with MEI.
+
+### 1. Editing music with the MEI data format
+
+Render and edit scores, link measures to facsimiles, combine page files,
+and run editorial checks. Import MusicXML, Humdrum, MuseScore, and other
+symbolic formats into MEI, from one score or a mixed corpus. MIDI notation
+conversion is experimental; converted scores still need inspection.
+
+[Editing music with the MEI data format](guides/edition-building.md) ·
+[MEI and XML introduction](guides/mei-introduction.md) ·
+[Convert to MEI](guides/formats.md) · [Batch conversion](guides/batch-conversion.md)
+
+### 2. Parse music into CAMAT representations
+
+Parse common-notation MEI into CAMAT's note and event tables, explore a piano
+roll, and link selections back to the score through MEI identifiers.
+
+[Parse music into CAMAT representations](guides/parsing-representations.md)
+
+### 3. Analyse music: statistics and pattern search
+
+Explore pitch and rhythm distributions, construct binary matrices, and search
+for musical patterns with overlays on the original score.
+
+[Analyse music: statistics and pattern search](guides/analysis.md) ·
+[Statistics](guides/statistics.md) · [Pattern search](guides/pattern-search.md)
+
 ## Install CAMAT
 
 Use Python 3.11 or later in a virtual environment:

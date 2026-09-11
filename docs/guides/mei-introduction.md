@@ -529,6 +529,6 @@ for several pages.
 
 Rendering is a useful feedback loop, but a score that renders is not
 necessarily valid or editorially consistent. Continue with
-[Handling MEI files](edition-building.md#check-combine-and-review-reports) for schema
+[Editing music with the MEI data format](edition-building.md#check-combine-and-review-reports) for schema
 and consistency checks, or use the
 [Verovio Editor](https://editor.verovio.org/) as an external rendering tool.

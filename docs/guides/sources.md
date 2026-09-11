@@ -4,7 +4,9 @@ title: Test sources
 
 # Test sources
 
-These public corpora feed **workflow 2** (conversion) and parser tests.
+These public corpora feed conversion in **workflow 1** and parsing in
+**workflow 2**, as well as parser tests. For CAMAT's working editions and
+other MEI collections, see [Edition corpora](edition-corpora.md).
 Remote entries are **raw file URLs**, not GitHub HTML pages. Local `.txt`
 manifests ignore blank lines and lines that start with `#`.
 

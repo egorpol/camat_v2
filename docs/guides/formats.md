@@ -3,9 +3,11 @@ title: Convert to MEI
 ---
 # Convert to MEI
 
-This is **CAMAT workflow 2**. It converts MusicXML, Humdrum, MIDI, MuseScore,
-and other symbolic formats to MEI. Conversion creates input for parsing; it
-does not turn an imported score into a reviewed edition.
+Conversion is part of **CAMAT workflow 1: editing music with the MEI data
+format**. It converts MusicXML, Humdrum, MIDI, MuseScore, and other symbolic
+formats to MEI for editing, inspection, and later parsing. See the
+[workflow overview](edition-building.md) for the full preparation and
+editorial process. An imported score still needs review.
 
 CAMAT analyses **MEI**. `parse_files(...)` expects common-notation MEI and
 defaults to the Verovio parser. Convert other encodings to MEI first, then
@@ -274,7 +276,7 @@ source file next to the MEI.
 
 ## See also
 
-- Next workflow: [Parse and represent MEI](parsing-representations.md)
+- Next workflow: [Parse music into CAMAT representations](parsing-representations.md)
 - Tutorial notebook: [`notebooks/camat_formats.ipynb`](../../notebooks/camat_formats.ipynb)
 - Batch conversion: [Batch conversion](batch-conversion.md) and
   [`notebooks/camat_batch_conversion.ipynb`](../../notebooks/camat_batch_conversion.ipynb)

@@ -10,24 +10,13 @@ scores, publication headers, correction in
 [mei-friend](https://mei-friend.mdw.ac.at/), and automated consistency checks.
 
 The reusable tooling lives in this package (Workflow 1:
-[Handling MEI files](edition-building.md)). The MEI files themselves live in
+[Editing music with the MEI data format](edition-building.md)). The MEI files themselves live in
 separate work-in-progress edition repositories. Those repositories are the
 source of the editorial problems; CAMAT is the toolbox that grew out of them.
 
 Tutorial notebooks in this checkout use small portable examples under
 `test_corpus/`. Point the same notebooks at a clone of an edition repository
 when you are working on a volume.
-
-## Student assistants
-
-The following student assistants contribute to CAMAT's edition corpora:
-
-- Francy Häring
-- Jan-Raphael Kemnitzer
-- Jingyu Tu
-- Lea Meret Beck
-- Ragna Conrads
-- You Zhou
 
 ## Volumes in progress
 
@@ -70,6 +59,23 @@ files have not yet been assembled.
 | Page-level MEI           | `29_30_instrumentalkonzerte_deutscher_meister_bsb00023250/`                                        |
 | Planned work-level files | listed in the[repository README](https://github.com/egorpol/DdT_1_vol_29_30#planned-work-level-files) |
 
+## Other MEI corpora
+
+Public MEI collections provide further material for editing, parsing, and
+analysis:
+
+- [MEI Sample Encodings](https://github.com/music-encoding/sample-encodings)
+  — the Music Encoding Initiative's collection of example encodings.
+- [Freischütz Digital](https://github.com/Freischuetz-Digital/data-music)
+  — MEI music data for Weber's *Der Freischütz*.
+- [CRIM](https://github.com/CRIM-Project/CRIM-online)
+  — *Citations: The Renaissance Imitation Mass*, with MEI models and mass movements.
+
+See [MEI encoding projects](sources.md#mei-encoding-projects) for the fuller
+corpus list and the raw-file manifests used by CAMAT's notebooks and parser
+tests. The [known limitations](../known-limitations.md) describe CAMAT's
+notation support.
+
 ## Status terms
 
 Both repositories use the same work-level vocabulary:
@@ -88,6 +94,6 @@ inconsistency. It does not replace comparison with the source facsimile.
 
 The editorial loop that these volumes use is the same path Workflow 1 teaches:
 integrate facsimiles, combine pages, write a check report, correct in
-mei-friend, inspect in the facsimile viewer, and re-check. Conversion
-(Workflow 2) is a different path: it imports another encoding and does not
-produce a reviewed edition.
+mei-friend, inspect in the facsimile viewer, and re-check. Conversion is also
+part of Workflow 1: it imports another encoding into MEI, after which the
+score still needs editorial inspection.

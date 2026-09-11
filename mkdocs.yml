@@ -1,5 +1,5 @@
 site_name: CAMAT
-site_description: "Computer-Assisted Music Analysis Toolbox: MEI-centered editorial, conversion, parsing, and analysis workflows"
+site_description: "Computer-Assisted Music Analysis Toolbox: editing music with MEI, parsing music representations, and analysing music with statistics and pattern search"
 site_author: Egor Polyakov, Martin Pfleiderer, and Pia Steuck
 site_url: !ENV [READTHEDOCS_CANONICAL_URL, "https://camat-v2.readthedocs.io/en/stable/"]
 strict: true
@@ -50,23 +50,25 @@ nav:
       - Home: index.md
       - Getting started: getting-started.md
       - Cloud notebooks: cloud-notebooks.md
-      - What CAMAT is: overview.md
       - Edition corpora: guides/edition-corpora.md
       - Notebook roadmap: notebooks.md
       - Known limitations: known-limitations.md
   - Workflows:
-      - 1. Handling MEI files:
+      - 1. Editing music with the MEI data format:
           - Workflow overview: guides/edition-building.md
           - Introduction to MEI and XML: guides/mei-introduction.md
-      - 2. Convert to MEI:
-          - Workflow overview: guides/formats.md
+          - Convert to MEI: guides/formats.md
           - Batch conversion: guides/batch-conversion.md
           - Test sources: guides/sources.md
-      - 3. Parse and represent MEI: guides/parsing-representations.md
-      - 4. Analyse representations: guides/analysis.md
+      - 2. Parse music into CAMAT representations: guides/parsing-representations.md
+      - "3. Analyse music: statistics and pattern search":
+          - Workflow overview: guides/analysis.md
+          - Statistics: guides/statistics.md
+          - Pattern search: guides/pattern-search.md
+          - Binary representations: guides/binary-representations.md
   - Further guides:
       - Backend and specialized parsing: tutorial.md
-  - Reference:
+  - Documentation:
       - Overview: reference.md
       - API:
           - Top-level API: api/camat.md

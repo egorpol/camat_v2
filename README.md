@@ -12,16 +12,15 @@ toolbox** for editorial and analytical work with symbolic music. MEI is the
 durable score document; conversion, note tables, statistical analysis,
 pattern search, and rendering all connect back to that file.
 
-The four workflows can be used independently. An existing MEI edition can go
+The three workflows can be used independently. An existing MEI edition can go
 straight to parsing, while a MusicXML or Humdrum source first passes through
-conversion.
+conversion as part of editing and preparing music with MEI.
 
 | Workflow                 | Starts with                                                    | Produces                                                                   |
 | ------------------------ | -------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| **Handle MEI**     | existing or draft MEI                                          | rendered scores, facsimile links, combined pages, editorial checks         |
-| **Convert to MEI** | MusicXML, Humdrum, MuseScore, MIDI, and other symbolic formats | MEI suitable for inspection and parsing                                    |
-| **Parse MEI**      | common-notation MEI                                            | note tables (`df_pitch`), event tables (`df_events`), piano-roll views |
-| **Analyse**        | those tables or derived matrices                               | distributions, binary matrices, pattern matches, and score overlays        |
+| **1. Editing music with the MEI data format** | existing or draft MEI, MusicXML, Humdrum, MuseScore, MIDI, and other symbolic formats | imported MEI, rendered scores, facsimile links, combined pages, editorial checks |
+| **2. Parse music into CAMAT representations** | common-notation MEI | note tables (`df_pitch`), event tables (`df_events`), piano-roll views |
+| **3. Analyse music: statistics and pattern search** | those tables or derived matrices | distributions, binary matrices, pattern matches, and score overlays |
 
 Tables and matrices are working representations. They do not replace the
 edition; `xml:id` values are the bridge back to the score. Common-notation
@@ -104,7 +103,7 @@ camat_v2/
 ├── camat/            Installable package (conversion, parsers, analysis, rendering)
 │   ├── examples/     Tiny MEI/SVG scores for offline demos
 │   └── schemas/      MEI 5.1 CMN RELAX NG schema
-├── notebooks/        Showcase tutorials, ordered in the documentation roadmap
+├── notebooks/        Showcase tutorials, grouped into independent learning tracks
 ├── docs/             MkDocs sources published on Read the Docs
 ├── tests/            Pytest suite and synthetic fixtures
 ├── scripts/          Release checks, docs hooks, and maintainer probes
@@ -117,11 +116,10 @@ camat_v2/
 
 | Page                                                                             | What it covers                                                       |
 | -------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
-| [Documentation home](https://camat-v2.readthedocs.io/en/stable/)                  | Workflow map and starting points                                     |
-| [Getting started](https://camat-v2.readthedocs.io/en/stable/getting-started/)     | Install, offline example, and Jupyter setup                      |
+| [Documentation home](https://camat-v2.readthedocs.io/en/stable/)                  | What CAMAT is and how musical documents connect to analysis |
+| [Getting started](https://camat-v2.readthedocs.io/en/stable/getting-started/)     | Three workflows, installation, offline example, and Jupyter setup |
 | [Cloud notebooks](https://camat-v2.readthedocs.io/en/stable/cloud-notebooks/)     | Jupyter4NFDI and Colab: copy tutorials without a full clone      |
-| [What CAMAT is](https://camat-v2.readthedocs.io/en/stable/overview/)              | How the four workflows fit together                                  |
-| [Notebook roadmap](https://camat-v2.readthedocs.io/en/stable/notebooks/)          | Executable examples in recommended order                             |
+| [Notebook roadmap](https://camat-v2.readthedocs.io/en/stable/notebooks/)          | Independent learning tracks for editing, parsing, and analysis                             |
 | [API reference](https://camat-v2.readthedocs.io/en/stable/reference/)             | Python modules and entry points                                      |
 | [Known limitations](https://camat-v2.readthedocs.io/en/stable/known-limitations/) | Supported notation and experimental features                         |
 
@@ -130,8 +128,11 @@ See [Contributing](CONTRIBUTING.md) to work on the project.
 
 ## Authors and origins
 
-Egor Polyakov — research and development; Martin Pfleiderer — supervision.
-Pia Steuck — student assistant.
+Egor Polyakov — research and development; Martin Pfleiderer — principal investigator.
+Pia Steuck — research assistant.
+
+The student assistants contributing to CAMAT's edition corpora are credited
+under [About CAMAT](https://camat-v2.readthedocs.io/en/stable/about/#student-assistants).
 
 The acronym was chosen in 2021–2022 for a basic MusicXML parsing tool;
 see the [earlier project and tutorials](https://analyse.hfm-weimar.de/doku.php?id=en:noten).

@@ -82,7 +82,7 @@ or paste the two cells above into a new notebook.
 
 Opening a single tutorial from GitHub with **Open in Colab** used to fail:
 Colab copies only that `.ipynb`, so `import setup_camat` could not see the
-repository and `test_corpus/` was missing. The Workflow 1 and conversion
+repository and `test_corpus/` was missing. The Workflow 1 editing and conversion
 notebooks now install CAMAT and copy those folders in their first code cell.
 
 Colab still starts a **new runtime per notebook tab**. Files written under
@@ -96,7 +96,7 @@ custom widget manager (the setup helper does this when it detects Colab) or
 run that notebook on Jupyter4NFDI. Plotting and table notebooks are the better
 Colab starting point.
 
-Workflow 3 and 4 notebooks that load Bach from a URL only need
+Workflow 2 and 3 notebooks that load Bach from a URL only need
 `python -m pip install camat` in that runtime. Run `prepare_notebook()` as
 well if `import camat` fails or you want `test_corpus/` on disk.
 

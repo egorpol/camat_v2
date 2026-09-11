@@ -1,10 +1,10 @@
 ---
-title: Parse and represent MEI
+title: Parse music into CAMAT representations
 ---
 
-# Parse and represent MEI
+# Parse music into CAMAT representations
 
-This is **CAMAT workflow 3**. Start with
+This is **CAMAT workflow 2**. Start with
 [`mei_parse_tables.ipynb`](../../notebooks/mei_parse_tables.ipynb)
 (parse one score to `df_pitch` / `df_events` and a piano roll), then
 [`mei_annotate_selection.ipynb`](../../notebooks/mei_annotate_selection.ipynb)
@@ -33,7 +33,7 @@ df_events = score["df_events"]
 ```
 
 The default backend is Verovio and its common-notation parser accepts MEI. Use
-the [conversion workflow](formats.md) before this step for other formats.
+the [conversion step in workflow 1](formats.md) before this step for other formats.
 
 ## The returned objects
 
@@ -111,5 +111,4 @@ version with stored results. They make it possible to explain an analytical
 row, trace a matrix cell to its notes, or highlight a match in the rendered
 score.
 
-Continue with [Analyse representations](analysis.md).
-
+Continue with [Analyse music: statistics and pattern search](analysis.md).

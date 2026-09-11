@@ -7,11 +7,20 @@ title: About CAMAT
 ## Authors
 
 - **Egor Polyakov** — research and development.
-- **Martin Pfleiderer** — supervision.
-- **Pia Steuck** — student assistant.
+- **Martin Pfleiderer** — principal investigator.
+- **Pia Steuck** — research assistant.
 
-The student assistants supporting CAMAT's editions are credited under
-[Edition corpora](guides/edition-corpora.md#student-assistants).
+## Student assistants
+
+The following student assistants contribute to CAMAT's
+[edition corpora](guides/edition-corpora.md):
+
+- Francy Häring
+- Jan-Raphael Kemnitzer
+- Jingyu Tu
+- Lea Meret Beck
+- Ragna Conrads
+- You Zhou
 
 ## Origins
 
@@ -23,7 +32,8 @@ the current package. Its teaching materials are available on the
 The current CAMAT is a new implementation with its own codebase and a broader,
 MEI-centred scope. The earlier project provides historical context; its
 tutorials describe the predecessor. For the current toolbox, use
-[these documentation workflows](index.md) and the [notebook roadmap](notebooks.md).
+[these documentation workflows](getting-started.md#choose-a-workflow) and the
+[notebook roadmap](notebooks.md).
 
 The current editorial tools grew out of work on the
 [edition corpora](guides/edition-corpora.md).

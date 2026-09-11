@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Added focused [Statistics](docs/guides/statistics.md),
+  [Pattern search](docs/guides/pattern-search.md), and
+  [Binary representations](docs/guides/binary-representations.md) guides,
+  preserving the analysis examples and detailed method explanations.
+- Added Mermaid diagrams for tracing analysis results back to the score and
+  following the binary round trip through reconstruction and MEI highlighting,
+  using the same style as the existing structure and conversion diagrams.
+
+### Changed
+
+- Reorganized the documentation around three workflows: editing music with
+  the MEI data format (including conversion), parsing music into CAMAT
+  representations, and analysing music with statistics and pattern search.
+  Updated workflow names and numbering across navigation, guides, the README,
+  and notebook descriptions.
+- Integrated “What CAMAT is” into Home and moved workflow selection to
+  [Getting started](docs/getting-started.md). The former overview page links
+  to the new locations. Renamed the Reference navigation section to
+  Documentation.
+- Shortened the [analysis overview](docs/guides/analysis.md) to provide separate
+  Statistics and Pattern search entry points, with technical details in the
+  companion guides.
+- Replaced the notebook roadmap's single numbered sequence with three
+  independent learning tracks, including optional follow-ups and direct links
+  between notebooks and their companion guides.
+- Added external MEI corpus links to [Edition corpora](docs/guides/edition-corpora.md)
+  and moved student-assistant credits to Project → About and citation.
+- Updated the project credits: Martin Pfleiderer is principal investigator,
+  and Pia Steuck is research assistant.
+
 ## [0.2.3b1] - 2026-09-11
 
 ### Added

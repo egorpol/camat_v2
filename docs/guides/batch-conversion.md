@@ -4,8 +4,9 @@ title: Batch conversion
 
 # Batch conversion
 
-This is **CAMAT workflow 2: convert sources to MEI**, scaled to a corpus. The
-output MEI files are inputs to parsing and still require inspection.
+Batch conversion is part of **CAMAT workflow 1: editing music with the MEI
+data format**, scaled to a corpus. The output MEI files still require
+inspection before parsing; see the [workflow overview](edition-building.md).
 
 Single-file conversion uses the public helper `vrv_convert_to_mei(...)`.
 Mixed corpora, MuseScore files, crash isolation, and a conversion report use
@@ -188,7 +189,7 @@ installed command above.
 ## See also
 
 - [Convert to MEI](formats.md)
-- Next workflow: [Parse and represent MEI](parsing-representations.md)
+- Next workflow: [Parse music into CAMAT representations](parsing-representations.md)
 - API: [conversion](../api/conversion.md) and
   [`vrv_convert_to_mei`](../api/verovio_render.md)
 - Maintainer corpus probe: `testing_verovio_conversion.ipynb`
