@@ -7,6 +7,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-09-11
+
+### Added
+
+- Added `camat-fetch-tutorials` (`camat.notebook_workspace`) to copy only
+  `notebooks/` and `test_corpus/` for cloud Jupyter. Workflow 1 and conversion
+  notebooks install CAMAT and fetch that workspace when they are opened on
+  their own. Documented Jupyter4NFDI and Colab in
+  [Cloud notebooks](docs/cloud-notebooks.md). Packaged `camat/examples/` scores
+  now resolve from an installed wheel without a source checkout.
+- Added focused [Statistics](docs/guides/statistics.md),
+  [Pattern search](docs/guides/pattern-search.md), and
+  [Binary representations](docs/guides/binary-representations.md) guides,
+  preserving the analysis examples and detailed method explanations.
+- Added Mermaid diagrams for tracing analysis results back to the score and
+  following the binary round trip through reconstruction and MEI highlighting,
+  using the same style as the existing structure and conversion diagrams.
+
+### Changed
+
+- Reorganized the documentation around three workflows: editing music with
+  the MEI data format (including conversion), parsing music into CAMAT
+  representations, and analysing music with statistics and pattern search.
+  Updated workflow names and numbering across navigation, guides, the README,
+  and notebook descriptions.
+- Integrated “What CAMAT is” into Home and moved workflow selection to
+  [Getting started](docs/getting-started.md). The former overview page links
+  to the new locations. Renamed the Reference navigation section to
+  Documentation.
+- Shortened the [analysis overview](docs/guides/analysis.md) to provide separate
+  Statistics and Pattern search entry points, with technical details in the
+  companion guides.
+- Replaced the notebook roadmap's single numbered sequence with three
+  independent learning tracks, including optional follow-ups and direct links
+  between notebooks and their companion guides.
+- Added external MEI corpus links to [Edition corpora](docs/guides/edition-corpora.md)
+  and moved student-assistant credits to Project → About and citation.
+- Updated the project credits: Martin Pfleiderer is principal investigator,
+  and Pia Steuck is research assistant.
+- Import `tqdm.notebook` in the convolution-explainer setup cell so JupyterLab
+  and Jupyter4NFDI register the widget frontend before animation encoding.
+  If notebook widgets are missing, encoding falls back to a stdout bar.
+- Dropped the embedded sliding-window animation HTML from
+  [`binary_convolution_explained.ipynb`](notebooks/binary_convolution_explained.ipynb)
+  so the notebook stays under GitHub's size recommendation. Re-run that cell
+  locally to regenerate the movies.
+
 ## [0.2.2] - 2026-09-11
 
 ### Added
@@ -727,7 +774,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-[Unreleased]: https://github.com/egorpol/camat_v2/compare/v0.2.2...HEAD
+[Unreleased]: https://github.com/egorpol/camat_v2/compare/v0.2.3...HEAD
+[0.2.3]: https://github.com/egorpol/camat_v2/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/egorpol/camat_v2/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/egorpol/camat_v2/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/egorpol/camat_v2/compare/v0.1.13...v0.2.0

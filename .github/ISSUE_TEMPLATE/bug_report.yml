@@ -24,7 +24,7 @@ body:
     id: version
     attributes:
       label: CAMAT and Python versions
-      placeholder: "CAMAT 0.2.2; Python 3.13"
+      placeholder: "CAMAT 0.2.3; Python 3.13"
     validations:
       required: true
   - type: textarea

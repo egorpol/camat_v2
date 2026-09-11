@@ -4,6 +4,38 @@ title: Getting started
 
 # Getting started
 
+## Choose a workflow
+
+CAMAT has three workflows that can be used independently. An existing MEI
+edition can go straight to parsing; sources in other formats first pass through
+conversion as part of editing and preparing music with MEI.
+
+### 1. Editing music with the MEI data format
+
+Render and edit scores, link measures to facsimiles, combine page files,
+and run editorial checks. Import MusicXML, Humdrum, MuseScore, and other
+symbolic formats into MEI, from one score or a mixed corpus. MIDI notation
+conversion is experimental; converted scores still need inspection.
+
+[Editing music with the MEI data format](guides/edition-building.md) ·
+[MEI and XML introduction](guides/mei-introduction.md) ·
+[Convert to MEI](guides/formats.md) · [Batch conversion](guides/batch-conversion.md)
+
+### 2. Parse music into CAMAT representations
+
+Parse common-notation MEI into CAMAT's note and event tables, explore a piano
+roll, and link selections back to the score through MEI identifiers.
+
+[Parse music into CAMAT representations](guides/parsing-representations.md)
+
+### 3. Analyse music: statistics and pattern search
+
+Explore pitch and rhythm distributions, construct binary matrices, and search
+for musical patterns with overlays on the original score.
+
+[Analyse music: statistics and pattern search](guides/analysis.md) ·
+[Statistics](guides/statistics.md) · [Pattern search](guides/pattern-search.md)
+
 ## Install CAMAT
 
 Use Python 3.11 or later in a virtual environment:
@@ -55,8 +87,20 @@ example with a local MEI path. Convert other formats first using
 ## Run the showcase notebooks
 
 The notebooks live in the repository, separately from the PyPI package.
-Clone the repository (or download and extract its ZIP), then install that
-checkout so its code and tutorials match:
+Install CAMAT and copy **only** the tutorials and example files:
+
+```bash
+python -m pip install camat
+camat-fetch-tutorials
+python -m jupyterlab camat_tutorials/notebooks
+```
+
+That sparse copy does not include documentation sources, tests, or the
+development archive. On [Jupyter4NFDI](https://hub.nfdi-jupyter.de) or
+Google Colab, see [Cloud notebooks](cloud-notebooks.md).
+
+To develop CAMAT itself, clone the repository so the installed code and
+tutorials match:
 
 ```bash
 git clone https://github.com/egorpol/camat_v2.git
@@ -69,7 +113,8 @@ python -m jupyterlab notebooks
 ```
 
 On Windows, use the PowerShell activation command above. In JupyterLab,
-select **Python (CAMAT)** as the notebook kernel. Start with
+select **Python (CAMAT)** as the notebook kernel when you used the development
+install. Start with
 [Render MEI](../notebooks/mei_render.ipynb),
 [Inspect a score and facsimile](../notebooks/mei_facsimile_viewer.ipynb), or
 [Duration semantics](../notebooks/duration_semantics_examples.ipynb) for

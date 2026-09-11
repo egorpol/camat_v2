@@ -1,12 +1,13 @@
 ---
-title: Handling MEI files
+title: Editing music with the MEI data format
 ---
-# Handling MEI files
+# Editing music with the MEI data format
 
-Handling MEI files is the first CAMAT workflow. It covers the source document
-itself: understanding MEI and XML, rendering MEI while editing, checking and
-cleaning files, inspecting facsimile links, and creating or enriching scholarly
-editions. Edition-building is therefore one part of this broader workflow.
+Editing music with the MEI data format is the first CAMAT workflow. It covers the source document
+itself: importing other formats into MEI, understanding MEI and XML, rendering
+MEI while editing, checking and cleaning files, inspecting facsimile links,
+and creating or enriching scholarly editions. Conversion and edition building
+are both part of this workflow.
 
 These helpers were developed while encoding *Denkmäler deutscher Tonkunst*
 volumes and dealing with the editorial problems that work raised: page-level
@@ -27,6 +28,8 @@ run those checks read-only; optional rewrite helpers stay in
 | If you want to…                                                                     | Start with                                                                                                                                  |
 | ------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------- |
 | understand MEI elements, attributes, schemas, and document structure                 | [Introduction to MEI and XML](mei-introduction.md)                                                                                           |
+| import a score from MusicXML, Humdrum, MuseScore, or another symbolic format | [Convert to MEI](formats.md) |
+| convert a mixed corpus and inspect a conversion report | [Batch conversion](batch-conversion.md) |
 | paste or edit MEI and immediately render the score in Jupyter                        | [`mei_render.ipynb`](../../notebooks/mei_render.ipynb)                                             |
 | inspect notation together with linked facsimile zones                                | [`mei_facsimile_viewer.ipynb`](../../notebooks/mei_facsimile_viewer.ipynb)                         |
 | add a IIIF facsimile and detected measure zones to one clean MEI file                | [`mei_single_file_iiif_integration.ipynb`](../../notebooks/mei_single_file_iiif_integration.ipynb) |
@@ -46,17 +49,21 @@ rest.
 
 1. **[Introduction to MEI and XML](mei-introduction.md)** — document structure,
    identifiers, written vs gestural attributes, and what the later checks look for.
-2. **[`mei_render.ipynb`](../../notebooks/mei_render.ipynb)** —
+2. **Convert other formats to MEI, if needed** —
+   [`camat_formats.ipynb`](../../notebooks/camat_formats.ipynb) for one score or
+   [`camat_batch_conversion.ipynb`](../../notebooks/camat_batch_conversion.ipynb)
+   for a mixed corpus. Inspect the imported MEI in the following steps.
+3. **[`mei_render.ipynb`](../../notebooks/mei_render.ipynb)** —
    paste or edit MEI and render with Verovio while you work.
-3. **[`mei_facsimile_viewer.ipynb`](../../notebooks/mei_facsimile_viewer.ipynb)** —
+4. **[`mei_facsimile_viewer.ipynb`](../../notebooks/mei_facsimile_viewer.ipynb)** —
    open an existing MEI (with or without facsimile data) and inspect layout and
    links read-only.
-4. **IIIF integration** — add facsimile graphics and measure zones:
+5. **IIIF integration** — add facsimile graphics and measure zones:
    [`mei_single_file_iiif_integration.ipynb`](../../notebooks/mei_single_file_iiif_integration.ipynb)
    for one file, then
    [`mei_batch_iiif_integration.ipynb`](../../notebooks/mei_batch_iiif_integration.ipynb)
    for many pages.
-5. **Combine pages, then check** — two short beginner notebooks, or one full toolkit:
+6. **Combine pages, then check** — two short beginner notebooks, or one full toolkit:
    - [`mei_combine_pages.ipynb`](../../notebooks/mei_combine_pages.ipynb)
      joins facsimile-linked page files into one `*_full.mei`. The join keeps the
      first page's opening `<scoreDef>` and copies a later page's opening
@@ -69,7 +76,7 @@ rest.
      is the full toolkit when you want combine-then-check in one run, toggle
      individual checks, or optional `<annot>` export (limited by mei-friend's
      annotation display cap).
-6. **[`mei_facsimile_viewer.ipynb`](../../notebooks/mei_facsimile_viewer.ipynb) again** —
+7. **[`mei_facsimile_viewer.ipynb`](../../notebooks/mei_facsimile_viewer.ipynb) again** —
    inspect the checked page or combined score against the facsimile; repeat
    edit → check → view until the report is acceptable.
 
@@ -83,6 +90,19 @@ wiki. The MkDocs copy is now the project version to maintain; the
 [original page](https://analyse.hfm-weimar.de/doku.php?id=en:mei) remains
 available during the wider documentation migration.
 
+## Convert other formats to MEI
+
+Conversion prepares MusicXML, Humdrum, MuseScore, MIDI, and other symbolic
+sources for MEI editing and later parsing. Verovio writes the final MEI;
+Music21 or MuseScore can provide an intermediate MusicXML bridge. MIDI
+notation conversion is experimental.
+
+Use [Convert to MEI](formats.md) for individual files and conversion routes,
+or [Batch conversion](batch-conversion.md) for mixed corpora, technical
+validation, and JSON reports. [Test sources](sources.md) provides example
+corpora. Keep the original source alongside the MEI, then render and inspect
+the imported score before continuing.
+
 ## Editorial production as part of this workflow
 
 The [edition corpora](edition-corpora.md) are where volume-level MEI is
@@ -95,9 +115,9 @@ assembled and corrected. That work includes:
 - MEI consistency and page-coverage checks;
 - interactive inspection of notation and facsimile alignment.
 
-These are **editorial tasks** within the broader MEI-file workflow. They
-differ from CAMAT's conversion workflow, which imports one symbolic encoding
-into another without making the result a reviewed edition.
+These are **editorial tasks** within the same workflow as conversion.
+Conversion imports one symbolic encoding into another; editorial review
+checks the resulting score against its source.
 
 ## Hand-off from an edition
 
@@ -299,6 +319,6 @@ local-image handling, caching, and file-watch behaviour.
 ## Next step
 
 Once an MEI file has been rendered, checked, and prepared for downstream use,
-continue with [Parse and represent MEI](parsing-representations.md). If the
+continue with [Parse music into CAMAT representations](parsing-representations.md). If the
 source is not yet MEI, use [Convert to MEI](formats.md) first and treat the
 converted file as an import candidate requiring review.

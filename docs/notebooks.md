@@ -4,48 +4,128 @@ title: Notebook roadmap
 
 # Notebook roadmap
 
-The notebooks are executable companions to the conceptual guides. Each should
-answer one main question, declare its input and output, and avoid relying on
-state created by another notebook. See [Getting started](getting-started.md#run-the-showcase-notebooks)
-for Jupyter installation, kernel selection, and first-run downloads.
+Choose a learning track according to your source material and musical question.
+The three workflows have independent starting points. If you already have an
+MEI score, you can begin with parsing or analysis; edition preparation is only
+needed when your source requires it.
 
-## Recommended order
+## Set up once, then choose a track
 
-Workflow 1 — **Handling MEI files** — tutorial sequence:
+See [Getting started](getting-started.md#run-the-showcase-notebooks) for local
+Jupyter installation and [Cloud notebooks](cloud-notebooks.md) for Jupyter4NFDI
+and Colab. [`cloud_setup.ipynb`](../notebooks/cloud_setup.ipynb) installs CAMAT
+and copies the tutorial folders. Colab starts a separate runtime for each
+notebook tab; run each notebook's setup cell in its own runtime.
 
-| Order | Notebook | Main result |
-| --- | --- | --- |
-| 1 | [Introduction to MEI and XML](guides/mei-introduction.md) | MEI/XML structure and editorial concepts |
-| 2 | [Render MEI](../notebooks/mei_render.ipynb) | paste or edit MEI and render interactively with Verovio |
-| 3 | [Inspect scores and facsimiles](../notebooks/mei_facsimile_viewer.ipynb) | read-only inspection of MEI with optional measure–facsimile linking |
-| 4 | [Link one page to IIIF](../notebooks/mei_single_file_iiif_integration.ipynb) | IIIF facsimile + measure zones on one clean MEI |
-| 5 | [Link a batch to IIIF](../notebooks/mei_batch_iiif_integration.ipynb) | same IIIF job over many page files |
-| 6 | [Combine MEI pages](../notebooks/mei_combine_pages.ipynb) | join page MEI files into one `*_full.mei` |
-| 7 | [Create an editorial report](../notebooks/mei_check_report.ipynb) | editorial checks and a CSV report |
-| 8 | [Combine and check MEI](../notebooks/mei_consistency_checks.ipynb) | full toolkit: combine + check + extra flags |
-| 9 | [Inspect scores and facsimiles](../notebooks/mei_facsimile_viewer.ipynb) again | inspect the checked or combined MEI |
+- [Workflow 1: Editing music with the MEI data format](#workflow-1-editing-music-with-the-mei-data-format)
+  — import, render, check, or prepare a score and its facsimiles.
+- [Workflow 2: Parse music into CAMAT representations](#workflow-2-parse-music-into-camat-representations)
+  — explore note and event tables, selections, and durations.
+- [Workflow 3: Analyse music: statistics and pattern search](#workflow-3-analyse-music-statistics-and-pattern-search)
+  — summarize musical features or find matching passages.
 
-Later workflows (convert, parse, analyse):
+Run a chosen notebook from the top and check its input configuration. Some
+examples use packaged files, while others need a corpus file or an explicitly
+enabled download. The order within a track is guidance for learning; you do
+not need to finish the other tracks first.
 
-| Order | Notebook | Workflow | Main result |
-| --- | --- | --- | --- |
-| 10 | [Convert one score](../notebooks/camat_formats.ipynb) | convert to MEI | corpus-backed MEI pass-through, direct Humdrum/MusicXML conversion, and MIDI/MuseScore bridges |
-| 11 | [Convert a mixed corpus](../notebooks/camat_batch_conversion.ipynb) | convert to MEI | mixed-route MEI files, technical validation, and a JSON report |
-| 12 | [Parse MEI to tables](../notebooks/mei_parse_tables.ipynb) | parse and represent MEI | one CMN MEI file → `df_pitch` / `df_events` and a filtered piano roll |
-| 13 | [Annotate a note selection](../notebooks/mei_annotate_selection.ipynb) | parse and represent MEI | filter notes and write `plist` / `tstamp` MEI annotations |
-| 14 | [Understand note durations](../notebooks/duration_semantics_examples.ipynb) | parse and represent MEI | note tables that distinguish segment, logical, and performed duration |
-| 15 | [Explore DataFrame statistics](../notebooks/df_statistics.ipynb) | analyse representations | pitch, duration, pitch-class, transition, interval, and onset distributions from `df_pitch` |
-| 16 | [Round trip through a binary matrix](../notebooks/binary_roundtrip.ipynb) | analyse representations | MEI → tables / piano roll → binary → reconstruct → MEI highlight |
-| 17 | [Understand binary convolution](../notebooks/binary_convolution_explained.ipynb) | analyse representations | toy host/kernel placements and valid vs same padding, then sliding-window convolution on Bach |
-| 18 | [Binary search methods](../notebooks/binary_pattern_search.ipynb) | analyse representations | compendium: scoring arithmetic, query extraction, voices, augmentation, filtering and source projection |
-| 19 | [Search for a chord progression](../notebooks/chord_progression_search.ipynb) | analyse representations | task-driven independent D–A–D query: fixed MIDI, chroma and moving MIDI; all top hits in heatmaps, filled piano rolls and source notation; near-hit reflection |
+## Workflow 1 — Editing music with the MEI data format
 
-For a complete search task, start with the chord-progression tutorial and refer
-back to the binary search methods notebook when comparing algorithms or controls.
+Guide: [Editing music with the MEI data format](guides/edition-building.md).
+Start with the activity your source needs.
 
-The conversion notebooks are alternatives after their shared introduction:
-use the first for one score or for learning routes, and the second for a mixed
-corpus.
+### Import another format, if needed
+
+Skip conversion when your source is already MEI. These notebooks are
+alternatives:
+
+- [Convert one score](../notebooks/camat_formats.ipynb) explains MEI pass-through,
+  direct Humdrum/MusicXML conversion, and MIDI/MuseScore bridges.
+- [Convert a mixed corpus](../notebooks/camat_batch_conversion.ipynb) produces
+  MEI files, technical validation, and a JSON report for a set of sources.
+
+Then render and inspect the imported MEI.
+
+### Render, edit, and inspect MEI
+
+Start with [Render MEI](../notebooks/mei_render.ipynb) to paste or edit MEI and
+render it interactively with Verovio. Read the
+[Introduction to MEI and XML](guides/mei-introduction.md) when you need help
+with document structure and editorial concepts.
+
+Use [Inspect scores and facsimiles](../notebooks/mei_facsimile_viewer.ipynb)
+for read-only inspection of a score, with optional links to source-image
+regions. [Create an editorial report](../notebooks/mei_check_report.ipynb)
+runs checks and writes a CSV report; inspect the score again after corrections.
+
+### Prepare an edition with facsimiles
+
+Use this sequence when working from page files and source images:
+
+1. [Link one page to IIIF](../notebooks/mei_single_file_iiif_integration.ipynb),
+   or [Link a batch to IIIF](../notebooks/mei_batch_iiif_integration.ipynb),
+   to add facsimile links and measure zones.
+2. [Combine MEI pages](../notebooks/mei_combine_pages.ipynb) to join page files
+   into one `*_full.mei` score when needed.
+3. [Create an editorial report](../notebooks/mei_check_report.ipynb), correct
+   the score, and return to
+   [Inspect scores and facsimiles](../notebooks/mei_facsimile_viewer.ipynb).
+
+[Combine and check MEI](../notebooks/mei_consistency_checks.ipynb) provides the
+full toolkit with extra flags as an alternative to the focused combine/check
+notebooks.
+
+## Workflow 2 — Parse music into CAMAT representations
+
+Guide: [Parse music into CAMAT representations](guides/parsing-representations.md).
+Start with a common-notation MEI file; conversion and facsimile work are not
+prerequisites when you already have one.
+
+Start with [Parse MEI to tables](../notebooks/mei_parse_tables.ipynb) to create
+`df_pitch` and `df_events`, then view a full or filtered piano roll.
+
+Choose a follow-up according to what you need:
+
+- [Annotate a note selection](../notebooks/mei_annotate_selection.ipynb) filters
+  notes and writes `plist` / `tstamp` MEI annotations. It parses its own source
+  and can also be run directly.
+- [Understand note durations](../notebooks/duration_semantics_examples.ipynb)
+  explains encoded segment, logical, and performed duration. Consult it when
+  choosing the duration column for an analysis.
+
+## Workflow 3 — Analyse music: statistics and pattern search
+
+Guide: [Analyse music: statistics and pattern search](guides/analysis.md).
+The analysis tutorials prepare their own inputs. Choose statistics or search
+directly; completing the parsing track first is optional.
+
+### Statistics
+
+Start with [Explore DataFrame statistics](../notebooks/df_statistics.ipynb)
+for pitch, duration, pitch-class, transition, interval, and onset distributions
+from `df_pitch`. It parses its own MEI file and compares a whole score with a
+filtered selection. Companion guide: [Statistics](guides/statistics.md).
+
+### Pattern search
+
+Start with [Search for a chord progression](../notebooks/chord_progression_search.ipynb)
+for a complete search task: define a D–A–D query, compare MIDI and chroma
+representations and time scales, then inspect results in heatmaps, piano
+rolls, and the original notation. Companion guide:
+[Pattern search](guides/pattern-search.md).
+
+Consult these method tutorials when you need more detail:
+
+- [Understand binary convolution](../notebooks/binary_convolution_explained.ipynb)
+  explains sliding windows, scoring, padding, and scaling with toy grids and
+  Bach examples.
+- [Binary search methods](../notebooks/binary_pattern_search.ipynb) compares
+  motif, chord, and texture queries, voices, augmentation, filtering, and
+  projection back to source notes.
+- [Round trip through a binary matrix](../notebooks/binary_roundtrip.ipynb)
+  follows MEI → tables / piano roll → binary → reconstruction → MEI highlight.
+  Use it to investigate resolution, information loss, and provenance, alongside
+  [Binary representations](guides/binary-representations.md).
 
 ## Workflow 1 maintainer notebooks
 

@@ -26,7 +26,11 @@ through `import camat`. The pages below contain the full module documentation.
 Convert non-MEI sources before using the default parser; see
 [Convert to MEI](guides/formats.md).
 
-## Analyse representations
+## Analyse music: statistics and pattern search
+
+For guided use, start with [Statistics](guides/statistics.md),
+[Pattern search](guides/pattern-search.md), or
+[Binary representations](guides/binary-representations.md).
 
 - [Analysis utilities](api/analysis_utils.md): distributions, intervals, and piano rolls.
 - [Binary matrix designer](api/binary_matrix_designer.md): pitch/time representations.

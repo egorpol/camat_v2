@@ -15,7 +15,7 @@ Check results are meant to be reviewed from **CSV/JSON reports** produced by
 `annotate_mei_from_report(...)` to write selected rows into MEI `<annot>`
 elements, but mei-friend's per-score annotation display limit (default 100)
 makes CSV the practical hand-off for large reports; see
-[Handling MEI files — Check, combine, and review reports](../guides/edition-building.md#annot-export-integrated-csv-preferred).
+[Editing music with the MEI data format — Check, combine, and review reports](../guides/edition-building.md#annot-export-integrated-csv-preferred).
 
 ## Consistency checker
 

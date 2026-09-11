@@ -30,3 +30,6 @@ ENV/
 # OS files
 .DS_Store
 Thumbs.db
+
+# Local poster draft (not part of the public repository)
+icccm-poster/
