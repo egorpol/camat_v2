@@ -4,9 +4,10 @@ title: CAMAT
 
 # CAMAT
 
-CAMAT is an **MEI-centred Python toolbox for editorial and analytical work
-with symbolic music**. Inspect and prepare a musical document, convert other
-formats to MEI, then explore its notes through tables, matrices, and notation.
+CAMAT (Computer-Assisted Music Analysis Toolbox) is an **MEI-centred Python
+toolbox for editorial and analytical work with symbolic music**. Inspect and
+prepare a musical document, convert other formats to MEI, then explore its
+notes through tables, matrices, and notation.
 
 Start with [Getting started](getting-started.md) for installation, an offline
 example, and Jupyter setup. The [notebook roadmap](notebooks.md) collects the

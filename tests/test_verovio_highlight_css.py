@@ -197,3 +197,31 @@ def test_source_context_rejects_unknown_ids_without_replacing_score():
     with pytest.raises(ValueError, match="not found"):
         vrv.vrv_render_source_context(["nonexistent"], display=False)
     assert vrv.vrv_get_mei() == before
+
+
+def test_source_context_multiple_colors_share_one_scope_and_preserve_notes():
+    import pytest
+    from camat import verovio_render as vrv
+
+    source = (Path(__file__).resolve().parents[1] / "camat/examples/binary_roundtrip_voices.mei").read_text()
+    vrv.vrv_load_from_file(str(FIXTURE_MEI))
+    before = vrv.vrv_get_mei()
+    pages = vrv.vrv_render_source_context(
+        ["toy-0", "toy-3", "toy-4"], mei_xml=source, display=False,
+        highlight_colors={"#toy-0": "#0072b2", "toy-3": "#d55e00"},
+    )
+    root = ET.fromstring(pages[0])  # duplicate scope attributes would be invalid XML
+    scope = root.get("data-camat-vrv-scope")
+    styles = [element.text for element in root.iter() if element.tag.endswith("}style")]
+    for pointer, color in [("toy-0", "#0072b2"), ("toy-3", "#d55e00"), ("toy-4", "#cf268c")]:
+        rules = [text for text in styles if text and f"#{pointer} path" in text]
+        assert len(rules) == 1
+        assert f"fill: {color}" in rules[0]
+        assert f'data-camat-vrv-scope="{scope}"' in rules[0]
+    assert "#toy-2 path" not in pages[0]
+    note_ids = {element.get("id") for element in root.iter() if "note" in element.get("class", "").split()}
+    assert {f"toy-{i}" for i in range(9)} <= note_ids
+    assert vrv.vrv_get_mei() == before
+    with pytest.raises(ValueError, match="must belong"):
+        vrv.vrv_render_source_context(["toy-0"], mei_xml=source, highlight_colors={"toy-3": "red"}, display=False)
+    assert vrv.vrv_get_mei() == before

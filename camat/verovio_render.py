@@ -999,6 +999,7 @@ def vrv_render_source_context(
     *,
     mei_xml: Optional[str] = None,
     highlight_color: str = "#cf268c",
+    highlight_colors: Optional[Dict[str, str]] = None,
     selected_pages_only: bool = True,
     display: bool = True,
 ) -> List[str]:
@@ -1008,6 +1009,10 @@ def vrv_render_source_context(
     remain as encoded. Only the selected note shapes receive highlight CSS.
     By default return complete pages containing a selection; no event masking
     or within-page crop is applied. The previously loaded score is restored.
+    ``highlight_colors`` optionally maps selected source IDs to individual
+    colors, e.g. search-hit ranks. Unmapped IDs use ``highlight_color``; shared
+    beams retain their original color in this mode. Resolve multi-hit note
+    membership before supplying one display color per ID.
     Use ``vrv_render_symbolic_selection`` for an isolated, masked selection.
     """
     import xml.etree.ElementTree as ET
@@ -1020,6 +1025,9 @@ def vrv_render_source_context(
     missing = [pointer for pointer in ids if pointer.lstrip("#") not in source_ids]
     if missing:
         raise ValueError(f"Selected IDs not found in source MEI: {missing}")
+    colors = {pointer.lstrip("#"): color for pointer, color in (highlight_colors or {}).items()}
+    if set(colors) - {pointer.lstrip("#") for pointer in ids}:
+        raise ValueError("highlight_colors keys must belong to the selected source IDs.")
     pages: List[str] = []
     try:
         vrv_set_mei(source_mei)
@@ -1029,10 +1037,21 @@ def vrv_render_source_context(
             )
             if selected_pages_only and not any(resolved.values()):
                 continue
-            pages.append(vrv_inject_highlight_css(
-                svg, ids, color=highlight_color, shape_only=True,
-                extra_shape_selectors=_vrv_collect_beam_shape_selectors(svg, ids),
-            ))
+            if highlight_colors is None:
+                svg = vrv_inject_highlight_css(
+                    svg, ids, color=highlight_color, shape_only=True,
+                    extra_shape_selectors=_vrv_collect_beam_shape_selectors(svg, ids),
+                )
+            else:
+                groups: Dict[str, List[str]] = {}
+                for pointer in ids:
+                    groups.setdefault(colors.get(pointer.lstrip("#"), highlight_color), []).append(pointer)
+                # Reuse one scope for every color on this page. Each notebook
+                # output still gets a distinct scope to avoid cross-cell CSS.
+                scope = f"camat-vrv-{uuid.uuid4().hex}"
+                for color, pointers in groups.items():
+                    svg = vrv_inject_highlight_css(svg, pointers, color=color, shape_only=True, scope_id=scope)
+            pages.append(svg)
     finally:
         vrv_set_mei(original_mei)
     if display:

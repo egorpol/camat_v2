@@ -1,12 +1,34 @@
 # CAMAT
 
-[![PyPI version](https://img.shields.io/pypi/v/camat.svg)](https://pypi.org/project/camat/)
-[![Python versions](https://img.shields.io/pypi/pyversions/camat.svg)](https://pypi.org/project/camat/)
-[![License](https://img.shields.io/badge/license-MIT-green.svg)](https://github.com/egorpol/camat_v2/blob/main/LICENSE)
+<p align="center">
+  <a href="https://pypi.org/project/camat/"><img alt="PyPI" src="https://img.shields.io/pypi/v/camat.svg"></a>
+  <a href="https://pypi.org/project/camat/"><img alt="Python versions" src="https://img.shields.io/pypi/pyversions/camat.svg"></a>
+  <a href="https://camat-v2.readthedocs.io/en/stable/"><img alt="Documentation" src="https://readthedocs.org/projects/camat-v2/badge/?version=stable"></a>
+  <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/license-MIT-green.svg"></a>
+</p>
 
-CAMAT is a Python toolbox for editorial and analytical work with symbolic
-music. It connects MEI editing and inspection, format conversion, parsing into
-note tables, statistical analysis, pattern search, and score rendering.
+CAMAT (Computer-Assisted Music Analysis Toolbox) is an **MEI-centred Python
+toolbox** for editorial and analytical work with symbolic music. MEI is the
+durable score document; conversion, note tables, statistical analysis,
+pattern search, and rendering all connect back to that file.
+
+The four workflows can be used independently. An existing MEI edition can go
+straight to parsing, while a MusicXML or Humdrum source first passes through
+conversion.
+
+| Workflow                 | Starts with                                                    | Produces                                                                   |
+| ------------------------ | -------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| **Handle MEI**     | existing or draft MEI                                          | rendered scores, facsimile links, combined pages, editorial checks         |
+| **Convert to MEI** | MusicXML, Humdrum, MuseScore, MIDI, and other symbolic formats | MEI suitable for inspection and parsing                                    |
+| **Parse MEI**      | common-notation MEI                                            | note tables (`df_pitch`), event tables (`df_events`), piano-roll views |
+| **Analyse**        | those tables or derived matrices                               | distributions, binary matrices, pattern matches, and score overlays        |
+
+Tables and matrices are working representations. They do not replace the
+edition; `xml:id` values are the bridge back to the score. Common-notation
+MEI is the supported path; mensural and timeline backends are experimental.
+
+Guides, notebooks, and the API live in the
+[documentation](https://camat-v2.readthedocs.io/en/stable/).
 
 ## Install
 
@@ -16,30 +38,103 @@ Requires Python 3.11 or later.
 python -m pip install camat
 ```
 
-## Explore
+From a git checkout, install the package together with JupyterLab to run the
+showcase notebooks:
 
-- [Documentation](https://camat-v2.readthedocs.io/en/stable/) — stable-release workflows and API reference.
-- [Getting started (development docs)](https://camat-v2.readthedocs.io/en/latest/getting-started/) — an offline example and Jupyter setup for the current checkout.
-- [Notebook roadmap](https://camat-v2.readthedocs.io/en/stable/notebooks/) — executable examples showcasing CAMAT's capabilities.
-- [Known limitations](https://camat-v2.readthedocs.io/en/stable/known-limitations/) — supported notation and experimental features.
+```bash
+git clone https://github.com/egorpol/camat_v2.git
+cd camat_v2
+python -m pip install -e ".[notebooks]"
+```
+
+## Quick start
+
+This example uses a tiny score shipped with CAMAT. After installation it runs
+offline, without a corpus download or Jupyter.
+
+```python
+from importlib.resources import as_file, files
+from camat import parse_files_quiet
+
+example = files("camat").joinpath("examples", "facsimile_viewer_demo.mei")
+with as_file(example) as score:
+    results, _, _ = parse_files_quiet(
+        [str(score)],
+        backend="none",
+        display_preview_df_pitch=False,
+        display_preview_df_events=False,
+        show_progress=False,
+    )
+
+notes = results[0]["df_pitch"]
+print(f"Parsed {len(notes)} notes")
+```
+
+Expected output:
+
+```text
+Parsed 8 notes
+```
+
+`df_pitch` holds note rows; `df_events` holds non-note events. Verovio is the
+default parser for common-notation MEI. Convert other formats first, then
+parse the resulting MEI.
+
+Command-line tools such as `camat-convert` and `camat-check-mei` are installed
+with the package.
+
+## What's in this repository
+
+The PyPI wheel is the `camat` package: library code, a few packaged example
+scores, and the MEI 5.1 Common Music Notation schema. This git checkout also
+holds tutorials, documentation sources, tests, and working corpora that are
+not shipped on PyPI.
+
+```text
+camat_v2/
+├── camat/            Installable package (conversion, parsers, analysis, rendering)
+│   ├── examples/     Tiny MEI/SVG scores for offline demos
+│   └── schemas/      MEI 5.1 CMN RELAX NG schema
+├── notebooks/        Showcase tutorials, ordered in the documentation roadmap
+├── docs/             MkDocs sources published on Read the Docs
+├── tests/            Pytest suite and synthetic fixtures
+├── scripts/          Release checks, docs hooks, and maintainer probes
+├── test_corpus/      Local MEI fixtures and corpus URL manifests
+├── CAMAT_old/        Development archive (not a supported API)
+└── exports/          Retained generated artifacts
+```
+
+## Documentation
+
+| Page                                                                             | What it covers                                                       |
+| -------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| [Documentation home](https://camat-v2.readthedocs.io/en/stable/)                  | Workflow map and starting points                                     |
+| [Getting started](https://camat-v2.readthedocs.io/en/latest/getting-started/)     | Install, offline example, and Jupyter setup for the current checkout |
+| [What CAMAT is](https://camat-v2.readthedocs.io/en/stable/overview/)              | How the four workflows fit together                                  |
+| [Notebook roadmap](https://camat-v2.readthedocs.io/en/stable/notebooks/)          | Executable examples in recommended order                             |
+| [API reference](https://camat-v2.readthedocs.io/en/stable/reference/)             | Python modules and entry points                                      |
+| [Known limitations](https://camat-v2.readthedocs.io/en/stable/known-limitations/) | Supported notation and experimental features                         |
 
 For bugs and suggestions, use [GitHub Issues](https://github.com/egorpol/camat_v2/issues).
-See [Contributing](https://github.com/egorpol/camat_v2/blob/main/CONTRIBUTING.md)
-to work on the project.
+See [Contributing](CONTRIBUTING.md) to work on the project.
 
 ## Authors and origins
 
 Egor Polyakov — research and development; Martin Pfleiderer — supervision.
 Pia Steuck — student assistant.
 
-CAMAT's predecessor was a basic MusicXML parsing tool developed in 2021–2022;
+The acronym was chosen in 2021–2022 for a basic MusicXML parsing tool;
 see the [earlier project and tutorials](https://analyse.hfm-weimar.de/doku.php?id=en:noten).
 The current MEI-centred toolbox is a new implementation with a broader scope.
 
-## Funding and license
+## Funding, citation, and license
 
 Funded by the German Research Foundation (DFG), programme Library and
 Information Services — E-Research Technologies (LIS), grant PF 669/18-1.
 
-CAMAT's code is [MIT licensed](https://github.com/egorpol/camat_v2/blob/main/LICENSE).
-Bundled material has [separate notices](https://github.com/egorpol/camat_v2/blob/main/THIRD_PARTY_NOTICES.md).
+If you use CAMAT in research, cite the software and state the version.
+[CITATION.cff](CITATION.cff) supplies the metadata; GitHub exposes it through
+**Cite this repository**.
+
+CAMAT's code is [MIT licensed](LICENSE).
+Bundled material has [separate notices](THIRD_PARTY_NOTICES.md).

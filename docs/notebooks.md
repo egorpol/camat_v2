@@ -37,7 +37,11 @@ Later workflows (convert, parse, analyse):
 | 15 | [Explore DataFrame statistics](../notebooks/df_statistics.ipynb) | analyse representations | pitch, duration, pitch-class, transition, interval, and onset distributions from `df_pitch` |
 | 16 | [Round trip through a binary matrix](../notebooks/binary_roundtrip.ipynb) | analyse representations | MEI → tables / piano roll → binary → reconstruct → MEI highlight |
 | 17 | [Understand binary convolution](../notebooks/binary_convolution_explained.ipynb) | analyse representations | toy host/kernel placements and valid vs same padding, then sliding-window convolution on Bach |
-| 18 | [Search for musical patterns](../notebooks/binary_pattern_search.ipynb) | analyse representations | motif / chord / texture kernels and scaled-window pattern search |
+| 18 | [Binary search methods](../notebooks/binary_pattern_search.ipynb) | analyse representations | compendium: scoring arithmetic, query extraction, voices, augmentation, filtering and source projection |
+| 19 | [Search for a chord progression](../notebooks/chord_progression_search.ipynb) | analyse representations | task-driven independent D–A–D query: fixed MIDI, chroma and moving MIDI; all top hits in heatmaps, filled piano rolls and source notation; near-hit reflection |
+
+For a complete search task, start with the chord-progression tutorial and refer
+back to the binary search methods notebook when comparing algorithms or controls.
 
 The conversion notebooks are alternatives after their shared introduction:
 use the first for one score or for learning routes, and the second for a mixed

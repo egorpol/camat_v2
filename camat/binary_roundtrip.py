@@ -29,7 +29,7 @@ __all__ = [
     "describe_binary_span_sources", "plot_note_comparison",
     "prepare_binary_timeline", "split_binary_voices", "find_binary_matches",
     "extract_binary_kernel", "rank_binary_matches",
-    "binary_match_sources", "plot_binary_search_trace",
+    "binary_match_sources", "plot_binary_search_trace", "plot_matched_source", "plot_matched_sources",
 ]
 
 
@@ -178,11 +178,12 @@ def describe_binary_span_sources(bundle: BinaryMatrixBundle) -> pd.DataFrame:
     return spans.assign(source_count=counts, source_xml_ids=identities, source_voices=voices)
 
 
-def plot_note_comparison(tables: Mapping[str, pd.DataFrame], *, highlighted_ids=()):
+def plot_note_comparison(tables: Mapping[str, pd.DataFrame], *, highlighted_ids=(), fill_highlighted=False):
     """Compare note events on shared musical axes; outlines preserve boundaries.
 
     Notes are colored by voice, or blue when no voice is known. Selected source
-    xml:ids receive a magenta outline; reconstructed notes have no source IDs.
+    xml:ids receive a magenta outline, and a solid magenta fill when
+    ``fill_highlighted=True``; reconstructed notes have no source IDs.
     """
     from matplotlib.patches import Rectangle
 
@@ -199,8 +200,10 @@ def plot_note_comparison(tables: Mapping[str, pd.DataFrame], *, highlighted_ids=
             highlight = event.get("xml_id") in selected
             ax.add_patch(Rectangle(
                 (event["Global Onset"], event["MIDI"] - 0.38), event["Duration"], 0.76,
-                facecolor=colors.get(str(event.get("Voice")), "#4b83b7"), alpha=0.75,
+                facecolor="#cf268c" if highlight and fill_highlighted else colors.get(str(event.get("Voice")), "#4b83b7"),
+                alpha=0.95 if highlight and fill_highlighted else 0.75,
                 edgecolor="#c00080" if highlight else "#152b3c", linewidth=2.5 if highlight else 0.8,
+                zorder=3 if highlight else 2,
             ))
         ax.set(title=f"{label} ({len(table)} events)", ylabel="MIDI pitch")
         ax.grid(axis="x", alpha=0.2)
@@ -209,6 +212,104 @@ def plot_note_comparison(tables: Mapping[str, pd.DataFrame], *, highlighted_ids=
         xlim=(min(0, all_notes["Global Onset"].min()), (all_notes["Global Onset"] + all_notes["Duration"]).max() + 0.1),
         ylim=(all_notes["MIDI"].min() - 1, all_notes["MIDI"].max() + 1),
     )
+    return fig
+
+
+def plot_matched_source(bundle: BinaryMatrixBundle, trace: dict, *, context_notes=None, time_padding=2.0, title=None):
+    """Show a source piano roll with a filled search window and matching notes.
+
+    ``trace`` comes from ``binary_match_sources``. MIDI queries highlight the
+    window's pitch band. Chroma queries highlight time across the source's
+    entire MIDI register: octave-folded rows do not define a MIDI rectangle.
+    Matching original notes retain their full durations and receive a stronger
+    fill. ``context_notes`` can show all voices around a single-voice match.
+    """
+    from matplotlib.colors import to_rgba
+    from matplotlib.patches import Patch, Rectangle
+
+    notes = bundle.source_df if context_notes is None else context_notes
+    matched = trace["matched_notes"]
+    ids = matched["xml_id"].dropna().tolist() if "xml_id" in matched else []
+    fig = plot_note_comparison({title or "Source notes and selected search window": notes},
+                               highlighted_ids=ids, fill_highlighted=True)
+    ax = fig.axes[0]
+    window = trace["window"]
+    start, end = np.array([window.col_start, window.col_end]) * bundle.meta["resolution"]
+    chroma = bundle.meta["y_mode"] == "chroma"
+    pitches = notes["MIDI"] if chroma else bundle.meta["row_axis_values"][window.row_start:window.row_end]
+    low, high = min(pitches), max(pitches)
+    color = "#cf268c"
+    ax.add_patch(Rectangle((start, low - 0.5), end - start, high - low + 1,
+                           facecolor=to_rgba(color, 0.20), edgecolor=color,
+                           linewidth=2.5, linestyle="--", zorder=1))
+    for boundary in bundle.measure_offsets or []:
+        ax.axvline(boundary, color="#777777", alpha=0.25, linewidth=0.8, zorder=0)
+    ax.set_xlim(max(0, start - time_padding), min(bundle.matrix.shape[1] * bundle.meta["resolution"], end + time_padding))
+    ax.set_ylim(min(notes["MIDI"].min(), low) - 1, max(notes["MIDI"].max(), high) + 1)
+    ax.set_xlabel("Grid time (quarter lengths)")
+    fig.legend(handles=[Patch(facecolor=to_rgba(color, 0.20), edgecolor=color,
+                              label="Chroma time window: any octave" if chroma else "Search window"),
+                        Patch(facecolor=color, label="Contributing source notes")],
+               loc="outside lower center", ncols=2, frameon=False)
+    return fig
+
+
+def plot_matched_sources(bundle: BinaryMatrixBundle, traces, *, context_notes=None,
+                         colors=None, shared_color="#595959", title=None):
+    """Show all shortlisted windows and contributing source notes on one piano roll.
+
+    Pass traces in rank order from ``binary_match_sources``. Colors label both
+    windows and notes; notes contributing to multiple hits are gray by default
+    and keep their full source duration. Source XML IDs identify contributors.
+    Chroma windows span the source register. All context notes remain visible.
+    """
+    from matplotlib.colors import to_rgba
+    from matplotlib.patches import Patch, Rectangle
+
+    traces = list(traces)
+    if colors is None:
+        colors = [plt.get_cmap("tab10")(i % 10) for i in range(len(traces))]
+    if len(colors) < len(traces):
+        raise ValueError("Provide one color for each trace.")
+    notes = bundle.source_df if context_notes is None else context_notes
+    fig = plot_note_comparison({title or "All shortlisted search windows": notes})
+    fig.set_size_inches(12, 4)
+    ax = fig.axes[0]
+    membership = {}
+    for rank, trace in enumerate(traces):
+        matched = trace["matched_notes"]
+        for pointer in set(matched.get("xml_id", pd.Series(dtype=str)).dropna()):
+            membership.setdefault(pointer, []).append(rank)
+    for patch, (_, event) in zip(ax.patches, notes.iterrows()):
+        ranks = membership.get(event.get("xml_id"), [])
+        if ranks:
+            color = colors[ranks[0]] if len(ranks) == 1 else shared_color
+            patch.set(facecolor=color, edgecolor=color, alpha=0.95, linewidth=1.5, zorder=3)
+        else:
+            patch.set(facecolor="#b8c2cb", edgecolor="#627382", alpha=0.5)
+    low, high = notes["MIDI"].min(), notes["MIDI"].max()
+    handles = []
+    for rank, (trace, color) in enumerate(zip(traces, colors), start=1):
+        window = trace["window"]
+        start, end = np.array([window.col_start, window.col_end]) * bundle.meta["resolution"]
+        pitches = (notes["MIDI"] if bundle.meta["y_mode"] == "chroma" else
+                   bundle.meta["row_axis_values"][window.row_start:window.row_end])
+        bottom, top = min(pitches), max(pitches)
+        low, high = min(low, bottom), max(high, top)
+        ax.add_patch(Rectangle((start, bottom - 0.5), end - start, top - bottom + 1,
+                               facecolor=to_rgba(color, 0.20), edgecolor=color,
+                               linewidth=2, linestyle="--", zorder=1))
+        ax.text((start + end) / 2, top + 0.65, str(rank), ha="center", va="bottom",
+                color=color, weight="bold", fontsize=10)
+        handles.append(Patch(facecolor=color, label=f"#{rank}: {trace['score']:.3f}, {start:g}–{end:g} QL"))
+    if any(len(ranks) > 1 for ranks in membership.values()):
+        handles.append(Patch(facecolor=shared_color, label="Note contributes to multiple hits"))
+    for boundary in bundle.measure_offsets or []:
+        ax.axvline(boundary, color="#777777", alpha=0.25, linewidth=0.8, zorder=0)
+    ax.set(xlabel="Grid time (quarter lengths)", ylim=(low - 1, high + 3),
+           xlim=(0, bundle.matrix.shape[1] * bundle.meta["resolution"]))
+    if handles:
+        fig.legend(handles=handles, loc="outside lower center", ncols=min(3, len(handles)), frameon=False)
     return fig
 
 

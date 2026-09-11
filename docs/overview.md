@@ -4,9 +4,10 @@ title: What CAMAT is
 
 # What CAMAT is
 
-CAMAT is an **MEI-centred toolbox for editorial and analytical work with
-symbolic music**. It is not a single converter or parser. It connects several
-workflows by using MEI as the durable musical document between them.
+CAMAT (Computer-Assisted Music Analysis Toolbox) is an **MEI-centred toolbox
+for editorial and analytical work with symbolic music**. It is not a single
+converter or parser. It connects several workflows by using MEI as the durable
+musical document between them.
 
 The workflows can be used independently. An existing MEI edition can go
 straight to parsing, while a MusicXML or Humdrum source first passes through

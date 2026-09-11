@@ -31,6 +31,8 @@ Convert non-MEI sources before using the default parser; see
 - [Analysis utilities](api/analysis_utils.md): distributions, intervals, and piano rolls.
 - [Binary matrix designer](api/binary_matrix_designer.md): pitch/time representations.
 - [Binary convolution](api/binary_convolution.md): toy kernels and explainer plots.
+- [Independent binary queries](api/binary_query.md): metadata-aware MIDI/chroma searches with explicit tempo scales and transpositions.
+- [Binary roundtrip](api/binary_roundtrip.md): representation audits, voice grids, source provenance and filled match highlights.
 - [Pattern search](api/pattern_search.md): kernels, placements, and similarity.
 - [Overlays](api/overlay.md): connect matches to source notes.
 - [Music utilities](api/music_utils.md): shared musical helpers.

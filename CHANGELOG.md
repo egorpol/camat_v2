@@ -9,19 +9,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Added `camat.binary_roundtrip` helpers for occupancy-versus-note-event audits,
+  resolution comparisons, pickup-aware timelines, aligned per-voice grids,
+  kernel extraction with retained source coordinates, ranked candidate filtering,
+  and cell-to-note provenance. Bundled `binary_roundtrip_voices.mei` provides a
+  reproducible three-voice example with rests, unisons and repeated notes.
+- Added `vrv_render_source_context`, exported from the package root, to highlight
+  contributing source IDs on complete original score pages while retaining other
+  notes, rests, signatures and voices and restoring the previous renderer score.
+- Added `camat.binary_query` for independently defined MIDI and chroma queries:
+  explicit semitone transpositions, octave-aware MIDI placement, circular
+  12-class chroma transposition, event-based time scales, labeled score maps,
+  ranked candidates and trace plots. Opposite row orders align automatically;
+  incompatible resolutions/representations fail explicitly.
+- Independent query search accepts `transpositions="all"` to scan every valid
+  MIDI pitch/time placement, preserving voicing and reporting semitone shifts,
+  or to test all twelve circular chroma transpositions. Query heatmaps can mark
+  every shortlisted hit and show a labeled maximum over pitch shifts by scale.
+- Query results retain all finite `placements` before thresholding and top-N
+  selection, with shared/required/missing-cell counts and occupancy loss for
+  every scoring metric. `rank_query_matches` re-filters this pool without
+  rescoring and accepts uncapped results; `plot_query_loss_examples` compares
+  actual windows at a fixed query variant as missing requirements increase.
+- Added `plot_matched_sources` for filled, rank-colored piano-roll windows for
+  all returned hits, with distinct shared-note coloring. Source-context Verovio
+  rendering accepts per-ID `highlight_colors`, scoped per output, so complete
+  score pages can show multiple candidates without losing notation context.
+- Added `binary_score_details` and `plot_binary_score_explanation` to
+  `camat.binary_convolution` for shared/extra/missing-cell diagrams and the
+  intermediate arithmetic behind overlap, covariance and correlation.
+- Added `plot_matched_source` and optional filled note highlights to the
+  roundtrip plotting helpers. Chroma matches shade a time interval across the
+  source register rather than inventing a MIDI band from pitch-class rows.
+- Added `notebooks/chord_progression_search.ipynb`, a task-driven D–A–D
+  progression search defined independently of the source, comparing MIDI and
+  chroma through score maps, binary windows, piano rolls and source notation.
+
 - Kernel augmentation now has independent pitch policies (`fixed`, `intervals`,
   `stretch`), binary event-boundary time scaling, area sampling, and selectable
   interval/event rounding. Search exposes the same controls and identifies
   nondefault policies in variant keys. `plot_kernel_augmentations` compares
-  named recipes; both binary-search notebooks default to interval/event scaling
-  for one-row notes while retaining geometric options for experiments.
+  named recipes; the search tutorials select pitch/time policies explicitly,
+  keeping one-row notes where intended and geometric options for experiments.
 
 - Added `convolution_map`, `score_kernel_at`, and `kernel_placement_starts` to
   pattern search, plus `camat.binary_convolution` teaching plots and the toy
   kernel catalog used by the convolution explainer notebook.
 
 - Credited Egor Polyakov (research and development) and Martin Pfleiderer
-  (supervision), and documented the 2021–2022 MusicXML tool as CAMAT's predecessor.
+  (supervision), documented the 2021–2022 MusicXML tool as CAMAT's predecessor,
+  and recorded that CAMAT stands for Computer-Assisted Music Analysis Toolbox.
 - Credited Pia Steuck as CAMAT's student assistant and the six student
   assistants supporting its edition corpora.
 - Added an offline getting-started guide, Jupyter setup, contribution guidance,
@@ -32,6 +69,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   prereleases explicitly, and retain tested dependency versions as CI artifacts.
 
 ### Changed
+
+- Built documentation now opens external links, including notebook and other
+  repository files rewritten to GitHub, in a new browser tab.
+- Expanded the roundtrip notebook around source-event loss, aligned voice grids,
+  preserved pickups and complete source-score highlights. The pattern-search
+  notebook is now a methods compendium with worked scoring arithmetic, voice
+  comparisons, augmentation recipes, source-passage exclusion (including held
+  note continuations), duplicate-window filtering and reusable result tracing.
+- Documented the new binary helpers and separated task-driven search tutorials
+  from the representation and search-method references in the notebook roadmap.
+- Expanded the chord progression study to compare fixed MIDI, original-key
+  chroma and MIDI moving over the entire host matrix, with controlled
+  transposition/revoicing examples, comparable search-space summaries, complete
+  top-hit piano-roll and score views, shared-note membership, and inspection of
+  any selected near hit's missing requirements.
+- The chord study now distinguishes its one-hit, per-chord audit from counts
+  over all placements, includes threshold/loss curves and uncapped candidate
+  browsing beyond rank five, and names transposed query chords (e.g. C–G–C
+  at −2 semitones) without treating partial T–D–T template overlap as a verified
+  harmonic-function analysis.
 
 - Moved convolution-explainer helpers out of
   `notebooks/binary_convolution_explained.ipynb` into the package. The toy
@@ -46,8 +103,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   exact integer enlargement. Legacy interpolation remains available through
   `resize_kernel(..., method="bilinear")` and
   `run_pattern_search(..., kernel_resize_method="bilinear")`. Fractional scales,
-  pitch-row enlargement, and containment scores are explained in both search
-  notebooks and the analysis guide.
+  pitch-row enlargement, and containment scores are explained in the search
+  tutorials and the analysis guide.
 
 - Simplified the README, documentation home, and API index; linked the README
   and package metadata to the deployed Read the Docs site, with stable and
@@ -58,6 +115,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   run tests from a Git checkout with its fixtures and archived probes.
 
 ### Fixed
+
+- The Verovio parser now resolves pitches implied by common-notation key
+  signatures (`keysig`, legacy `key.sig`, and `keySig`) instead of treating
+  unmarked F/C as naturals in sharp keys. Written accidentals carry within
+  their staff and octave until the barline, including across layers; explicit
+  gestural accidentals, staff-specific keys, key changes and tied continuations
+  retain their meanings. MIDI values and enharmonic pitch names use the same
+  resolved alteration. This corrects downstream piano rolls and binary/chroma
+  searches on MEI sources that omit explicit `accid.ges` values.
+
+- Binary grids now end at the latest sounding note end, snap near-integer time
+  boundaries before rasterization, clip notes crossing time zero, and avoid
+  adding cells for zero-duration notes. Invalid resolutions, nonfinite note
+  data and negative durations fail explicitly.
+- Binary bundles honor explicit measure offsets, and slices report their actual
+  clipped row/column bounds even for empty or out-of-range selections. MIDI and
+  Bokeh binary plots center rows and highlight bounds on the correct pitches.
+- Binary decoding rejects octave-ambiguous chroma reconstruction. Roundtrip
+  checks compare note-event content independently of source-only attributes.
+- The MusicXML-to-Verovio rendering bridge explicitly selects MusicXML input
+  and raises on failed import or empty output instead of returning a silent
+  incomplete render.
 
 - Binary search applies stride before scoring and contracts overlap without
   allocating a full placement-by-kernel product, using shared overlap code for

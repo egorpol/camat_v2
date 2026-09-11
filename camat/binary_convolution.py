@@ -36,7 +36,92 @@ __all__ = [
     "plot_kernel_scales",
     "plot_kernel_augmentations",
     "filmstrip_placements",
+    "binary_score_details",
+    "plot_binary_score_explanation",
 ]
+
+
+def binary_score_details(kernel: np.ndarray, window: np.ndarray) -> dict:
+    """Explain the three search metrics cell by cell for binary arrays.
+
+    ``cross_covariance`` is CAMAT's sum of centered products, without division
+    by the cell count. A constant array has zero variance; normalized cross
+    correlation is reported as zero, matching the search implementation.
+    """
+    import pandas as pd
+
+    kernel, window = np.asarray(kernel, dtype=float), np.asarray(window, dtype=float)
+    if kernel.ndim != 2 or not kernel.size or window.shape != kernel.shape:
+        raise ValueError("Provide nonempty, equally shaped 2D kernel and window arrays.")
+    if not np.isin(kernel, [0, 1]).all() or not np.isin(window, [0, 1]).all() or not kernel.any():
+        raise ValueError("Use binary arrays and a kernel with at least one active cell.")
+    k0, w0 = kernel - kernel.mean(), window - window.mean()
+    product = kernel * window
+    kind = np.full(kernel.shape, "silent in both", dtype=object)
+    kind[(kernel == 1) & (window == 1)] = "shared"
+    kind[(kernel == 1) & (window == 0)] = "missing"
+    kind[(kernel == 0) & (window == 1)] = "extra"
+    norm_k, norm_w = float(np.linalg.norm(k0)), float(np.linalg.norm(w0))
+    covariance = float((k0 * w0).sum())
+    rows, cols = np.indices(kernel.shape)
+    return {
+        "cells": pd.DataFrame({
+            "row": rows.ravel(), "col": cols.ravel(), "K": kernel.ravel().astype(int),
+            "W": window.ravel().astype(int), "K × W": product.ravel().astype(int),
+            "kind": kind.ravel(), "K - mean(K)": k0.ravel(), "W - mean(W)": w0.ravel(),
+            "centered product": (k0 * w0).ravel(),
+        }),
+        "n_cells": kernel.size, "kernel_active": int(kernel.sum()), "window_active": int(window.sum()),
+        "shared": int(product.sum()), "missing": int(np.count_nonzero(kind == "missing")),
+        "extra": int(np.count_nonzero(kind == "extra")), "silent_both": int(np.count_nonzero(kind == "silent in both")),
+        "kernel_mean": float(kernel.mean()), "window_mean": float(window.mean()),
+        "kernel_norm": norm_k, "window_norm": norm_w,
+        "normalized_overlap": float(product.sum() / kernel.sum()),
+        "cross_covariance": covariance,
+        "normalized_cross_correlation": covariance / (norm_k * norm_w) if norm_k * norm_w > 0 else 0.0,
+    }
+
+
+def plot_binary_score_explanation(kernel: np.ndarray, windows: Mapping[str, np.ndarray]):
+    """Show K, W, their product, and shared/missing/extra cells for each case.
+
+    Coordinates are raw array indices so every plotted cell can be checked
+    against ``binary_score_details()['cells']``. Intended for small examples.
+    """
+    from matplotlib.colors import ListedColormap
+    from matplotlib.patches import Patch
+
+    if not windows:
+        raise ValueError("Provide at least one window to explain.")
+    palette = ["#f4f4f4", "#cf268c", "#e76f18", "#c82b35"]
+    fig, axes = plt.subplots(len(windows), 4, figsize=(12, 2.7 * len(windows)),
+                             squeeze=False, layout="constrained")
+    for axes_row, (label, window) in zip(axes, windows.items()):
+        details = binary_score_details(kernel, window)
+        k, w = np.asarray(kernel), np.asarray(window)
+        categories = np.zeros(k.shape, dtype=int)
+        categories[(k == 1) & (w == 1)] = 1
+        categories[(k == 0) & (w == 1)] = 2
+        categories[(k == 1) & (w == 0)] = 3
+        panels = [(k, "Query K"), (w, f"{label}: W"), (k*w, f"K × W: sum = {details['shared']}"),
+                  (categories, "Shared / extra / missing")]
+        for index, (ax, (values, title)) in enumerate(zip(axes_row, panels)):
+            ax.imshow(values, cmap=ListedColormap(palette) if index == 3 else "Greys",
+                      vmin=0, vmax=3 if index == 3 else 1, interpolation="nearest", aspect="equal")
+            for row, col in np.ndindex(k.shape):
+                text = ["0/0", "1/1", "0/1", "1/0"][values[row, col]] if index == 3 else str(int(values[row, col]))
+                ax.text(col, row, text, ha="center", va="center", fontsize=10,
+                        color="white" if values[row, col] else "#333333")
+            ax.set(title=title, xlabel="Column", ylabel="Raw row",
+                   xticks=range(k.shape[1]), yticks=range(k.shape[0]))
+            ax.set_xticks(np.arange(k.shape[1] + 1) - 0.5, minor=True)
+            ax.set_yticks(np.arange(k.shape[0] + 1) - 0.5, minor=True)
+            ax.grid(which="minor", color="#aaaaaa", linewidth=0.5)
+            ax.tick_params(which="minor", length=0)
+    fig.legend(handles=[Patch(facecolor=color, label=name) for color, name in zip(
+        palette, ["Silent in both", "Shared: K=1, W=1", "Extra: K=0, W=1", "Missing: K=1, W=0"])],
+        loc="outside lower center", ncols=4, frameon=False)
+    return fig
 
 TOY_HOST_SHAPE = (10, 18)
 

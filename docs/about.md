@@ -15,8 +15,9 @@ The student assistants supporting CAMAT's editions are credited under
 
 ## Origins
 
-The predecessor of CAMAT was a basic MusicXML parsing tool developed in
-2021–2022. Its teaching materials are available on the
+CAMAT stands for Computer-Assisted Music Analysis Toolbox. The acronym was
+chosen in 2021–2022 for a basic MusicXML parsing tool, the predecessor of
+the current package. Its teaching materials are available on the
 [Computergestützte Musikanalyse website](https://analyse.hfm-weimar.de/doku.php?id=en:noten).
 
 The current CAMAT is a new implementation with its own codebase and a broader,

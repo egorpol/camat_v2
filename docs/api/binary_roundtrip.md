@@ -11,6 +11,12 @@ with optional source-passage exclusion and suppression of overlapping windows.
 Its provenance trace supports valid placements; use the convolution API directly
 for padded edge experiments.
 
+`plot_matched_sources` overlays every ranked provenance trace on the full source
+piano roll, with numbered filled windows and matching note colors. Notes shared
+by several hits use a separate gray color; they retain their full source
+durations. Chroma windows span the source register. Supply matching `colors` to
+link these ranks to query heatmaps and source-score highlights.
+
 ::: camat.binary_roundtrip
     options:
       members:
@@ -28,3 +34,5 @@ for padded edge experiments.
         - rank_binary_matches
         - binary_match_sources
         - plot_binary_search_trace
+        - plot_matched_source
+        - plot_matched_sources

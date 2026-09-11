@@ -180,11 +180,25 @@ Tutorial notebooks:
   `score_kernel_at` in [pattern search](../api/pattern_search.md) and
   [binary convolution](../api/binary_convolution.md) plots;
 - [`binary_pattern_search.ipynb`](../../notebooks/binary_pattern_search.ipynb)
-  — extract motif, chord, and texture kernels with their source coordinates;
+  — a methods compendium: extract motif, chord, and texture kernels with their source coordinates;
   compare containment and correlation, merged and separate voices, and explicit
   augmentation recipes. Exclude the query's original passage, suppress nearby
   duplicate windows, then follow a ranked heatmap placement through the binary
   window and piano roll to highlighted notes in the complete original score.
+- [`chord_progression_search.ipynb`](../../notebooks/chord_progression_search.ipynb)
+  — one task from question to interpretation: define a D–A–D progression
+  independently of the score, compare fixed MIDI, chroma and moving MIDI, choose time scales,
+  search, inspect heatmaps, project every shortlisted hit to source notes and notation,
+  and explain what the result does and does not establish. Start here for an
+  applied workflow; use the compendium above as a methods reference.
+
+Independent queries can use `camat.binary_query.search_binary_query`. MIDI
+queries retain their specified voicing with explicit transpositions or a full
+pitch/time scan via `transpositions="all"`. Chroma
+queries retain all twelve classes and rotate circularly for key shifts, so
+octave equivalence does not become an incorrect linear pitch-class placement.
+Both representations retain source-cell provenance; chroma is never decoded
+into an invented original voicing.
 
 `convolution_map(...)` is the explicit overlap heatmap for one kernel.
 `run_pattern_search(...)` is the full search entry point, with optional scale

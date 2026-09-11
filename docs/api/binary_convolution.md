@@ -10,6 +10,12 @@ The score-map math lives in [pattern search](pattern_search.md)
 toy kernel catalog and explainer plots used by
 [`binary_convolution_explained.ipynb`](../../notebooks/binary_convolution_explained.ipynb).
 
+`binary_score_details` reports every cell's contribution and the intermediate
+counts, means and norms behind normalized overlap, cross-covariance and
+normalized cross-correlation. `plot_binary_score_explanation` aligns the query,
+window, product and shared/extra/missing-cell classifications for small teaching
+examples, as used in §4 of the pattern-search methods notebook.
+
 `plot_kernel_scales` accepts the search API's pitch, time, sampling, rounding,
 and binarization controls. `plot_kernel_augmentations` compares named recipes
 and returns their kernels for further experiments:

@@ -157,6 +157,142 @@ def _extract_mei_note_explicit_alters(root: Any) -> Dict[str, int]:
     return note_alters
 
 
+def _extract_mei_note_effective_alters(root: Any) -> Dict[int, int]:
+    """Resolve common-notation key signatures and measure accidentals.
+
+    Verovio's MIDI accessor does not supply missing gestural accidentals from
+    every MEI key-signature encoding. Resolve the source notation independently
+    of playback timing. Explicit gestural values win; written accidentals carry
+    by staff, pitch letter and octave until the barline, including across layers.
+    The result uses element identities so source notes need not have xml:ids.
+    """
+    import itertools
+    import re
+
+    def signature(el):
+        declaration = next((child for child in el if _local_name(child.tag) == "keySig"), el)
+        raw = declaration.get("sig") if _local_name(declaration.tag) == "keySig" else None
+        raw = raw if raw is not None else el.get("keysig", el.get("key.sig"))
+        if raw is None:
+            return None
+        match = re.fullmatch(r"([0-7])([sf]?)", str(raw).strip())
+        if not match or (match[1] != "0" and not match[2]):
+            raise ValueError(f"Unsupported MEI key signature {raw!r} for implicit pitch resolution.")
+        letters = "fcgdaeb" if match[2] == "s" else "beadgcf"
+        return {letter: (1 if match[2] == "s" else -1) for letter in letters[:int(match[1])]}
+
+    def written_accidental(note):
+        value = note.get("accid")
+        if value is None:
+            value = next((child.get("accid") for child in note
+                          if _local_name(child.tag) == "accid" and child.get("accid") is not None), None)
+        return _mei_accid_to_alter(value)
+
+    def layer_events(layer, multiplier=1.0):
+        for child in layer:
+            tag = _local_name(child.tag)
+            if tag in {"note", "chord", "rest", "space", "mRest", "multiRest", "keySig"}:
+                yield child, multiplier
+            elif tag in {"beam", "tuplet", "bTrem", "fTrem"}:
+                scale = _tuplet_multiplier(child) if tag == "tuplet" else 1.0
+                yield from layer_events(child, multiplier * scale)
+
+    effective = {}
+    global_key, staff_keys = None, {}
+    tied_alters = {}
+    tie_next = _extract_mei_tie_next_map(root)
+    tuplet_spans = _mei_tuplet_span_multipliers(root)
+    meter_spans = _mei_measure_meter_spans(root)
+
+    def process_staff(staff, measure):
+        staff_n = staff.get("n", "1")
+        active_key = staff_keys.get(staff_n, global_key)
+        carried = {}
+        events = []
+        layers = [child for child in staff if _local_name(child.tag) == "layer"] or [staff]
+        for layer in layers:
+            cursor = 0.0
+            for event, scale in layer_events(layer):
+                tag = _local_name(event.tag)
+                events.append((round(cursor, 12), event))
+                if tag == "keySig":
+                    continue
+                duration = _mei_duration_quarters(event)
+                if duration is None and tag == "chord":
+                    duration = next((_mei_duration_quarters(note) for note in event
+                                     if _local_name(note.tag) == "note" and _mei_duration_quarters(note) is not None), None)
+                if duration is None and tag in {"mRest", "multiRest"}:
+                    duration = meter_spans.get(id(measure), 4.0)
+                cursor += (duration or 0.0) * scale * _timed_element_tuplet_span_multiplier(event, tuplet_spans)
+        for _, group in itertools.groupby(sorted(events, key=lambda item: item[0]), key=lambda item: item[0]):
+            simultaneous = [event for _, event in group]
+            for event in simultaneous:
+                if _local_name(event.tag) == "keySig":
+                    key = signature(event)
+                    if key is not None:
+                        active_key = staff_keys[staff_n] = key
+                        carried.clear()
+            notes = [note for event in simultaneous for note in
+                     ([event] if _local_name(event.tag) == "note" else
+                      [child for child in event if _local_name(child.tag) == "note"]
+                      if _local_name(event.tag) == "chord" else [])]
+            updates = {}
+            for note in notes:
+                accidental = written_accidental(note)
+                if accidental is not None:
+                    pitch = (note.get("pname"), note.get("oct"))
+                    updates.setdefault(pitch, set()).add(accidental)
+            # Simultaneous conflicting accidentals are explicit on their notes;
+            # they do not establish one unambiguous carry for other voices.
+            for pitch, values in updates.items():
+                if len(values) == 1:
+                    carried[pitch] = next(iter(values))
+            for note in notes:
+                note_id = _xml_id(note)
+                pitch = (note.get("pname"), note.get("oct"))
+                alter = _mei_accid_to_alter(_mei_note_accid_value(note))
+                if alter is None:
+                    alter = tied_alters.get(note_id, carried.get(pitch))
+                if alter is None and active_key is not None:
+                    alter = active_key.get(str(pitch[0]).lower(), 0)
+                if alter is not None:
+                    effective[id(note)] = alter
+                    if note_id in tie_next:
+                        tied_alters[tie_next[note_id]] = alter
+
+    def visit(el):
+        nonlocal global_key
+        tag = _local_name(el.tag)
+        if tag == "score":
+            global_key = None
+            staff_keys.clear()
+            tied_alters.clear()
+        if tag == "scoreDef":
+            key = signature(el)
+            if key is not None:
+                global_key = key
+                staff_keys.clear()
+        elif tag == "staffDef":
+            key = signature(el)
+            if key is not None:
+                staff_keys[el.get("n", "1")] = key
+        elif tag == "measure":
+            for child in el:
+                if _local_name(child.tag) in {"scoreDef", "staffDef"}:
+                    visit(child)
+                elif _local_name(child.tag) == "staff":
+                    process_staff(child, el)
+            return
+        for child in el:
+            visit(child)
+
+    music = [el for el in root.iter() if _local_name(el.tag) == "music"]
+    bodies = [el for node in music for el in node.iter() if _local_name(el.tag) == "body"]
+    for search_root in bodies or music or [root]:
+        visit(search_root)
+    return effective
+
+
 def _mei_written_pitch(note_el: Any, alter: Optional[int] = None) -> Optional[str]:
     pname = note_el.attrib.get("pname")
     octave = note_el.attrib.get("oct")
@@ -604,6 +740,7 @@ def _verovio_common_mei_dataframes(
     tie_next = _extract_mei_tie_next_map(root)
     tuplet_span_multipliers = _mei_tuplet_span_multipliers(root)
     note_explicit_alters = _extract_mei_note_explicit_alters(root)
+    note_effective_alters = _extract_mei_note_effective_alters(root)
     staff_to_part = _source_staff_index_to_part_label_map_from_mei(root)
     tk = verovio.toolkit()
     mei_data = Path(mei_path).read_text(encoding="utf-8", errors="ignore")
@@ -740,8 +877,9 @@ def _verovio_common_mei_dataframes(
                         note_onset = onset_q
                         note_duration = duration_q
                         note_pitch = None
-                        if note_id in note_explicit_alters:
-                            note_pitch = _midi_from_mei_pitch(note_el, note_explicit_alters[note_id])
+                        effective_alter = note_effective_alters.get(id(note_el), note_explicit_alters.get(note_id))
+                        if effective_alter is not None:
+                            note_pitch = _midi_from_mei_pitch(note_el, effective_alter)
                         if note_pitch is None:
                             note_pitch = midi_pitch
                         if tag == "chord":
@@ -793,7 +931,7 @@ def _verovio_common_mei_dataframes(
                         if parse_enharmonic:
                             row["Pitch Enharmonic"] = _mei_written_pitch(
                                 note_el,
-                                note_explicit_alters.get(note_id),
+                                effective_alter,
                             )
                         rows.append(row)
                     if duration_q is not None and np.isfinite(float(duration_q)):
