@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Facsimile viewer payloads inlined into the viewer `<script>` element are now
+  serialized with `json_for_script`, which escapes `<`, `>`, and `&`. MEI is
+  untrusted input, and an `<annot>` containing `</script>` closed the element
+  early: the remaining viewer JavaScript became page text and anything the
+  annotation supplied ran instead. The wrapping iframe combines `srcdoc` with
+  `allow-same-origin`, so that script had the notebook's own origin.
+- Re-running the viewer launch cell no longer leaves the previous watchdog
+  observer running. Watchers are tracked per resolved MEI path so a new viewer
+  retires its predecessor, the event handler holds only a weak reference to the
+  viewer, and a `weakref.finalize` stops the observer of a viewer that is
+  discarded without `stop_watch`. Saving the MEI after N launches previously
+  triggered N full Verovio re-renders, most of them into orphaned widgets.
+- **Reload zones** / **Check facsimile** / **Reload score** now report failures
+  in the status area. ipywidgets discards exceptions raised inside a click
+  handler, so a single unresolved measure `@facs` link made the button look
+  inert instead of naming the bad link.
+- An auto-watch reload that lands while the editor is still writing the MEI now
+  retries instead of reporting a parse error. The save is briefly visible as
+  truncated XML, and because no further filesystem event follows, the failure
+  used to stay on screen until the next edit.
+- Auto-watch no longer sleeps on the kernel's IO loop while waiting for a save
+  to settle. The wait is scheduled on the loop instead, so widget comms, the
+  heartbeat, and other cells' output are not stalled for its duration.
+- `start_watch` now works on a viewer that has not called `display`. The watch
+  code read `watch_toggle.value` unconditionally and raised `AttributeError` on
+  a viewer with no toolbar; a missing toggle now simply means nothing has been
+  switched off.
+- The facsimile viewer now downloads HTTP(S)/IIIF `<graphic @target>` images at
+  a display width and embeds them as data URIs. Notebook iframes were leaving
+  full-resolution BSB URLs in `<img src>`, so the pane stayed empty while the
+  MEI zones themselves parsed. Packaged `camat/examples` copies also include
+  the demo SVG beside the demo MEI.
+- Auto-watch on a remote MEI URL no longer looks inert. The toggle is disabled,
+  and the status keeps the “use Reload source” explanation instead of being
+  overwritten by “Auto-watch off” when the control snaps back.
+- Animation encoding in the convolution explainer now uses a stdout `tqdm`
+  bar with Matplotlib's `_save_count` frame total. `tqdm.notebook` widgets
+  stayed frozen at `0frame [00:00, ?frame/s]` on Jupyter4NFDI. The bar is
+  closed before the HTML player so it is not printed a second time under
+  Once / Loop / Reflect.
+
 ## [0.2.3] - 2026-09-11
 
 ### Added

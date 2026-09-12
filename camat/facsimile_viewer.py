@@ -26,6 +26,7 @@ import time
 from typing import Any, Callable
 from urllib.parse import unquote, urljoin, urlparse
 import uuid
+import weakref
 import xml.etree.ElementTree as ET
 
 import verovio
@@ -38,6 +39,17 @@ NS = {"m": MEI_NS}
 
 DEFAULT_PORTRAIT_SIZE = (2100, 2970)
 DEFAULT_LANDSCAPE_SIZE = (2970, 2100)
+# Cap IIIF/full-resolution graphics so notebook iframes stay display-sized.
+DEFAULT_FACSIMILE_DISPLAY_WIDTH = 1200
+# An editor saving in place leaves the MEI briefly truncated, so an auto-watch
+# reload that lands mid-write retries instead of reporting a parse error.
+WATCH_PARSE_RETRIES = 3
+WATCH_PARSE_RETRY_SEC = 0.25
+_IIIF_IMAGE_TAIL = re.compile(
+    r"/full/(?P<size>[^/]+)/(?P<rotation>[^/]+)/(?P<quality>[^/.]+)"
+    r"\.(?P<fmt>[A-Za-z0-9]+)$",
+    flags=re.IGNORECASE,
+)
 
 __all__ = [
     "DEFAULT_LANDSCAPE_SIZE",
@@ -58,10 +70,12 @@ __all__ = [
     "embed_viewer_html",
     "mei_file_fingerprint",
     "infer_facsimile_layout",
+    "json_for_script",
     "probe_note_pname",
     "read_facsimile_model",
     "render_verovio_pages",
     "resolve_graphic_src",
+    "display_iiif_url",
     "resolve_mei_source",
     "resolve_mei_source_info",
     "resolve_repo_path",
@@ -119,6 +133,33 @@ def _default_mei_cache_dir(repo_root: Path | None = None) -> Path:
     return Path(get_download_cache_dir())
 
 
+def _packaged_examples_dir() -> Path | None:
+    """Extract ``camat/examples`` into the download cache and return that folder.
+
+    Graphics such as ``facsimile_viewer_demo.svg`` live beside the demo MEI in
+    the wheel. Copying only the MEI left relative ``<graphic @target>`` values
+    unresolvable in cloud notebooks.
+    """
+    from importlib.resources import as_file, files
+
+    examples = files("camat").joinpath("examples")
+    if not examples.is_dir():
+        return None
+    from .music_utils import get_download_cache_dir
+
+    cache = Path(get_download_cache_dir()) / "packaged_examples"
+    cache.mkdir(parents=True, exist_ok=True)
+    for child in examples.iterdir():
+        if not child.is_file():
+            continue
+        target = cache / child.name
+        with as_file(child) as extracted:
+            data = Path(extracted).read_bytes()
+        if not target.is_file() or target.read_bytes() != data:
+            target.write_bytes(data)
+    return cache
+
+
 def _packaged_example_path(source: str | Path) -> Path | None:
     """Return a filesystem path for ``camat/examples/<file>`` from the wheel."""
     posix = Path(source).as_posix()
@@ -128,21 +169,11 @@ def _packaged_example_path(source: str | Path) -> Path | None:
     name = posix[len(prefix) :]
     if not name or "/" in name or name.startswith("."):
         return None
-    from importlib.resources import as_file, files
-
-    resource = files("camat").joinpath("examples", name)
-    if not resource.is_file():
+    cache = _packaged_examples_dir()
+    if cache is None:
         return None
-    from .music_utils import get_download_cache_dir
-
-    cache = Path(get_download_cache_dir()) / "packaged_examples"
-    cache.mkdir(parents=True, exist_ok=True)
     target = cache / name
-    with as_file(resource) as extracted:
-        data = extracted.read_bytes()
-    if not target.is_file() or target.read_bytes() != data:
-        target.write_bytes(data)
-    return target.resolve()
+    return target.resolve() if target.is_file() else None
 
 
 def _is_windows_absolute_path(source: str) -> bool:
@@ -328,11 +359,108 @@ def resolve_graphic_src(
         image_path = mei_path.parent / image_path
     image_path = image_path.resolve()
     if not image_path.is_file():
-        return target
+        posix_target = Path(target).as_posix()
+        if "/" not in posix_target and not parsed.scheme:
+            packaged = _packaged_example_path(f"camat/examples/{Path(target).name}")
+            if packaged is not None:
+                image_path = packaged
+        if not image_path.is_file():
+            return target
 
     mime_type = mimetypes.guess_type(image_path.name)[0] or "application/octet-stream"
     payload = b64encode(image_path.read_bytes()).decode("ascii")
     return f"data:{mime_type};base64,{payload}"
+
+
+def display_iiif_url(url: str, max_width: int) -> str:
+    """Rewrite an IIIF Image API request so its width does not exceed ``max_width``.
+
+    Full-resolution BSB derivatives are several thousand pixels wide. Notebook
+    iframes only need a display-sized image, and requesting the original often
+    stalls or is blocked. Non-IIIF URLs are returned unchanged.
+    """
+    if max_width <= 0:
+        return url
+    match = _IIIF_IMAGE_TAIL.search(url)
+    if not match:
+        return url
+    size = match.group("size")
+    current_width: int | None
+    if re.fullmatch(r"\d+,", size):
+        current_width = int(size[:-1])
+    elif re.fullmatch(r"\d+,\d+", size):
+        current_width = int(size.split(",", 1)[0])
+    elif size.lower() in {"full", "max", "^max"}:
+        current_width = None
+    else:
+        return url
+    if current_width is not None and current_width <= max_width:
+        return url
+    start, end = match.span("size")
+    return f"{url[:start]}{int(max_width)},{url[end:]}"
+
+
+def _facsimile_display_width(
+    *,
+    facsimile_max_width: int,
+    image_width: int | None = None,
+) -> int:
+    display_width = max(
+        800,
+        min(DEFAULT_FACSIMILE_DISPLAY_WIDTH, int(facsimile_max_width) * 2),
+    )
+    if image_width and image_width > 0:
+        return min(int(image_width), display_width)
+    return display_width
+
+
+def _embed_remote_graphic_src(
+    src: str,
+    *,
+    max_width: int | None = None,
+    timeout_seconds: int = 60,
+    cache_dir: str | Path | None = None,
+) -> str:
+    """Download an HTTP(S) graphic and return a data URI; otherwise keep ``src``."""
+    parsed = urlparse(src)
+    if parsed.scheme not in {"http", "https"}:
+        return src
+    fetch_url = display_iiif_url(src, max_width) if max_width else src
+    try:
+        from .music_utils import get_file_path
+
+        path = Path(
+            get_file_path(
+                fetch_url,
+                timeout_seconds=timeout_seconds,
+                use_cache=True,
+                cache_dir=(
+                    str(cache_dir)
+                    if cache_dir is not None
+                    else str(_default_mei_cache_dir())
+                ),
+            )
+        )
+        if not path.is_file() or path.stat().st_size == 0:
+            return fetch_url
+        mime_type = mimetypes.guess_type(path.name)[0] or "image/jpeg"
+        payload = b64encode(path.read_bytes()).decode("ascii")
+        return f"data:{mime_type};base64,{payload}"
+    except (OSError, ValueError):
+        return fetch_url
+
+
+def _browser_graphic_src(
+    surface: dict,
+    *,
+    facsimile_max_width: int,
+) -> str:
+    src = surface.get("graphic_src") or ""
+    width = _facsimile_display_width(
+        facsimile_max_width=facsimile_max_width,
+        image_width=surface.get("image_width"),
+    )
+    return _embed_remote_graphic_src(src, max_width=width)
 
 
 def _local_name(element: ET.Element) -> str:
@@ -1298,6 +1426,23 @@ def make_diagnostic_table(model: dict, *, show: bool = True) -> str:
     """
 
 
+def json_for_script(payload: Any) -> str:
+    """Serialize ``payload`` for inlining in an HTML ``<script>`` element.
+
+    ``json.dumps`` leaves ``<`` and ``>`` intact, so annotation text or an
+    ``xml:id`` containing ``</script>`` would close the element early and let
+    the remainder of the MEI run as script. The escapes below are still valid
+    JSON, so the value parses identically. Non-ASCII, including the line
+    separators U+2028 and U+2029, is already escaped by ``ensure_ascii``.
+    """
+    return (
+        json.dumps(payload)
+        .replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+        .replace("&", "\\u0026")
+    )
+
+
 def make_viewer_html(
     model: dict,
     score_pages: list[dict],
@@ -1416,9 +1561,9 @@ def make_viewer_html(
         if score_page_surface_indices[initial_page_index] is not None
         else 0
     )
-    pairs_json = json.dumps(pairs)
-    score_pages_json = json.dumps([page["number"] for page in score_pages])
-    score_page_surfaces_json = json.dumps(score_page_surface_indices)
+    pairs_json = json_for_script(pairs)
+    score_pages_json = json_for_script([page["number"] for page in score_pages])
+    score_page_surfaces_json = json_for_script(score_page_surface_indices)
     page_number_to_index = {
         page["number"]: index for index, page in enumerate(score_pages)
     }
@@ -1436,7 +1581,7 @@ def make_viewer_html(
             page_number_to_index.get(rendered_pages[0]) if rendered_pages else None
         )
         annotations.append(annotation)
-    annotations_json = json.dumps(annotations)
+    annotations_json = json_for_script(annotations)
     annotation_buttons = []
     for annotation in annotations:
         anchor = annotation.get("anchor_mode", "unanchored")
@@ -1481,7 +1626,12 @@ def make_viewer_html(
                 if surface_index == initial_surface_index
                 else "facsimile-page"
             )
-            graphic_src = escape(surface["graphic_src"], quote=True)
+            graphic_src = escape(
+                _browser_graphic_src(
+                    surface, facsimile_max_width=facsimile_max_width
+                ),
+                quote=True,
+            )
             graphic_target = escape(surface["graphic_target"], quote=True)
             source_attribute = (
                 f'src="{graphic_src}"'
@@ -1493,7 +1643,8 @@ def make_viewer_html(
                 f'data-surface-n="{escape(surface["n"], quote=True)}">'
                 '<div class="facsimile-wrap">'
                 f'<img {source_attribute} alt="Facsimile image from MEI graphic target" '
-                f'title="{graphic_target}" width="{surface["image_width"]}" '
+                f'title="{graphic_target}" referrerpolicy="no-referrer" '
+                f'width="{surface["image_width"]}" '
                 f'height="{surface["image_height"]}">'
                 f'<svg class="zone-layer" viewBox="0 0 {surface["image_width"]} '
                 f'{surface["image_height"]}" preserveAspectRatio="none" '
@@ -1783,7 +1934,7 @@ def make_viewer_html(
 </div>
 <script>
 (() => {{
-  const viewerId = {json.dumps(viewer_id)};
+  const viewerId = {json_for_script(viewer_id)};
   let initializationAttempts = 0;
 
   function initializeViewer(root) {{
@@ -1961,6 +2112,12 @@ def make_viewer_html(
   applyScoreZoom(initialScoreZoom);
   applyFacsimileZoom(initialFacsimileZoom);
   showScorePage(initialPageIndex);
+  root.querySelectorAll('.facsimile-wrap img').forEach((image) => {{
+    image.addEventListener('error', () => {{
+      const label = image.getAttribute('title') || image.currentSrc || 'unknown graphic';
+      status.textContent = `Facsimile image failed to load: ${{label}}`;
+    }});
+  }});
   const initialItem = pairs.find((item) => item.pageIndex === initialPageIndex) || pairs[0];
   if (initialItem) activate(initialItem);
   }}
@@ -2004,6 +2161,7 @@ def embed_viewer_html(html: str, *, min_height: int) -> str:
         raise ValueError("min_height must be greater than zero")
     inner = f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8">
+<meta name="referrer" content="no-referrer">
 <style>html,body{{margin:0;padding:0;background:#fff;}}</style>
 </head><body>
 {html}
@@ -2059,6 +2217,40 @@ def probe_note_pname(path: Path, note_xml_id: str) -> str:
         return f"read-error:{exc}"
     match = pattern.search(text)
     return match.group(1) if match else "(note not found)"
+
+
+def _stop_observer(observer: Any) -> None:
+    observer.stop()
+    observer.join(timeout=2)
+
+
+# A watcher outlives the notebook name it was bound to: re-running the launch
+# cell builds a second viewer for the same file while the first one's observer
+# thread keeps firing reloads into widgets nobody can see. Record the current
+# watcher per resolved path so a new viewer can retire its predecessor.
+_active_watchers: dict[Path, weakref.ReferenceType] = {}
+_active_watchers_lock = threading.Lock()
+
+
+def _register_watcher(path: Path, viewer: Any) -> None:
+    """Claim ``path`` for ``viewer`` and stop whichever viewer held it before."""
+    with _active_watchers_lock:
+        previous = _active_watchers.get(path)
+        _active_watchers[path] = weakref.ref(viewer)
+    superseded = previous() if previous is not None else None
+    if superseded is not None and superseded is not viewer:
+        superseded.stop_watch(update_label=False)
+
+
+def _release_watcher(path: Path, viewer: Any) -> None:
+    """Drop ``path`` from the registry unless another viewer has claimed it."""
+    with _active_watchers_lock:
+        current = _active_watchers.get(path)
+        if current is None:
+            return
+        owner = current()
+        if owner is None or owner is viewer:
+            del _active_watchers[path]
 
 
 class InteractiveFacsimileViewer:
@@ -2149,14 +2341,17 @@ class InteractiveFacsimileViewer:
             "path": None,
             "callback": None,
             "observer": None,
+            "finalizer": None,
             "reloading": False,
             "pending": False,
+            "parse_attempts": 0,
             "debounce_timer": None,
             "ignore_until": 0.0,
             "file_fp": None,
             "last_checked": None,
             "last_reloaded": None,
         }
+        self._ignoring_watch_toggle = False
 
     def _require_jupyter(self) -> None:
         if self._widgets is not None:
@@ -2239,6 +2434,23 @@ class InteractiveFacsimileViewer:
                 min_height=self.viewer_max_height,
             )
 
+    def _refresh_from_toolbar(self, action: str, **kwargs: Any) -> dict | None:
+        """Refresh for a button click, reporting failures in the status area.
+
+        ipywidgets discards exceptions raised inside a click handler, so an
+        unresolved ``@facs`` link or a failed download would otherwise leave the
+        button looking inert.
+        """
+        try:
+            return self.refresh_viewer(**kwargs)
+        except Exception as exc:
+            if self.status_html is not None:
+                self.status_html.value = (
+                    f"<b style='color:#b91c1c'>{escape(action)} failed:</b> "
+                    f"<code>{escape(type(exc).__name__)}</code> {escape(str(exc))}"
+                )
+            return None
+
     def refresh_viewer(
         self,
         *,
@@ -2257,7 +2469,39 @@ class InteractiveFacsimileViewer:
         return result
 
     def _set_watch_status(self, text: str) -> None:
-        self.watch_status.value = text
+        if self.watch_status is not None:
+            self.watch_status.value = text
+
+    def _watch_available(self) -> bool:
+        return self.source_info.kind != "remote"
+
+    @staticmethod
+    def _remote_watch_message() -> str:
+        return (
+            "<b style='color:#b45309'>Auto-watch needs a local MEI file.</b> "
+            "This source is an HTTP(S) link — use <b>Reload source</b> to download it again."
+        )
+
+    def _watch_enabled(self) -> bool:
+        """Whether reloads should still fire.
+
+        The toggle is a UI control, not the source of truth. ``start_watch`` is
+        public and works before ``display`` has built any widgets, and in that
+        case there is no toggle for the user to switch off.
+        """
+        toggle = self.watch_toggle
+        return True if toggle is None else bool(toggle.value)
+
+    def _set_watch_toggle_value(self, value: bool) -> None:
+        """Set the toggle without re-entering the click handler."""
+        toggle = self.watch_toggle
+        if toggle is None or bool(toggle.value) == bool(value):
+            return
+        self._ignoring_watch_toggle = True
+        try:
+            toggle.value = value
+        finally:
+            self._ignoring_watch_toggle = False
 
     def _format_always_status(self, *, reloading: bool = False) -> str:
         path = self._watch_state["path"]
@@ -2270,68 +2514,115 @@ class InteractiveFacsimileViewer:
             f"<code>{path.name if path else '?'}</code>"
         )
 
-    def _schedule_on_kernel(self, fn: Callable) -> None:
+    def _schedule_on_kernel(self, fn: Callable, *, delay: float = 0.0) -> None:
+        """Run ``fn`` on the kernel's IO loop, optionally after ``delay`` seconds.
+
+        Sleeping in place would stall everything else that loop serves — widget
+        comms, the heartbeat, other cells' output — for the whole wait. The
+        delay is armed from inside the loop because ``IOLoop.call_later``, unlike
+        ``add_callback``, may not be called from another thread.
+        """
         ip = self._get_ipython() if self._get_ipython is not None else None
-        if ip is not None and hasattr(ip, "kernel"):
-            ip.kernel.io_loop.add_callback(fn)
-        else:
+        loop = getattr(getattr(ip, "kernel", None), "io_loop", None)
+        if loop is None:
+            if delay > 0:
+                time.sleep(delay)
             fn()
+            return
+        if delay > 0:
+            loop.add_callback(lambda: loop.call_later(delay, fn))
+        else:
+            loop.add_callback(fn)
+
+    def _probe_suffix(self, path: Path | None) -> str:
+        if not self.note_probe_id:
+            return ""
+        pname = self._probe_note_pname(path)
+        return f" · on-disk <code>{self.note_probe_id}</code> pname=<code>{pname}</code>"
 
     def _reload_from_watch(self, reason: str, *, quiet: bool = False) -> None:
-        if not self.watch_toggle.value:
+        if not self._watch_enabled():
             return
         if self._watch_state["reloading"]:
             self._watch_state["pending"] = True
             return
 
-        path = self._watch_state["path"]
         self._watch_state["reloading"] = True
         self._watch_state["pending"] = False
+        self._watch_state["parse_attempts"] = 0
         if quiet:
             self._set_watch_status(self._format_always_status(reloading=True))
         else:
-            pname = self._probe_note_pname(path)
-            probe = (
-                f" · on-disk <code>{self.note_probe_id}</code> pname=<code>{pname}</code>"
-                if self.note_probe_id
-                else ""
-            )
+            probe = self._probe_suffix(self._watch_state["path"])
             self._set_watch_status(f"<b>Reloading</b> ({reason}){probe}…")
+        self._schedule_on_kernel(
+            lambda: self._perform_reload(reason, quiet=quiet),
+            delay=max(self.watch_settle_sec, 0.0),
+        )
+
+    def _perform_reload(self, reason: str, *, quiet: bool = False) -> None:
+        """Re-render once the save is expected to have landed."""
+        if not self._watch_enabled():
+            self._finish_reload()
+            return
+
+        path = self._watch_state["path"]
         try:
-            time.sleep(self.watch_settle_sec)
             result = self.refresh_viewer(render_score=True)
-            self._watch_state["ignore_until"] = time.monotonic() + 1.0
-            when = time.strftime("%H:%M:%S")
-            self._watch_state["file_fp"] = mei_file_fingerprint(path)
-            self._watch_state["last_checked"] = when
-            self._watch_state["last_reloaded"] = when
-            if quiet:
-                self._set_watch_status(self._format_always_status())
-            else:
-                pname = self._probe_note_pname(path)
-                render_note = (
-                    "re-rendered score" if result["rendered_score"] else "reused cached score"
-                )
-                probe = (
-                    f" · on-disk <code>{self.note_probe_id}</code> pname=<code>{pname}</code>"
-                    if self.note_probe_id
-                    else ""
-                )
+        except ET.ParseError as exc:
+            # A save in progress is briefly visible as truncated XML. Retry:
+            # no further filesystem event may arrive to clear a stale failure.
+            attempts = self._watch_state["parse_attempts"] + 1
+            self._watch_state["parse_attempts"] = attempts
+            if attempts <= WATCH_PARSE_RETRIES:
                 self._set_watch_status(
-                    f"<b style='color:#047857'>Reloaded</b> at {when} ({render_note}) · "
-                    f"trigger=<code>{reason}</code>{probe} · "
-                    f"mode=<code>{self.auto_watch_mode}</code>"
+                    f"<i>Waiting for the save to finish ({reason}, attempt "
+                    f"{attempts} of {WATCH_PARSE_RETRIES})…</i>"
                 )
+                self._schedule_on_kernel(
+                    lambda: self._perform_reload(reason, quiet=quiet),
+                    delay=WATCH_PARSE_RETRY_SEC,
+                )
+                return
+            self._set_watch_status(
+                f"<b style='color:#b91c1c'>Reload failed:</b> the MEI was still "
+                f"unreadable after {attempts} attempts — {escape(str(exc))}"
+            )
+            self._finish_reload()
+            return
         except Exception as exc:
-            self._set_watch_status(f"<b style='color:#b91c1c'>Reload failed:</b> {exc}")
-        finally:
-            self._watch_state["reloading"] = False
-            if self._watch_state["pending"] and self.watch_toggle.value:
-                self._watch_state["pending"] = False
-                self._schedule_on_kernel(lambda: self._reload_from_watch("queued-change"))
+            self._set_watch_status(
+                f"<b style='color:#b91c1c'>Reload failed:</b> {escape(str(exc))}"
+            )
+            self._finish_reload()
+            return
+
+        self._watch_state["ignore_until"] = time.monotonic() + 1.0
+        when = time.strftime("%H:%M:%S")
+        self._watch_state["file_fp"] = mei_file_fingerprint(path)
+        self._watch_state["last_checked"] = when
+        self._watch_state["last_reloaded"] = when
+        if quiet:
+            self._set_watch_status(self._format_always_status())
+        else:
+            render_note = (
+                "re-rendered score" if result["rendered_score"] else "reused cached score"
+            )
+            self._set_watch_status(
+                f"<b style='color:#047857'>Reloaded</b> at {when} ({render_note}) · "
+                f"trigger=<code>{reason}</code>{self._probe_suffix(path)} · "
+                f"mode=<code>{self.auto_watch_mode}</code>"
+            )
+        self._finish_reload()
+
+    def _finish_reload(self) -> None:
+        self._watch_state["reloading"] = False
+        if self._watch_state["pending"] and self._watch_enabled():
+            self._watch_state["pending"] = False
+            self._schedule_on_kernel(lambda: self._reload_from_watch("queued-change"))
 
     def _request_reload(self, reason: str) -> None:
-        if not self.watch_toggle.value:
+        if not self._watch_enabled():
             return
         if time.monotonic() < self._watch_state["ignore_until"]:
             return
@@ -2349,7 +2640,7 @@ class InteractiveFacsimileViewer:
         timer.start()
 
     def _poll_always(self) -> None:
-        if not self.watch_toggle.value:
+        if not self._watch_enabled():
             return
         if self._watch_state["reloading"]:
             return
@@ -2408,38 +2699,47 @@ class InteractiveFacsimileViewer:
 
         path = self._watch_state["path"]
         target_name = path.name
-        viewer = self
+        # A weak reference, so the observer thread is never what keeps this
+        # viewer alive. Re-running a launch cell drops the only Python name
+        # bound to the previous viewer, and a strong closure here would keep
+        # that viewer, its cached page SVG, and its widgets reachable forever.
+        viewer_ref = weakref.ref(self)
 
         class Handler(FileSystemEventHandler):
+            @staticmethod
+            def _notify(candidate: str | None, reason: str) -> None:
+                viewer = viewer_ref()
+                if viewer is None:
+                    return
+                if viewer._paths_match_target(candidate, path):
+                    viewer._request_reload(reason)
+
             def on_moved(self, event):
                 if event.is_directory:
                     return
-                if viewer._paths_match_target(getattr(event, "dest_path", None), path):
-                    viewer._request_reload("moved")
+                self._notify(getattr(event, "dest_path", None), "moved")
 
             def on_created(self, event):
                 if event.is_directory:
                     return
-                if viewer._paths_match_target(event.src_path, path):
-                    viewer._request_reload("created")
+                self._notify(event.src_path, "created")
 
             def on_modified(self, event):
                 if event.is_directory:
                     return
-                if viewer._paths_match_target(event.src_path, path):
-                    viewer._request_reload("modified")
+                self._notify(event.src_path, "modified")
 
             def on_closed(self, event):
                 if getattr(event, "is_directory", False):
                     return
-                if viewer._paths_match_target(getattr(event, "src_path", None), path):
-                    viewer._request_reload("closed")
+                self._notify(getattr(event, "src_path", None), "closed")
 
         observer = Observer()
         observer.schedule(Handler(), str(path.parent), recursive=False)
         observer.daemon = True
         observer.start()
         self._watch_state["observer"] = observer
+        self._watch_state["finalizer"] = weakref.finalize(self, _stop_observer, observer)
         self._watch_state["ignore_until"] = time.monotonic() + 1.0
         if self.note_probe_id:
             pname = self._probe_note_pname(path)
@@ -2456,11 +2756,11 @@ class InteractiveFacsimileViewer:
 
     def start_watch(self) -> None:
         self.stop_watch(update_label=False)
-        if self.source_info.kind == "remote":
-            self._set_watch_status(
-                "<i>Remote source — use Reload source to download it again</i>"
-            )
-            self.watch_toggle.value = False
+        if not self._watch_available():
+            self._set_watch_status(self._remote_watch_message())
+            self._set_watch_toggle_value(False)
+            if self.watch_toggle is not None:
+                self.watch_toggle.disabled = True
             return
         path = resolve_repo_path(self.mei_path, repo_root=self.repo_root)
         self._watch_state["path"] = path
@@ -2472,9 +2772,10 @@ class InteractiveFacsimileViewer:
 
         if not path.is_file():
             self._set_watch_status(f"<b style='color:#b91c1c'>Missing file:</b> {path}")
-            self.watch_toggle.value = False
+            self._set_watch_toggle_value(False)
             return
 
+        _register_watcher(path, self)
         mode = str(self.auto_watch_mode).lower().strip()
         if mode == "events":
             if not self._start_watch_events():
@@ -2486,7 +2787,7 @@ class InteractiveFacsimileViewer:
                 f"<b style='color:#b91c1c'>Unknown auto_watch_mode={self.auto_watch_mode!r}</b> "
                 "(use 'events' or 'always')"
             )
-            self.watch_toggle.value = False
+            self._set_watch_toggle_value(False)
 
     def stop_watch(self, *, update_label: bool = True) -> None:
         callback = self._watch_state.get("callback")
@@ -2497,11 +2798,17 @@ class InteractiveFacsimileViewer:
         if timer is not None:
             timer.cancel()
             self._watch_state["debounce_timer"] = None
+        finalizer = self._watch_state.get("finalizer")
+        if finalizer is not None:
+            finalizer.detach()
+            self._watch_state["finalizer"] = None
         observer = self._watch_state.get("observer")
         if observer is not None:
-            observer.stop()
-            observer.join(timeout=2)
+            _stop_observer(observer)
             self._watch_state["observer"] = None
+        path = self._watch_state.get("path")
+        if path is not None:
+            _release_watcher(path, self)
         self._watch_state["reloading"] = False
         self._watch_state["pending"] = False
         if update_label:
@@ -2514,12 +2821,26 @@ class InteractiveFacsimileViewer:
 
         self.status_html = widgets.HTML()
         self.viewer_html = widgets.HTML(layout=widgets.Layout(width="100%"))
-        self.watch_status = widgets.HTML(value="<i>Auto-watch off</i>")
+        watch_available = self._watch_available()
+        self.watch_status = widgets.HTML(
+            value=(
+                self._remote_watch_message()
+                if not watch_available
+                else "<i>Auto-watch off</i>"
+            )
+        )
         self.reload_zones_btn = widgets.Button(description="Reload zones", icon="refresh")
         reload_label = "Reload source" if self.source_info.kind == "remote" else "Reload score"
         self.reload_score_btn = widgets.Button(description=reload_label, icon="sync")
         self.watch_toggle = widgets.ToggleButton(
-            description="Auto-watch MEI", value=self.auto_watch_mei
+            description="Auto-watch MEI",
+            value=bool(self.auto_watch_mei) and watch_available,
+            disabled=not watch_available,
+            tooltip=(
+                "Reload when the local MEI file changes"
+                if watch_available
+                else "Auto-watch needs a local MEI file. Use Reload source for HTTP(S) links."
+            ),
         )
 
         controls = widgets.HBox(
@@ -2529,12 +2850,20 @@ class InteractiveFacsimileViewer:
             [controls, self.watch_status, self.status_html, self.viewer_html]
         )
 
-        self.reload_zones_btn.on_click(lambda _: self.refresh_viewer(render_score=False))
+        self.reload_zones_btn.on_click(
+            lambda button: self._refresh_from_toolbar(
+                button.description, render_score=False
+            )
+        )
         self.reload_score_btn.on_click(
-            lambda _: self.refresh_viewer(render_score=True, refresh_source=True)
+            lambda button: self._refresh_from_toolbar(
+                button.description, render_score=True, refresh_source=True
+            )
         )
 
         def _on_watch_toggle(change) -> None:
+            if self._ignoring_watch_toggle:
+                return
             if change["new"]:
                 self.start_watch()
             else:
@@ -2547,6 +2876,8 @@ class InteractiveFacsimileViewer:
         self._display(self.ui)
         if self.watch_toggle.value:
             self.start_watch()
+        elif not watch_available:
+            self._set_watch_status(self._remote_watch_message())
         else:
             self.stop_watch()
         return self

@@ -53,7 +53,8 @@ measure links on the active Verovio page. If one rendered score page contains
 measures from multiple surfaces, it initially shows the surface referenced by
 the most measures; hovering or clicking a linked measure selects its exact
 surface. Remote MEI and remote `<graphic>` targets require network access when
-they are first loaded.
+they are first loaded; the viewer then caches display-sized images and embeds
+them so Jupyter or editor webviews do not have to request the IIIF original.
 
 Verovio preserves `<annot>` records anchored by `@plist` or `@tstamp`, but does
 not engrave their paragraph text. CAMAT supplies an annotation list and score

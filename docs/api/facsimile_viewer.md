@@ -97,15 +97,18 @@ initial zoom. Zoom is retained while changing score pages and facsimile
 surfaces.
 
 Relative local `<graphic target>` paths are resolved from the MEI file's
-directory and embedded into the HTML as data URIs. HTTP(S) targets and existing
-data URIs pass through unchanged. The viewer reads files only; it does not
-alter the MEI or image.
+directory and embedded into the HTML as data URIs. HTTP(S) targets, including
+IIIF Image API URLs, are downloaded at a display width, cached, and likewise
+embedded so notebook iframes are not left to fetch the original several-thousand-pixel
+derivative. Existing data URIs pass through unchanged. The viewer reads files
+only; it does not alter the MEI or image.
 
-For active editing, set `auto_watch_mei=True`. Event mode uses `watchdog` and
-falls back to timed polling if file events are unavailable. In score-only mode,
-**Check facsimile** looks for newly added records while retaining cached score
-SVG. In linked mode, **Reload zones** re-parses the records; **Reload score**
-also reruns Verovio.
+For active editing of a **local** MEI file, set `auto_watch_mei=True`. Event
+mode uses `watchdog` and falls back to timed polling if file events are
+unavailable. HTTP(S) sources cannot be watched; use **Reload source** to
+download the MEI again. In score-only mode, **Check facsimile** looks for newly
+added records while retaining cached score SVG. In linked mode, **Reload zones**
+re-parses the records; **Reload score** also reruns Verovio.
 
 ## Annotation rendering
 
