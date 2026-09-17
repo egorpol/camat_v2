@@ -1772,6 +1772,9 @@ def test_facsimile_notebook_is_portable_and_has_no_persisted_widget_state() -> N
     assert 'MEI_SOURCE = "camat/examples/facsimile_viewer_demo.mei"' in code
     assert "SHOW_ANNOTATIONS = True" in code
     assert "ALIGN_TO_FACSIMILE = False" in code
+    # Notebook widget iframes cannot fetch third-party IIIF <img src>.
+    assert "EMBED_REMOTE_GRAPHICS = True" in code
+    assert "embed_remote_graphics=EMBED_REMOTE_GRAPHICS" in code
     assert all(
         cell.get("execution_count") is None and not cell.get("outputs")
         for cell in notebook["cells"]
