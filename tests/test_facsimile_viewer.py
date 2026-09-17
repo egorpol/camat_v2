@@ -23,6 +23,7 @@ from camat.facsimile_viewer import (
     json_for_script,
     make_viewer_html,
     embed_viewer_html,
+    format_facsimile_summary,
     read_facsimile_model,
     render_verovio_pages,
     resolve_graphic_src,
@@ -87,6 +88,411 @@ def test_read_facsimile_model_resolves_local_graphic(tmp_path: Path) -> None:
     assert model["missing_facs"] == []
 
 
+def _write_two_zone_mei(path: Path, *, facsimile_body: str, measure_facs: str) -> None:
+    """An MEI whose single measure carries ``measure_facs``, over ``facsimile_body``."""
+    (path.parent / "scan.svg").write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="200"/>',
+        encoding="utf-8",
+    )
+    path.write_text(
+        f'''<?xml version="1.0" encoding="UTF-8"?>
+<mei xmlns="http://www.music-encoding.org/ns/mei" meiversion="5.0">
+  <meiHead><fileDesc><titleStmt><title>Fixture</title></titleStmt>
+    <pubStmt><p>Test fixture</p></pubStmt></fileDesc></meiHead>
+  {facsimile_body}
+  <music><body><mdiv><score>
+    <scoreDef meter.count="4" meter.unit="4"><staffGrp><staffDef n="1" lines="5"/></staffGrp></scoreDef>
+    <section><measure xml:id="measure-1" n="1" facs="{measure_facs}">
+      <staff n="1"><layer n="1"><note xml:id="note-1" pname="c" oct="4" dur="1"/></layer></staff>
+    </measure></section>
+  </score></mdiv></body></music>
+</mei>
+''',
+        encoding="utf-8",
+    )
+
+
+_SURFACE_ONE = (
+    '<surface xml:id="surface-1">'
+    '<graphic target="scan.svg" width="100" height="200"/>'
+    '<zone xml:id="zone-1" type="measure" ulx="10" uly="20" lrx="40" lry="180"/>'
+    "</surface>"
+)
+_SURFACE_TWO = (
+    '<surface xml:id="surface-2">'
+    '<graphic target="scan.svg" width="100" height="200"/>'
+    '<zone xml:id="zone-2" type="measure" ulx="50" uly="20" lrx="90" lry="180"/>'
+    "</surface>"
+)
+
+
+def test_surfaces_are_read_from_every_facsimile_element(tmp_path: Path) -> None:
+    """MEI allows one <facsimile> per source; only reading the first loses zones."""
+    mei_path = tmp_path / "page.mei"
+    _write_two_zone_mei(
+        mei_path,
+        facsimile_body=(
+            f"<facsimile>{_SURFACE_ONE}</facsimile>"
+            f"<facsimile>{_SURFACE_TWO}</facsimile>"
+        ),
+        measure_facs="#zone-2",
+    )
+
+    model = read_facsimile_model(mei_path)
+
+    assert model["facsimile_count"] == 2
+    assert len(model["surfaces"]) == 2
+    assert set(model["zones"]) == {"zone-1", "zone-2"}
+    assert model["linked"][0]["surface_id"] == "surface-2"
+    assert "merged from 2 <facsimile>" in format_facsimile_summary(model)
+
+
+def test_surfaces_nested_in_a_surface_group_are_read(tmp_path: Path) -> None:
+    mei_path = tmp_path / "page.mei"
+    _write_two_zone_mei(
+        mei_path,
+        facsimile_body=f"<facsimile><surfaceGrp>{_SURFACE_ONE}</surfaceGrp></facsimile>",
+        measure_facs="#zone-1",
+    )
+
+    model = read_facsimile_model(mei_path)
+
+    assert len(model["surfaces"]) == 1
+    assert model["linked"][0]["status"] == "linked"
+
+
+def test_measure_spanning_two_zones_links_and_outlines_both(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """@facs is a URI list: a measure broken across a break points at each part."""
+    mei_path = tmp_path / "page.mei"
+    _write_two_zone_mei(
+        mei_path,
+        facsimile_body=f"<facsimile>{_SURFACE_ONE}{_SURFACE_TWO}</facsimile>",
+        measure_facs="#zone-1 #zone-2",
+    )
+    monkeypatch.setattr(
+        facsimile_viewer,
+        "render_verovio_pages",
+        lambda *_args, **_kwargs: {
+            "page_count": 1,
+            "initial_page": 1,
+            "initial_page_index": 0,
+            "pages": [
+                {"number": 1, "svg": '<svg><g class="measure" id="measure-1"></g></svg>'}
+            ],
+        },
+    )
+
+    model = read_facsimile_model(mei_path)
+    row = model["measures"][0]
+
+    assert row["status"] == "linked"
+    assert row["zone_ids"] == ["zone-1", "zone-2"]
+    assert [zone["id"] for zone in row["zones"]] == ["zone-1", "zone-2"]
+    assert row["zone"]["id"] == "zone-1", "the first fragment stays the primary zone"
+
+    html = build_facsimile_viewer(mei_path, verovio_options={"scale": 30})["html"]
+    outlined = re.findall(r'<rect class="zone" data-measure-id="measure-1"[^>]*?'
+                          r'data-zone-id="(zone-\d)"', html)
+    assert outlined == ["zone-1", "zone-2"], "every fragment needs its own box"
+
+
+def test_partly_unresolved_facs_names_only_the_broken_token(tmp_path: Path) -> None:
+    mei_path = tmp_path / "page.mei"
+    _write_two_zone_mei(
+        mei_path,
+        facsimile_body=f"<facsimile>{_SURFACE_ONE}</facsimile>",
+        measure_facs="#zone-1 #zone-typo",
+    )
+
+    with pytest.raises(RuntimeError) as excinfo:
+        read_facsimile_model(mei_path)
+
+    message = str(excinfo.value)
+    assert "#zone-typo" in message
+    assert "#zone-1" not in message, "naming the resolved zone sends readers to the wrong line"
+
+
+@pytest.mark.parametrize(
+    ("corners", "expected"),
+    [
+        ('ulx="80" uly="20" lrx="40" lry="180"', "has no area"),
+        ('ulx="10" uly="20" lrx="10" lry="180"', "has no area"),
+        ('ulx="10" uly="20" lrx="40" lry="20"', "has no area"),
+        ('ulx="10" uly="20" lrx="400" lry="180"', "falls outside its 100x200 graphic"),
+        ('ulx="-5" uly="20" lrx="40" lry="180"', "falls outside its 100x200 graphic"),
+    ],
+)
+def test_unusable_zone_geometry_is_reported(
+    tmp_path: Path, corners: str, expected: str
+) -> None:
+    """An inverted or out-of-bounds zone draws nothing, so it must not pass silently."""
+    mei_path = tmp_path / "page.mei"
+    _write_two_zone_mei(
+        mei_path,
+        facsimile_body=(
+            '<facsimile><surface xml:id="surface-1">'
+            '<graphic target="scan.svg" width="100" height="200"/>'
+            f'<zone xml:id="zone-1" type="measure" {corners}/>'
+            "</surface></facsimile>"
+        ),
+        measure_facs="#zone-1",
+    )
+
+    with pytest.raises(RuntimeError, match=expected):
+        read_facsimile_model(mei_path)
+
+
+def test_every_facsimile_problem_is_reported_in_one_pass(tmp_path: Path) -> None:
+    """Reporting one problem per run makes a large edition tedious to correct."""
+    mei_path = tmp_path / "page.mei"
+    _write_two_zone_mei(
+        mei_path,
+        facsimile_body=(
+            "<facsimile>"
+            # No <graphic>, so the whole surface is unusable.
+            '<surface xml:id="surface-bad"><zone xml:id="zone-orphan" type="measure" '
+            'ulx="1" uly="1" lrx="2" lry="2"/></surface>'
+            '<surface xml:id="surface-1">'
+            '<graphic target="scan.svg" width="100" height="200"/>'
+            '<zone xml:id="zone-1" type="measure" ulx="10" uly="20" lrx="40" lry="180"/>'
+            '<zone xml:id="zone-1" type="measure" ulx="50" uly="20" lrx="90" lry="180"/>'
+            '<zone type="measure" ulx="10" uly="20" lrx="40" lry="180"/>'
+            '<zone xml:id="zone-inverted" type="measure" ulx="90" uly="20" lrx="50" lry="180"/>'
+            "</surface>"
+            "</facsimile>"
+        ),
+        measure_facs="#zone-1",
+    )
+
+    with pytest.raises(RuntimeError) as excinfo:
+        read_facsimile_model(mei_path)
+
+    message = str(excinfo.value)
+    assert "Found 4 facsimile problem(s)" in message
+    assert "surface-bad" in message
+    assert "Duplicate measure zone xml:id: zone-1" in message
+    assert "has no xml:id" in message
+    assert "zone-inverted" in message
+
+
+def test_unresolved_links_caused_by_earlier_problems_are_not_listed_twice(
+    tmp_path: Path,
+) -> None:
+    mei_path = tmp_path / "page.mei"
+    _write_two_zone_mei(
+        mei_path,
+        facsimile_body=(
+            "<facsimile>"
+            '<surface xml:id="surface-1">'
+            '<graphic target="scan.svg" width="100" height="200"/>'
+            '<zone xml:id="zone-1" type="measure" ulx="90" uly="20" lrx="50" lry="180"/>'
+            "</surface>"
+            "</facsimile>"
+        ),
+        measure_facs="#zone-1",
+    )
+
+    with pytest.raises(RuntimeError) as excinfo:
+        read_facsimile_model(mei_path)
+
+    message = str(excinfo.value)
+    assert "likely a consequence of the problems above" in message
+    assert message.count("zone-1") == 1, "the cause should not be restated as its effect"
+
+
+def test_measures_map_to_the_score_page_that_contains_them(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Guards the one-pass id scan that replaced a per-measure substring search."""
+    mei_path = tmp_path / "page.mei"
+    _write_two_zone_mei(
+        mei_path,
+        facsimile_body=f"<facsimile>{_SURFACE_ONE}</facsimile>",
+        measure_facs="#zone-1",
+    )
+    monkeypatch.setattr(
+        facsimile_viewer,
+        "render_verovio_pages",
+        lambda *_args, **_kwargs: {
+            "page_count": 2,
+            "initial_page": 1,
+            "initial_page_index": 0,
+            "pages": [
+                # A page holding other ids must not claim the measure.
+                {"number": 1, "svg": '<svg><g id="note-99"></g></svg>'},
+                {"number": 2, "svg": '<svg><g class="measure" id="measure-1"></g></svg>'},
+            ],
+        },
+    )
+
+    html = build_facsimile_viewer(mei_path, verovio_options={"scale": 30})["html"]
+    pairs = json.loads(re.search(r"const pairs = (\[.*?\]);", html, re.S).group(1))
+
+    assert [(item["measureId"], item["pageIndex"], item["scorePage"]) for item in pairs] == [
+        ("measure-1", 1, 2)
+    ]
+
+
+@pytest.mark.parametrize("zone_type", ["measure", "Measure", "MEASURE", "measure staff"])
+def test_measure_zone_type_is_matched_as_a_case_insensitive_token(
+    tmp_path: Path, zone_type: str
+) -> None:
+    """@type is a token list in MEI, so exact equality was too strict."""
+    mei_path = tmp_path / "page.mei"
+    _write_two_zone_mei(
+        mei_path,
+        facsimile_body=(
+            '<facsimile><surface xml:id="surface-1">'
+            '<graphic target="scan.svg" width="100" height="200"/>'
+            f'<zone xml:id="zone-1" type="{zone_type}" ulx="10" uly="20" lrx="40" lry="180"/>'
+            "</surface></facsimile>"
+        ),
+        measure_facs="#zone-1",
+    )
+
+    model = read_facsimile_model(mei_path)
+
+    assert model["has_facsimile"] is True
+    assert model["linked"][0]["zone"]["id"] == "zone-1"
+
+
+@pytest.mark.parametrize(
+    ("zone_markup", "expected"),
+    [
+        ("", "contain no <zone> elements"),
+        (
+            '<zone xml:id="z" ulx="10" uly="20" lrx="40" lry="180"/>',
+            "1 <zone> element(s) carry no @type",
+        ),
+        (
+            '<zone xml:id="z" type="staff" ulx="10" uly="20" lrx="40" lry="180"/>',
+            "none of its 1 <zone> element(s) are typed as measure zones",
+        ),
+    ],
+)
+def test_missing_measure_zones_says_which_case_it_is(
+    tmp_path: Path, zone_markup: str, expected: str
+) -> None:
+    """"No measure zones" read as "no zones" even when zones were right there."""
+    mei_path = tmp_path / "page.mei"
+    _write_two_zone_mei(
+        mei_path,
+        facsimile_body=(
+            '<facsimile><surface xml:id="surface-1">'
+            '<graphic target="scan.svg" width="100" height="200"/>'
+            f"{zone_markup}</surface></facsimile>"
+        ),
+        measure_facs="",
+    )
+
+    model = read_facsimile_model(mei_path, allow_missing_facsimile=True)
+
+    assert model["has_facsimile"] is False
+    assert expected in model["facsimile_status"]
+
+
+def test_make_viewer_html_rejects_an_empty_page_list(tmp_path: Path) -> None:
+    """It is exported and documented, so it should fail with a sentence."""
+    model = read_facsimile_model(_written_demo(tmp_path))
+
+    with pytest.raises(ValueError, match="score_pages must not be empty"):
+        make_viewer_html(model, [], total_score_pages=0)
+
+
+def _written_demo(tmp_path: Path) -> Path:
+    mei_path = tmp_path / "page.mei"
+    _write_facsimile_mei(mei_path)
+    return mei_path
+
+
+def test_initial_page_past_the_end_raises_by_default_and_clamps_on_request(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Deleting measures is a normal edit; a reload must not become an error."""
+    mei_path = _written_demo(tmp_path)
+    options = build_verovio_options(
+        {"scale": 30}, orientation="portrait", breaks="auto", adjust_page_height=True
+    )
+
+    with pytest.raises(ValueError, match=r"outside the rendered page range 1\.\.1"):
+        render_verovio_pages(mei_path, initial_page=15, options=options)
+
+    clamped = render_verovio_pages(
+        mei_path, initial_page=15, options=options, clamp_initial_page=True
+    )
+
+    assert clamped["initial_page"] == 1
+    assert clamped["initial_page_index"] == 0
+    assert clamped["requested_page"] == 15, "the request is kept so the UI can say so"
+
+
+def test_clamped_start_page_is_reported_in_the_status_area(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mei_path = _written_demo(tmp_path)
+    viewer = InteractiveFacsimileViewer(
+        mei_path, auto_watch_mei=False, verovio_initial_page=15
+    )
+    viewer._widgets = _stub_jupyter_widgets()
+    viewer._get_ipython = lambda: None
+    viewer._display = lambda *_a, **_k: None
+    viewer._build_viewer = lambda **_: {
+        **_fake_refresh(),
+        "score_render": {"page_count": 4, "initial_page": 4, "requested_page": 15},
+    }
+
+    viewer.display()
+
+    assert "Start page:" in viewer.status_html.value
+    assert "15 is outside 1..4, showing 4" in viewer.status_html.value
+
+
+@pytest.mark.parametrize(
+    ("max_zoom_percent", "expected_width"),
+    [
+        (100, 800),  # floor: never request less than 800 px
+        (200, 1200),
+        (300, 1800),
+        (1000, 2400),  # ceiling, so a wide zoom range cannot request the original
+    ],
+)
+def test_graphic_request_width_follows_the_zoom_ceiling(
+    max_zoom_percent: int, expected_width: int
+) -> None:
+    """A derivative narrower than the zoomed pane is exactly where zoom goes soft."""
+    src = facsimile_viewer._browser_graphic_src(
+        {"graphic_src": "https://api.example.org/iiif/image/v2/p/full/4134,/0/default.jpg"},
+        facsimile_max_width=600,
+        max_zoom_percent=max_zoom_percent,
+    )
+
+    assert src.endswith(f"/full/{expected_width},/0/default.jpg")
+
+
+def test_apply_facsimile_layout_leaves_the_mei_namespace_unprefixed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The round-trip must still be loadable by Verovio as MEI.
+
+    The mapping is cleared first so this proves the function registers it itself,
+    rather than inheriting it from whichever sibling module was imported first.
+    """
+    monkeypatch.delitem(ET._namespace_map, facsimile_viewer.MEI_NS, raising=False)
+    mei_path = _written_demo(tmp_path)
+    model = read_facsimile_model(mei_path)
+
+    text, layout = apply_facsimile_layout(
+        mei_path.read_text(encoding="utf-8"), model
+    )
+
+    assert text.lstrip().startswith("<mei ")
+    assert "ns0:" not in text
+    assert ET.fromstring(text).tag == "{http://www.music-encoding.org/ns/mei}mei"
+    assert "alignment_applied" in layout
+
+
 def test_resolve_graphic_src_accepts_file_uri(tmp_path: Path) -> None:
     image_path = tmp_path / "scan.svg"
     image_path.write_text(
@@ -134,21 +540,69 @@ def test_packaged_demo_copies_graphic_sidecar(
     )
 
 
-def test_viewer_html_embeds_http_iiif_graphic(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    mei_path = tmp_path / "page.mei"
+_REMOTE_IIIF_TARGET = "https://api.example.org/iiif/image/v2/page/full/4134,/0/default.jpg"
+_CAPPED_IIIF_TARGET = "https://api.example.org/iiif/image/v2/page/full/100,/0/default.jpg"
+
+
+def _remote_iiif_model(mei_path: Path) -> dict:
+    """A model whose only graphic is a full-resolution remote IIIF URL."""
     _write_facsimile_mei(mei_path)
     mei_path.write_text(
         mei_path.read_text(encoding="utf-8").replace(
-            'target="scan.svg"',
-            'target="https://api.example.org/iiif/image/v2/page/full/4134,/0/default.jpg"',
+            'target="scan.svg"', f'target="{_REMOTE_IIIF_TARGET}"'
         ),
         encoding="utf-8",
     )
     model = read_facsimile_model(mei_path)
     assert model["graphic_src"].startswith("https://")
+    return model
 
+
+def _remote_iiif_html(model: dict, **kwargs: object) -> str:
+    return make_viewer_html(
+        model,
+        [{"number": 1, "svg": '<svg xmlns="http://www.w3.org/2000/svg"></svg>'}],
+        total_score_pages=1,
+        viewer_id="embed-http-test",
+        show_diagnostic_table=False,
+        show_annotations=False,
+        **kwargs,
+    )
+
+
+def test_viewer_html_links_remote_iiif_graphics_when_not_embedded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Standalone HTML can leave the capped URL for a normal browser to fetch."""
+    model = _remote_iiif_model(tmp_path / "page.mei")
+    monkeypatch.setattr(
+        "camat.music_utils.get_file_path",
+        lambda *_a, **_k: pytest.fail("linking must not download the graphic"),
+    )
+
+    html = _remote_iiif_html(model, embed_remote_graphics=False)
+
+    assert f'src="{_CAPPED_IIIF_TARGET}"' in html, "the URL must still be width-capped"
+    assert "data:image/jpeg;base64," not in html
+    assert 'referrerpolicy="no-referrer"' in html
+    assert f'title="{_REMOTE_IIIF_TARGET}"' in html
+    assert "Notebook widget iframes cannot fetch third-party scans" in html
+
+
+def test_interactive_viewer_inlines_remote_graphics_by_default(
+    tmp_path: Path,
+) -> None:
+    """Notebook widget iframes block third-party IIIF <img src> requests."""
+    mei_path = _written_demo(tmp_path)
+    viewer = InteractiveFacsimileViewer(mei_path, auto_watch_mei=False)
+    assert viewer.embed_remote_graphics is True
+
+
+def test_viewer_html_embeds_remote_iiif_graphics_when_asked(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Opting in inlines the scan, which is what an exported notebook needs."""
+    model = _remote_iiif_model(tmp_path / "page.mei")
     jpeg_path = tmp_path / "page.jpg"
     jpeg_path.write_bytes(b"\xff\xd8\xfffakejpeg")
     fetched: list[str] = []
@@ -159,21 +613,12 @@ def test_viewer_html_embeds_http_iiif_graphic(
 
     monkeypatch.setattr("camat.music_utils.get_file_path", fake_get_file_path)
 
-    html = make_viewer_html(
-        model,
-        [{"number": 1, "svg": '<svg xmlns="http://www.w3.org/2000/svg"></svg>'}],
-        total_score_pages=1,
-        viewer_id="embed-http-test",
-        show_diagnostic_table=False,
-        show_annotations=False,
-    )
+    html = _remote_iiif_html(model, embed_remote_graphics=True)
 
-    assert fetched == [
-        "https://api.example.org/iiif/image/v2/page/full/100,/0/default.jpg"
-    ]
+    assert fetched == [_CAPPED_IIIF_TARGET]
     assert 'src="data:image/jpeg;base64,' in html
     assert 'referrerpolicy="no-referrer"' in html
-    assert 'title="https://api.example.org/iiif/image/v2/page/full/4134,/0/default.jpg"' in html
+    assert f'title="{_REMOTE_IIIF_TARGET}"' in html
 
 
 def test_embed_remote_graphic_falls_back_to_url_when_download_fails(

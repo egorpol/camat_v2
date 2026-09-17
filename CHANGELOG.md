@@ -36,6 +36,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   code read `watch_toggle.value` unconditionally and raised `AttributeError` on
   a viewer with no toolbar; a missing toggle now simply means nothing has been
   switched off.
+- Surfaces are now read from every `<facsimile>` element and from surfaces
+  nested in `<surfaceGrp>`. MEI permits one `<facsimile>` per witness in
+  `<sourceDesc>`, and reading only the first element's direct `<surface>`
+  children turned zones that measures legitimately pointed at into "unresolved
+  measure @facs" errors. `format_facsimile_summary` reports when surfaces were
+  merged from more than one `<facsimile>`, since that is never obvious.
+- Measure `@facs` is now read as the URI *list* MEI defines it to be. A measure
+  broken across a system or page break carries one zone per fragment, and
+  treating the whole attribute as a single id rejected the file outright. Each
+  fragment gets its own highlight box, and fragments may sit on different
+  surfaces. Model rows gained `zone_ids` and `zones`; `zone_id` and `zone` still
+  hold the first fragment.
+- An unresolved `@facs` error now names the tokens that failed to resolve rather
+  than the whole attribute value, which sent readers to the wrong reference when
+  only one id in a multi-zone link was wrong.
+- `read_facsimile_model` now reports every structural problem in one numbered
+  report instead of raising on the first. Correcting a large edition one
+  discovered problem per run was needlessly slow. Unresolved `@facs` links that
+  are merely a consequence of an earlier problem are counted rather than listed,
+  so causes are not buried under their effects.
+- Zone geometry is now validated. An inverted or zero-area zone (`lrx` at or
+  before `ulx`), or one reaching outside its `<graphic>`, draws an overlay
+  rectangle that is invisible or clipped, which reads as "the alignment is
+  broken" rather than "this one zone is mis-encoded".
+- Measure zones are matched on `@type` case-insensitively and as the token list
+  MEI defines it, so `type="Measure"` and `type="measure staff"` are recognized.
+  An exact equality test dropped them and then reported the file as having no
+  zones. When no measure zones are found, the message now distinguishes surfaces
+  with no `<zone>` elements from zones that carry no `@type` and zones typed
+  something else, instead of reading as "there are no zones" in all three cases.
+- Structural problems are no longer masked by the score-only fallback: a
+  surface that had to be skipped is now reported rather than silently becoming
+  "no facsimile surface with measure zones found".
+- `make_viewer_html` raises `ValueError` for an empty `score_pages` list instead
+  of `IndexError`. It is exported and documented, so it should fail with a
+  sentence.
+- An out-of-range `initial_page` no longer turns a live-edit reload into a
+  failure banner. Deleting measures is a normal edit, and the page number was a
+  launch-time preference rather than an assertion about the file's future. The
+  interactive viewer clamps and says so in its status area; the direct
+  `render_verovio_pages` and `build_facsimile_viewer` calls still raise unless
+  passed `clamp_initial_page=True`.
+- Linking width-capped IIIF URLs from the interactive viewer left the facsimile
+  pane empty in Jupyter and VS Code/Cursor. A standalone browser can fetch those
+  scans inside a sandboxed `srcdoc` iframe; notebook widget iframes cannot.
+  `launch_interactive_facsimile_viewer` inlines the derivatives again. Pass
+  `embed_remote_graphics=False` only for standalone HTML, which cuts a
+  ten-surface edition from about 10.9 MB to 5.7 MB.
+- Remote graphics are requested at a width derived from `max_zoom_percent`
+  rather than a fixed twice the pane width, bounded by a new
+  `MAX_FACSIMILE_REQUEST_WIDTH` of 2400. With the default 600 px pane and 300%
+  zoom the request is now 1800 px wide instead of 1200, so zooming in to read an
+  ambiguous accidental no longer runs past the resolution that was fetched.
+
+### Changed
+
+- Mapping measures to score pages no longer runs a substring search per measure
+  against every page's SVG; each page's element ids are collected in one pass.
+  On a 183-measure edition with 5.6 MB of SVG this drops from 260 ms to 7.5 ms
+  per render, with an identical mapping.
 - The facsimile viewer now downloads HTTP(S)/IIIF `<graphic @target>` images at
   a display width and embeds them as data URIs. Notebook iframes were leaving
   full-resolution BSB URLs in `<img src>`, so the pane stayed empty while the

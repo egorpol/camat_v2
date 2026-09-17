@@ -98,10 +98,24 @@ surfaces.
 
 Relative local `<graphic target>` paths are resolved from the MEI file's
 directory and embedded into the HTML as data URIs. HTTP(S) targets, including
-IIIF Image API URLs, are downloaded at a display width, cached, and likewise
-embedded so notebook iframes are not left to fetch the original several-thousand-pixel
-derivative. Existing data URIs pass through unchanged. The viewer reads files
-only; it does not alter the MEI or image.
+IIIF Image API URLs, are rewritten to a display width. The interactive Jupyter
+viewer then downloads those derivatives and inlines them as data URIs:
+notebook widget iframes inherit a CSP that blocks third-party `<img src>`
+requests, so leaving the URL in the markup produces an empty facsimile pane.
+Pass `embed_remote_graphics=False` only when the HTML will run in a normal
+browser, which cuts a ten-surface edition from about 10.9 MB to 5.7 MB.
+Existing data URIs pass through unchanged. The viewer reads files only; it
+does not alter the MEI or image.
+
+The requested width follows `max_zoom_percent`, so a wider zoom range buys a
+sharper scan, up to `MAX_FACSIMILE_REQUEST_WIDTH` (2400 px). With the default
+600 px pane and 300% zoom the request is 1800 px wide.
+
+Zones are recognized when `@type` contains the token `measure`, matched
+case-insensitively, so `type="Measure"` and `type="measure staff"` both work.
+When an MEI has surfaces but no measure zones, `facsimile_status` says which of
+the three cases applies: no `<zone>` elements at all, zones with no `@type`, or
+zones typed something else.
 
 For active editing of a **local** MEI file, set `auto_watch_mei=True`. Event
 mode uses `watchdog` and falls back to timed polling if file events are

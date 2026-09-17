@@ -41,6 +41,9 @@ DEFAULT_PORTRAIT_SIZE = (2100, 2970)
 DEFAULT_LANDSCAPE_SIZE = (2970, 2100)
 # Cap IIIF/full-resolution graphics so notebook iframes stay display-sized.
 DEFAULT_FACSIMILE_DISPLAY_WIDTH = 1200
+# Ceiling for a zoom-driven request. A wide zoom range should buy a sharper scan,
+# but not at the cost of holding several near-original-resolution images decoded.
+MAX_FACSIMILE_REQUEST_WIDTH = 2400
 # An editor saving in place leaves the MEI briefly truncated, so an auto-watch
 # reload that lands mid-write retries instead of reporting a parse error.
 WATCH_PARSE_RETRIES = 3
@@ -336,6 +339,66 @@ def parse_int_attr(element: ET.Element, attr: str, *, context: str) -> int:
         raise ValueError(f"Invalid @{attr}={value!r} on {context}") from exc
 
 
+_PROBLEM_REPORT_LIMIT = 20
+# Deliberately unanchored, matching every `id="..."` occurrence the substring
+# scan this replaced would have found, including a `data-id="..."` suffix.
+_SVG_ELEMENT_ID = re.compile(r'id="([^"]+)"')
+
+
+def _format_facsimile_problems(
+    problems: list[str], mei_path: Path, repo_root: Path | None
+) -> str:
+    """Render every collected problem as one numbered report."""
+    shown = problems[:_PROBLEM_REPORT_LIMIT]
+    lines = [f"  {index}. {text}" for index, text in enumerate(shown, start=1)]
+    if len(problems) > len(shown):
+        lines.append(f"  … and {len(problems) - len(shown)} more")
+    heading = (
+        f"Found {len(problems)} facsimile problem(s) in "
+        f"{display_path(mei_path, repo_root=repo_root)}:"
+        if len(problems) > 1
+        else f"In {display_path(mei_path, repo_root=repo_root)}:"
+    )
+    return "\n".join([heading, *lines])
+
+
+def _is_measure_zone(zone: ET.Element) -> bool:
+    """Whether ``zone`` is typed as a measure zone.
+
+    ``@type`` is a token list in MEI, so ``type="measure staff"`` is a measure
+    zone. An exact, case-sensitive equality test rejected that, and rejected
+    ``Measure`` too, then reported the file as having no zones at all.
+    """
+    return "measure" in (zone.get("type") or "").lower().split()
+
+
+def _zone_geometry_problem(
+    zone_id: str,
+    corners: dict[str, int],
+    image_width: int,
+    image_height: int,
+) -> str | None:
+    """Describe why ``corners`` cannot be drawn, or ``None`` if they can.
+
+    An inverted or out-of-bounds zone produces an overlay rectangle that is
+    invisible or clipped away, which reads as "the alignment is broken" rather
+    than "this one zone is mis-encoded".
+    """
+    ulx, uly, lrx, lry = (corners["ulx"], corners["uly"], corners["lrx"], corners["lry"])
+    if lrx <= ulx or lry <= uly:
+        return (
+            f"Zone {zone_id} has no area: "
+            f"ulx={ulx} uly={uly} lrx={lrx} lry={lry} "
+            "(lrx/lry must be greater than ulx/uly)"
+        )
+    if ulx < 0 or uly < 0 or lrx > image_width or lry > image_height:
+        return (
+            f"Zone {zone_id} falls outside its {image_width}x{image_height} graphic: "
+            f"ulx={ulx} uly={uly} lrx={lrx} lry={lry}"
+        )
+    return None
+
+
 def resolve_graphic_src(
     target: str,
     mei_path: Path,
@@ -404,11 +467,18 @@ def _facsimile_display_width(
     *,
     facsimile_max_width: int,
     image_width: int | None = None,
+    max_zoom_percent: int | float = 200,
 ) -> int:
-    display_width = max(
-        800,
-        min(DEFAULT_FACSIMILE_DISPLAY_WIDTH, int(facsimile_max_width) * 2),
-    )
+    """Pick the width to request a facsimile graphic at.
+
+    Sized for the most the user can zoom to rather than a fixed multiple of the
+    pane. Zooming in to read an ambiguous accidental is the main reason to zoom a
+    facsimile at all, and a derivative narrower than the zoomed pane is exactly
+    where that goes soft.
+    """
+    zoom_factor = max(1.0, float(max_zoom_percent) / 100.0)
+    display_width = max(800, int(int(facsimile_max_width) * zoom_factor))
+    display_width = min(display_width, MAX_FACSIMILE_REQUEST_WIDTH)
     if image_width and image_width > 0:
         return min(int(image_width), display_width)
     return display_width
@@ -454,13 +524,28 @@ def _browser_graphic_src(
     surface: dict,
     *,
     facsimile_max_width: int,
+    embed_remote_graphics: bool = False,
+    max_zoom_percent: int | float = 200,
 ) -> str:
+    """Return the ``<img src>`` for a surface, at a display-appropriate width.
+
+    Remote graphics stay as width-capped IIIF URLs when
+    ``embed_remote_graphics`` is false, which is suitable for standalone HTML
+    in a normal browser. Jupyter widget iframes inherit a CSP that blocks those
+    third-party ``<img src>`` requests, so the interactive viewer inlines them
+    as data URIs by default.
+    """
     src = surface.get("graphic_src") or ""
     width = _facsimile_display_width(
         facsimile_max_width=facsimile_max_width,
         image_width=surface.get("image_width"),
+        max_zoom_percent=max_zoom_percent,
     )
-    return _embed_remote_graphic_src(src, max_width=width)
+    if embed_remote_graphics:
+        return _embed_remote_graphic_src(src, max_width=width)
+    if urlparse(src).scheme in {"http", "https"}:
+        return display_iiif_url(src, width)
+    return src
 
 
 def _local_name(element: ET.Element) -> str:
@@ -643,7 +728,14 @@ def infer_facsimile_layout(model: dict) -> dict:
 
 
 def apply_facsimile_layout(mei_text: str, model: dict) -> tuple[str, dict]:
-    """Inject missing facsimile-derived breaks into a temporary MEI document."""
+    """Inject missing facsimile-derived breaks into a temporary MEI document.
+
+    Returns MEI text for Verovio to render, never touching the file on disk. The
+    text is a round-trip through ElementTree, so it drops the XML declaration and
+    any processing instructions, such as ``<?xml-model?>``, that the source
+    carried. Verovio does not need either, but the result is therefore not a
+    faithful copy of the input beyond its elements and attributes.
+    """
     layout = dict(model.get("layout") or infer_facsimile_layout(model))
     root = ET.fromstring(mei_text)
     parent_map = {child: parent for parent in root.iter() for child in parent}
@@ -709,6 +801,11 @@ def apply_facsimile_layout(mei_text: str, model: dict) -> tuple[str, dict]:
             parent.insert(position, marker)
             position += 1
 
+    # Process-global, and every MEI-writing module in this package registers the
+    # same mapping, so there is nothing to conflict with. Kept at the point of use
+    # rather than at import so serialization here cannot depend on which other
+    # module happened to be imported first. ``default_namespace`` on ``tostring``
+    # is not an alternative: MEI's attributes are unqualified, which it rejects.
     ET.register_namespace("", MEI_NS)
     layout["alignment_applied"] = bool(insertions)
     layout["applied_page_breaks"] = [row["measure_id"] for row in page_targets]
@@ -739,14 +836,17 @@ def read_facsimile_model(
     def score_only_model(reason: str) -> dict:
         measures = []
         for measure in root.findall(".//m:measure", NS):
-            facs = measure.get("facs") or ""
+            facs = (measure.get("facs") or "").strip()
+            zone_ids = [token.removeprefix("#") for token in facs.split()]
             measures.append(
                 {
                     "measure_id": measure.get(XML_ID) or "",
                     "measure_n": measure.get("n") or "",
                     "facs": facs,
-                    "zone_id": facs[1:] if facs.startswith("#") else facs,
+                    "zone_id": zone_ids[0] if zone_ids else "",
+                    "zone_ids": zone_ids,
                     "zone": None,
+                    "zones": [],
                     "surface_id": None,
                     "surface_index": None,
                     "status": "facsimile unavailable",
@@ -790,55 +890,96 @@ def read_facsimile_model(
             return score_only_model(message)
         raise FacsimileUnavailableError(message)
 
-    facsimile = root.find(".//m:facsimile", NS)
-    if facsimile is None:
+    facsimile_elements = root.findall(".//m:facsimile", NS)
+    if not facsimile_elements:
         return unavailable(
             f"No <facsimile> found in {display_path(mei_path, repo_root=repo_root)}"
         )
 
-    surface_elements = facsimile.findall("m:surface", NS)
+    # MEI permits several <facsimile> elements — one per witness in <sourceDesc>,
+    # say — and lets <surfaceGrp> nest surfaces within one. Reading only the
+    # first <facsimile>'s direct children turned zones that measures legitimately
+    # point at into "unresolved measure @facs" errors.
+    surface_elements = [
+        surface
+        for facsimile in facsimile_elements
+        for surface in facsimile.iterfind(".//m:surface", NS)
+    ]
     if not surface_elements:
         return unavailable(
             f"No <surface> found in <facsimile> for {display_path(mei_path, repo_root=repo_root)}"
         )
 
+    # Collect every structural problem rather than raising on the first. This is
+    # a proofreading tool: fixing one bad zone only to be shown the next one on
+    # the following run makes a 200-measure edition tedious to correct.
+    problems: list[str] = []
     surfaces = []
     zones = {}
+    total_zone_count = 0
+    typed_zone_count = 0
     for source_index, surface in enumerate(surface_elements):
-        measure_zones = [
-            zone
-            for zone in surface.findall("m:zone", NS)
-            if zone.get("type") == "measure"
+        all_zone_elements = surface.findall("m:zone", NS)
+        total_zone_count += len(all_zone_elements)
+        typed_zone_count += sum(1 for zone in all_zone_elements if zone.get("type"))
+        surface_zone_elements = [
+            zone for zone in all_zone_elements if _is_measure_zone(zone)
         ]
-        if not measure_zones:
+        if not surface_zone_elements:
             continue
 
         surface_id = surface.get(XML_ID) or f"surface-{source_index + 1}"
         graphic = surface.find("m:graphic", NS)
         if graphic is None:
-            raise RuntimeError(
+            problems.append(
                 f"Facsimile surface {surface_id!r} has measure zones but no <graphic>"
             )
+            continue
         graphic_target = graphic.get("target")
         if not graphic_target:
-            raise RuntimeError(
+            problems.append(
                 f"The <graphic> on facsimile surface {surface_id!r} has no @target"
             )
+            continue
+
+        try:
+            image_width = parse_int_attr(
+                graphic, "width", context=f"graphic on surface {surface_id}"
+            )
+            image_height = parse_int_attr(
+                graphic, "height", context=f"graphic on surface {surface_id}"
+            )
+        except ValueError as exc:
+            problems.append(str(exc))
+            continue
 
         surface_index = len(surfaces)
         surface_zones = {}
-        for zone in measure_zones:
+        for zone in surface_zone_elements:
             zone_id = zone.get(XML_ID)
             if not zone_id:
-                raise RuntimeError("A measure <zone> is missing xml:id")
+                problems.append(f"A measure <zone> on surface {surface_id!r} has no xml:id")
+                continue
             if zone_id in zones:
-                raise RuntimeError(f"Duplicate measure zone xml:id: {zone_id}")
+                problems.append(f"Duplicate measure zone xml:id: {zone_id}")
+                continue
+            try:
+                corners = {
+                    name: parse_int_attr(zone, name, context=f"zone {zone_id}")
+                    for name in ("ulx", "uly", "lrx", "lry")
+                }
+            except ValueError as exc:
+                problems.append(str(exc))
+                continue
+            geometry_problem = _zone_geometry_problem(
+                zone_id, corners, image_width, image_height
+            )
+            if geometry_problem is not None:
+                problems.append(geometry_problem)
+                continue
             zone_model = {
                 "id": zone_id,
-                "ulx": parse_int_attr(zone, "ulx", context=f"zone {zone_id}"),
-                "uly": parse_int_attr(zone, "uly", context=f"zone {zone_id}"),
-                "lrx": parse_int_attr(zone, "lrx", context=f"zone {zone_id}"),
-                "lry": parse_int_attr(zone, "lry", context=f"zone {zone_id}"),
+                **corners,
                 "surface_id": surface_id,
                 "surface_index": surface_index,
             }
@@ -856,20 +997,30 @@ def read_facsimile_model(
                     mei_path,
                     base_uri=source_info.base_uri,
                 ),
-                "image_width": parse_int_attr(
-                    graphic, "width", context=f"graphic on surface {surface_id}"
-                ),
-                "image_height": parse_int_attr(
-                    graphic, "height", context=f"graphic on surface {surface_id}"
-                ),
+                "image_width": image_width,
+                "image_height": image_height,
                 "zones": surface_zones,
             }
         )
 
     if not surfaces:
+        if problems:
+            raise RuntimeError(_format_facsimile_problems(problems, mei_path, repo_root))
+        # Distinguish "this MEI has no zones" from "its zones are typed something
+        # other than measure". Both used to produce the first message, which sent
+        # people looking for missing zones that were in front of them.
+        if total_zone_count == 0:
+            located = "its surfaces contain no <zone> elements"
+        elif typed_zone_count == 0:
+            located = f"{total_zone_count} <zone> element(s) carry no @type"
+        else:
+            located = (
+                f"none of its {total_zone_count} <zone> element(s) are typed as "
+                "measure zones"
+            )
         return unavailable(
             f"No facsimile surface with measure zones found in "
-            f"{display_path(mei_path, repo_root=repo_root)}"
+            f"{display_path(mei_path, repo_root=repo_root)}: {located}"
         )
 
     measures = []
@@ -878,18 +1029,28 @@ def read_facsimile_model(
     for measure in root.findall(".//m:measure", NS):
         measure_id = measure.get(XML_ID)
         measure_n = measure.get("n") or ""
-        facs = measure.get("facs") or ""
-        zone_id = facs[1:] if facs.startswith("#") else facs
-        zone = zones.get(zone_id) if zone_id else None
-        status = "linked" if zone else "missing facs" if not zone_id else "unresolved facs"
+        facs = (measure.get("facs") or "").strip()
+        # @facs holds a *list* of URIs: a measure broken across a system or page
+        # break carries one zone per fragment.
+        zone_ids = [token.removeprefix("#") for token in facs.split()]
+        measure_zones = [zones[zone_id] for zone_id in zone_ids if zone_id in zones]
+        if not zone_ids:
+            status = "missing facs"
+        elif len(measure_zones) < len(zone_ids):
+            status = "unresolved facs"
+        else:
+            status = "linked"
+        primary = measure_zones[0] if measure_zones else None
         row = {
             "measure_id": measure_id or "",
             "measure_n": measure_n,
             "facs": facs,
-            "zone_id": zone_id,
-            "zone": zone,
-            "surface_id": zone["surface_id"] if zone else None,
-            "surface_index": zone["surface_index"] if zone else None,
+            "zone_id": zone_ids[0] if zone_ids else "",
+            "zone_ids": zone_ids,
+            "zone": primary,
+            "zones": measure_zones,
+            "surface_id": primary["surface_id"] if primary else None,
+            "surface_index": primary["surface_index"] if primary else None,
             "status": status,
         }
         measures.append(row)
@@ -901,8 +1062,28 @@ def read_facsimile_model(
     if not measures:
         raise RuntimeError(f"No score <measure> elements found in {display_path(mei_path, repo_root=repo_root)}")
     if unresolved:
-        examples = ", ".join(row["facs"] for row in unresolved[:5])
-        raise RuntimeError(f"Found {len(unresolved)} unresolved measure @facs link(s): {examples}")
+        if problems:
+            # These links point at zones the problems above made unusable, so
+            # listing each one again would bury the causes under its effects.
+            problems.append(
+                f"Found {len(unresolved)} unresolved measure @facs link(s), "
+                "likely a consequence of the problems above"
+            )
+        else:
+            # Name the tokens that failed to resolve, not the whole attribute: a
+            # multi-zone @facs is usually broken in only one of its references.
+            examples = ", ".join(
+                f"#{zone_id}"
+                for row in unresolved[:5]
+                for zone_id in row["zone_ids"]
+                if zone_id not in zones
+            )
+            problems.append(
+                f"Found {len(unresolved)} unresolved measure @facs link(s): {examples}"
+            )
+
+    if problems:
+        raise RuntimeError(_format_facsimile_problems(problems, mei_path, repo_root))
 
     linked = [row for row in measures if row["status"] == "linked"]
     first_surface = surfaces[0]
@@ -918,6 +1099,7 @@ def read_facsimile_model(
         "graphic_src": first_surface["graphic_src"],
         "image_width": first_surface["image_width"],
         "image_height": first_surface["image_height"],
+        "facsimile_count": len(facsimile_elements),
         "surfaces": surfaces,
         "zones": zones,
         "measures": measures,
@@ -978,10 +1160,13 @@ def format_facsimile_summary(model: dict, *, repo_root: Path | None = None) -> s
             f"{len(layout.get('missing_system_breaks', []))} missing <sb>"
         )
     )
+    facsimile_count = model.get("facsimile_count", 1)
+    # Merging several <facsimile> elements is usually right but never obvious.
+    merged = f" (merged from {facsimile_count} <facsimile>)" if facsimile_count > 1 else ""
     return (
         f"MEI:             {display_path(mei_path, repo_root=repo_root)}\n"
         f"Viewer mode:     score + facsimile\n"
-        f"Surfaces:        {len(model.get('surfaces', []))}\n"
+        f"Surfaces:        {len(model.get('surfaces', []))}{merged}\n"
         f"Measures:        {len(model['measures'])}\n"
         f"Linked zones:    {len(model['linked'])}\n"
         f"Missing @facs:   {len(model['missing_facs'])}\n"
@@ -1008,6 +1193,7 @@ def build_facsimile_viewer(
     viewer_id: str | None = None,
     viewer_max_height: int = 820,
     facsimile_max_width: int = 600,
+    embed_remote_graphics: bool = False,
     zone_opacity: float = 0.18,
     initial_score_zoom_percent: int | float = 100,
     initial_facsimile_zoom_percent: int | float = 100,
@@ -1020,6 +1206,7 @@ def build_facsimile_viewer(
     show_annotations: bool = True,
     annotation_display_limit: int = 300,
     align_to_facsimile: bool = False,
+    clamp_initial_page: bool = False,
 ) -> dict:
     """Render linked facsimiles or fall back to a score-only MEI viewer."""
     source_info = resolve_mei_source_info(mei_path, repo_root=repo_root)
@@ -1063,6 +1250,7 @@ def build_facsimile_viewer(
             show_verovio_warnings=show_verovio_warnings,
             mei_text=mei_text,
             annotations=model.get("annotations", []),
+            clamp_initial_page=clamp_initial_page,
         )
         viewer_cache.score_hash = current_score_hash
         viewer_cache.options_hash = current_options_hash
@@ -1080,6 +1268,7 @@ def build_facsimile_viewer(
         viewer_id=viewer_id,
         viewer_max_height=viewer_max_height,
         facsimile_max_width=facsimile_max_width,
+        embed_remote_graphics=embed_remote_graphics,
         zone_opacity=zone_opacity,
         initial_score_zoom_percent=initial_score_zoom_percent,
         initial_facsimile_zoom_percent=initial_facsimile_zoom_percent,
@@ -1321,11 +1510,17 @@ def render_verovio_pages(
     show_verovio_warnings: bool = False,
     mei_text: str | None = None,
     annotations: list[dict] | None = None,
+    clamp_initial_page: bool = False,
 ) -> dict:
     """Render all Verovio pages and return SVG strings plus page metadata.
 
     Verovio layout messages such as ``Justification is highly compressed`` are
     suppressed unless ``show_verovio_warnings`` is True.
+
+    An ``initial_page`` past the end is an error by default. Set
+    ``clamp_initial_page`` to fold it into range instead, which is what a reload
+    wants: deleting measures is a normal edit, and the page number was a
+    launch-time preference rather than an assertion about the file's future.
     """
     mei_path = resolve_mei_source(mei_path, repo_root=repo_root)
     mei_text = mei_text if mei_text is not None else mei_path.read_text(encoding="utf-8")
@@ -1339,10 +1534,14 @@ def render_verovio_pages(
             )
 
         page_count = toolkit.getPageCount()
+        requested_page = initial_page
         if initial_page < 1 or initial_page > page_count:
-            raise ValueError(
-                f"initial_page={initial_page} is outside the rendered page range 1..{page_count}"
-            )
+            if not clamp_initial_page:
+                raise ValueError(
+                    f"initial_page={initial_page} is outside the rendered page "
+                    f"range 1..{page_count}"
+                )
+            initial_page = max(1, min(initial_page, page_count))
 
         pages = []
         for page_number in range(1, page_count + 1):
@@ -1358,6 +1557,7 @@ def render_verovio_pages(
         "page_count": page_count,
         "initial_page": initial_page,
         "initial_page_index": initial_page - 1,
+        "requested_page": requested_page,
         "pages": pages,
         "annotations": resolved_annotations,
     }
@@ -1452,6 +1652,7 @@ def make_viewer_html(
     viewer_id: str | None = None,
     viewer_max_height: int = 820,
     facsimile_max_width: int = 600,
+    embed_remote_graphics: bool = False,
     zone_opacity: float = 0.18,
     initial_score_zoom_percent: int | float = 100,
     initial_facsimile_zoom_percent: int | float = 100,
@@ -1462,6 +1663,8 @@ def make_viewer_html(
     show_annotations: bool = True,
     annotation_display_limit: int = 300,
 ) -> str:
+    if not score_pages:
+        raise ValueError("score_pages must not be empty; there is nothing to display")
     zoom_values = {
         "initial_score_zoom_percent": initial_score_zoom_percent,
         "initial_facsimile_zoom_percent": initial_facsimile_zoom_percent,
@@ -1505,6 +1708,9 @@ def make_viewer_html(
     measure_page = {}
     score_page_html = []
     initial_page_index = max(0, min(initial_page_index, len(score_pages) - 1))
+    linked_measure_ids = {
+        row["measure_id"] for row in model["linked"] if row["measure_id"]
+    }
 
     for index, page in enumerate(score_pages):
         page_number = page["number"]
@@ -1514,35 +1720,42 @@ def make_viewer_html(
             f'{page["svg"]}'
             "</div>"
         )
-        for row in model["linked"]:
-            measure_id = row["measure_id"]
-            if measure_id and f'id="{measure_id}"' in page["svg"]:
-                measure_page[measure_id] = index
+        # One pass over the page rather than one substring scan per linked
+        # measure. The scan dominated a cached reload of a full edition, where
+        # every one of a few hundred measures re-read a half-megabyte of SVG.
+        for element_id in _SVG_ELEMENT_ID.findall(page["svg"]):
+            if element_id in linked_measure_ids:
+                measure_page[element_id] = index
 
     for row in model["linked"]:
-        zone = row["zone"]
         measure_id = row["measure_id"]
         if not measure_id:
             continue
-        width = zone["lrx"] - zone["ulx"]
-        height = zone["lry"] - zone["uly"]
         page_index = measure_page.get(measure_id)
-        surface_index = row["surface_index"]
-        surface_overlays[surface_index].append(
-            f'<rect class="zone" data-measure-id="{escape(measure_id)}" '
-            f'data-zone-id="{escape(zone["id"])}" data-measure-n="{escape(row["measure_n"])}" '
-            f'x="{zone["ulx"]}" y="{zone["uly"]}" width="{width}" height="{height}" />'
-        )
-        pairs.append(
-            {
-                "measureId": measure_id,
-                "measureN": row["measure_n"],
-                "zoneId": zone["id"],
-                "surfaceIndex": surface_index,
-                "pageIndex": page_index,
-                "scorePage": score_pages[page_index]["number"] if page_index is not None else None,
-            }
-        )
+        # One box per zone: a measure split across a system or page break needs
+        # every fragment highlighted, and the fragments may sit on different
+        # surfaces, so the surface comes from the zone rather than the measure.
+        for zone in row["zones"]:
+            width = zone["lrx"] - zone["ulx"]
+            height = zone["lry"] - zone["uly"]
+            surface_index = zone["surface_index"]
+            surface_overlays[surface_index].append(
+                f'<rect class="zone" data-measure-id="{escape(measure_id)}" '
+                f'data-zone-id="{escape(zone["id"])}" data-measure-n="{escape(row["measure_n"])}" '
+                f'x="{zone["ulx"]}" y="{zone["uly"]}" width="{width}" height="{height}" />'
+            )
+            pairs.append(
+                {
+                    "measureId": measure_id,
+                    "measureN": row["measure_n"],
+                    "zoneId": zone["id"],
+                    "surfaceIndex": surface_index,
+                    "pageIndex": page_index,
+                    "scorePage": (
+                        score_pages[page_index]["number"] if page_index is not None else None
+                    ),
+                }
+            )
 
     score_page_surface_indices = []
     for page_index in range(len(score_pages)):
@@ -1628,7 +1841,10 @@ def make_viewer_html(
             )
             graphic_src = escape(
                 _browser_graphic_src(
-                    surface, facsimile_max_width=facsimile_max_width
+                    surface,
+                    facsimile_max_width=facsimile_max_width,
+                    embed_remote_graphics=embed_remote_graphics,
+                    max_zoom_percent=max_zoom_percent,
                 ),
                 quote=True,
             )
@@ -1964,7 +2180,12 @@ def make_viewer_html(
   const facsimileZoomReset = root.querySelector('.facsimile-zoom-reset');
   const facsimileZoomIn = root.querySelector('.facsimile-zoom-in');
   const annotationToggle = root.querySelector('.annotation-toggle');
-  const byMeasure = new Map(pairs.map((item) => [item.measureId, item]));
+  const byMeasure = new Map();
+  for (const item of pairs) {{
+    // A measure split across a break contributes one pair per zone. Navigating
+    // from the score should land on the first fragment, not the last.
+    if (!byMeasure.has(item.measureId)) byMeasure.set(item.measureId, item);
+  }}
   const byZone = new Map(pairs.map((item) => [item.zoneId, item]));
   const initialPageIndex = {initial_page_index};
   let activePageIndex = initialPageIndex;
@@ -2115,7 +2336,10 @@ def make_viewer_html(
   root.querySelectorAll('.facsimile-wrap img').forEach((image) => {{
     image.addEventListener('error', () => {{
       const label = image.getAttribute('title') || image.currentSrc || 'unknown graphic';
-      status.textContent = `Facsimile image failed to load: ${{label}}`;
+      const loaded = image.currentSrc || image.getAttribute('src') || '';
+      status.textContent = loaded.startsWith('http')
+        ? `Facsimile image failed to load: ${{label}}. Notebook widget iframes cannot fetch third-party scans; relaunch with embed_remote_graphics=True.`
+        : `Facsimile image failed to load: ${{label}}`;
     }});
   }});
   const initialItem = pairs.find((item) => item.pageIndex === initialPageIndex) || pairs[0];
@@ -2271,6 +2495,7 @@ class InteractiveFacsimileViewer:
         verovio_options: dict | None = None,
         viewer_max_height: int = 820,
         facsimile_max_width: int = 600,
+        embed_remote_graphics: bool = True,
         zone_opacity: float = 0.18,
         initial_score_zoom_percent: int | float = 100,
         initial_facsimile_zoom_percent: int | float = 100,
@@ -2305,6 +2530,7 @@ class InteractiveFacsimileViewer:
         self.verovio_options = dict(verovio_options or {})
         self.viewer_max_height = viewer_max_height
         self.facsimile_max_width = facsimile_max_width
+        self.embed_remote_graphics = embed_remote_graphics
         self.zone_opacity = zone_opacity
         self.initial_score_zoom_percent = initial_score_zoom_percent
         self.initial_facsimile_zoom_percent = initial_facsimile_zoom_percent
@@ -2396,6 +2622,7 @@ class InteractiveFacsimileViewer:
             viewer_id=render_id,
             viewer_max_height=self.viewer_max_height,
             facsimile_max_width=self.facsimile_max_width,
+            embed_remote_graphics=self.embed_remote_graphics,
             zone_opacity=self.zone_opacity,
             initial_score_zoom_percent=self.initial_score_zoom_percent,
             initial_facsimile_zoom_percent=self.initial_facsimile_zoom_percent,
@@ -2408,6 +2635,9 @@ class InteractiveFacsimileViewer:
             show_annotations=self.show_annotations,
             annotation_display_limit=self.annotation_display_limit,
             align_to_facsimile=self.align_to_facsimile,
+            # Deleting measures is a normal edit; a launch-time page preference
+            # must not turn the next reload into a failure banner.
+            clamp_initial_page=True,
         )
         self.cache = result["cache"]
         return result
@@ -2423,6 +2653,15 @@ class InteractiveFacsimileViewer:
             f"{result['summary']}\n"
             f"Viewer:          {score_render['page_count']} Verovio score page(s), {render_note}"
         )
+        # Clamping is silent by design; saying so is what keeps it from looking
+        # like the viewer ignored verovio_initial_page.
+        requested_page = score_render.get("requested_page")
+        landed_page = score_render.get("initial_page")
+        if requested_page is not None and requested_page != landed_page:
+            summary += (
+                f"\nStart page:      {requested_page} is outside 1..{score_render['page_count']}, "
+                f"showing {landed_page}"
+            )
         if self.status_html is not None:
             self.status_html.value = (
                 "<pre style='margin:0;white-space:pre-wrap'>"
@@ -2887,5 +3126,10 @@ def launch_interactive_facsimile_viewer(
     mei_path: str | Path | ResolvedMeiSource,
     **kwargs: Any,
 ) -> InteractiveFacsimileViewer:
-    """Display a Jupyter viewer for a local path, file URI, or HTTP(S) link."""
+    """Display a Jupyter viewer for a local path, file URI, or HTTP(S) link.
+
+    Remote ``<graphic>`` scans are inlined by default. Notebook widget iframes
+    cannot fetch third-party IIIF URLs; pass ``embed_remote_graphics=False``
+    only for standalone HTML that will run in a normal browser.
+    """
     return InteractiveFacsimileViewer(mei_path, **kwargs).display()
