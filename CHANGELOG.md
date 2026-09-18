@@ -7,10 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Changed
-
-- Restored the MkDocs navigation section label from Documentation to
-  API reference.
+## [0.2.4] - 2026-09-18
 
 ### Added
 
@@ -18,7 +15,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   starting with the ICCCM 2026 poster. Linked it from the README repository
   layout and from About → Talks and posters.
 
-## [0.2.4] - 2026-09-18
+### Changed
+
+- Restored the MkDocs navigation section label from Documentation to
+  API reference.
+- Mapping measures to score pages no longer runs a substring search per measure
+  against every page's SVG; each page's element ids are collected in one pass.
+  On a 183-measure edition with 5.6 MB of SVG this drops from 260 ms to 7.5 ms
+  per render, with an identical mapping.
+- The facsimile viewer now downloads HTTP(S)/IIIF `<graphic @target>` images at
+  a display width and embeds them as data URIs. Notebook iframes were leaving
+  full-resolution BSB URLs in `<img src>`, so the pane stayed empty while the
+  MEI zones themselves parsed. Packaged `camat/examples` copies also include
+  the demo SVG beside the demo MEI.
+- Auto-watch on a remote MEI URL no longer looks inert. The toggle is disabled,
+  and the status keeps the “use Reload source” explanation instead of being
+  overwritten by “Auto-watch off” when the control snaps back.
+- Animation encoding in the convolution explainer now uses a stdout `tqdm`
+  bar with Matplotlib's `_save_count` frame total. `tqdm.notebook` widgets
+  stayed frozen at `0frame [00:00, ?frame/s]` on Jupyter4NFDI. The bar is
+  closed before the HTML player so it is not printed a second time under
+  Once / Loop / Reflect.
 
 ### Fixed
 
@@ -102,26 +119,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `MAX_FACSIMILE_REQUEST_WIDTH` of 2400. With the default 600 px pane and 300%
   zoom the request is now 1800 px wide instead of 1200, so zooming in to read an
   ambiguous accidental no longer runs past the resolution that was fetched.
-
-### Changed
-
-- Mapping measures to score pages no longer runs a substring search per measure
-  against every page's SVG; each page's element ids are collected in one pass.
-  On a 183-measure edition with 5.6 MB of SVG this drops from 260 ms to 7.5 ms
-  per render, with an identical mapping.
-- The facsimile viewer now downloads HTTP(S)/IIIF `<graphic @target>` images at
-  a display width and embeds them as data URIs. Notebook iframes were leaving
-  full-resolution BSB URLs in `<img src>`, so the pane stayed empty while the
-  MEI zones themselves parsed. Packaged `camat/examples` copies also include
-  the demo SVG beside the demo MEI.
-- Auto-watch on a remote MEI URL no longer looks inert. The toggle is disabled,
-  and the status keeps the “use Reload source” explanation instead of being
-  overwritten by “Auto-watch off” when the control snaps back.
-- Animation encoding in the convolution explainer now uses a stdout `tqdm`
-  bar with Matplotlib's `_save_count` frame total. `tqdm.notebook` widgets
-  stayed frozen at `0frame [00:00, ?frame/s]` on Jupyter4NFDI. The bar is
-  closed before the HTML player so it is not printed a second time under
-  Once / Loop / Reflect.
 
 ## [0.2.3] - 2026-09-11
 
