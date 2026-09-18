@@ -569,8 +569,28 @@ def animate_sliding_window(
     return anim, scores
 
 
+def _animation_frame_count(anim) -> int | None:
+    """Return the known frame count for ``anim.save``.
+
+    Matplotlib 3.8+ stores this as ``_save_count``. Older releases used the
+    public ``save_count`` attribute. Either may be ``None`` when the length
+    cannot be inferred.
+    """
+    for name in ("_save_count", "save_count"):
+        value = getattr(anim, name, None)
+        if value is not None:
+            return int(value)
+    return None
+
+
 def _stdout_tqdm(total, desc, unit="frame"):
-    """Text bar that JupyterLab still streams while Matplotlib is blocking."""
+    """Text bar that JupyterLab still streams while Matplotlib is blocking.
+
+    ``tqdm.notebook`` needs an ipywidgets frontend. Jupyter4NFDI often shows
+    only the frozen text repr (``0frame [00:00, ?frame/s]``) and never paints
+    the widget during ``anim.save``. A stdout bar with ``disable=False`` stays
+    visible there. Pass a known ``total`` so the rate is not ``?frame/s``.
+    """
     from tqdm import tqdm
 
     return tqdm(
@@ -578,28 +598,11 @@ def _stdout_tqdm(total, desc, unit="frame"):
         desc=desc,
         unit=unit,
         file=sys.stdout,
-        dynamic_ncols=True,
-        mininterval=0.2,
+        ncols=88,
+        mininterval=0.3,
+        disable=False,
+        leave=True,
     )
-
-
-def _notebook_tqdm(total, desc, unit="frame"):
-    """Prefer ``tqdm.notebook`` in Jupyter; fall back to a stdout bar.
-
-    Importing ``tqdm.notebook`` can succeed even when ipywidgets' ``IProgress``
-    is missing, so construction is what we probe. Jupyter4NFDI and similar
-    JupyterLab sessions also need that import to run in a notebook cell so the
-    widget frontend is registered before encoding starts.
-    """
-    try:
-        from ipywidgets import IntProgress  # noqa: F401
-        from tqdm.notebook import tqdm as notebook_tqdm
-    except ImportError:
-        return _stdout_tqdm(total, desc, unit)
-    try:
-        return notebook_tqdm(total=total, desc=desc, unit=unit)
-    except Exception:
-        return _stdout_tqdm(total, desc, unit)
 
 
 def display_anim_html(
@@ -615,17 +618,17 @@ def display_anim_html(
 
     ``dpi`` is pixels per inch of the figure (raise this if the movie looks
     blurry). ``jpeg_quality`` is 1–95 (raise this if you see blocky artifacts).
-    When ``progress`` is true, a ``tqdm.notebook`` bar tracks Matplotlib's
-    frame encoding (the slow part of building the HTML player). If notebook
-    widgets are unavailable, a stdout bar is used instead.
+    When ``progress`` is true, a text ``tqdm`` bar on stdout tracks Matplotlib's
+    frame encoding. Notebook widgets are not used: they do not update on
+    Jupyter4NFDI during this blocking save.
     """
     from IPython.display import HTML, display
 
     fps = max(1.0, 1000.0 / float(interval_ms))
     writer = animation.HTMLWriter(fps=fps, embed_frames=True, default_mode="once")
     writer.frame_format = "jpeg"
-    n_guess = getattr(anim, "save_count", None)
-    pbar = _notebook_tqdm(n_guess, desc=desc) if progress else None
+    n_frames = _animation_frame_count(anim)
+    pbar = _stdout_tqdm(n_frames, desc=desc) if progress else None
 
     def progress_callback(current_frame, total_frames):
         if pbar is None:
@@ -636,6 +639,16 @@ def display_anim_html(
         delta = target - pbar.n
         if delta:
             pbar.update(delta)
+            sys.stdout.flush()
+
+    def close_pbar():
+        nonlocal pbar
+        if pbar is None:
+            return
+        if pbar.total is not None and pbar.n < pbar.total:
+            pbar.update(pbar.total - pbar.n)
+        pbar.close()
+        pbar = None
 
     try:
         with tempfile.TemporaryDirectory() as tmp:
@@ -650,10 +663,13 @@ def display_anim_html(
                 },
                 progress_callback=progress_callback if progress else None,
             )
+            # Finish the stdout bar before the HTML player. Jupyter treats
+            # display() as a new output, so closing afterwards reprinted the
+            # completed bar under Once / Loop / Reflect.
+            close_pbar()
             display(HTML(Path(path).read_text()))
     finally:
-        if pbar is not None:
-            pbar.close()
+        close_pbar()
 
 
 def plot_stride_comparison(

@@ -85,50 +85,104 @@ def test_scale_plot_and_search_share_pitch_time_and_rounding_controls(monkeypatc
         plt.close("all")
 
 
-def test_notebook_tqdm_falls_back_when_ipywidgets_missing(monkeypatch):
-    import sys
+def test_animation_frame_count_reads_matplotlib_private_save_count():
+    import camat.binary_convolution as bc
+
+    class Anim:
+        _save_count = 221
+
+    assert bc._animation_frame_count(Anim()) == 221
+
+
+def test_animation_frame_count_falls_back_to_public_save_count():
+    import camat.binary_convolution as bc
+
+    class Anim:
+        save_count = 576
+
+    assert bc._animation_frame_count(Anim()) == 576
+
+
+def test_stdout_tqdm_keeps_a_known_total_on_non_tty(monkeypatch):
+    import io
 
     import tqdm as tqdm_std
 
     import camat.binary_convolution as bc
 
-    monkeypatch.setitem(sys.modules, "ipywidgets", None)
-    pbar = bc._notebook_tqdm(10, "Encoding frames")
+    buf = io.StringIO()
+    monkeypatch.setattr(bc.sys, "stdout", buf)
+    pbar = bc._stdout_tqdm(221, "Encoding valid-padding frames")
     try:
         assert type(pbar) is tqdm_std.tqdm
-        assert pbar.total == 10
-        pbar.update(3)
-        assert pbar.n == 3
+        assert pbar.disable is False
+        assert pbar.total == 221
+        pbar.update(10)
+        pbar.refresh()
+        assert pbar.n == 10
+        assert "0/221" in buf.getvalue() or "10/221" in buf.getvalue()
     finally:
         pbar.close()
 
 
-def test_notebook_tqdm_falls_back_when_widget_construction_fails(monkeypatch):
+def test_display_anim_html_closes_bar_before_html_player(monkeypatch):
     import sys
     import types
-
-    import tqdm as tqdm_std
+    from pathlib import Path
 
     import camat.binary_convolution as bc
 
-    widgets = types.ModuleType("ipywidgets")
-    widgets.IntProgress = object
-    fake_notebook = types.ModuleType("tqdm.notebook")
+    order = []
 
-    def boom(*args, **kwargs):
-        raise ImportError("IProgress not found")
+    class DummyPbar:
+        def __init__(self):
+            self.n = 0
+            self.total = 3
 
-    fake_notebook.tqdm = boom
-    monkeypatch.setitem(sys.modules, "ipywidgets", widgets)
-    monkeypatch.setitem(sys.modules, "tqdm.notebook", fake_notebook)
+        def reset(self, total=None):
+            self.total = total
+            self.n = 0
 
-    pbar = bc._notebook_tqdm(4, "Encoding frames")
-    try:
-        assert type(pbar) is tqdm_std.tqdm
-        pbar.update(1)
-        assert pbar.n == 1
-    finally:
-        pbar.close()
+        def update(self, delta):
+            self.n += delta
+
+        def close(self):
+            order.append(("close", self.n))
+
+    class DummyAnim:
+        _save_count = 3
+
+        def save(self, path, **kwargs):
+            Path(path).write_text("<html>player</html>")
+            callback = kwargs.get("progress_callback")
+            for i in range(3):
+                callback(i, 3)
+            order.append("save-done")
+
+    class DummyWriter:
+        def __init__(self, **kwargs):
+            self.frame_format = "jpeg"
+
+    ipython = types.ModuleType("IPython")
+    display_mod = types.ModuleType("IPython.display")
+
+    def fake_html(text):
+        return types.SimpleNamespace(data=text)
+
+    def fake_display(obj):
+        order.append(("display", getattr(obj, "data", obj)))
+
+    display_mod.HTML = fake_html
+    display_mod.display = fake_display
+    monkeypatch.setitem(sys.modules, "IPython", ipython)
+    monkeypatch.setitem(sys.modules, "IPython.display", display_mod)
+    monkeypatch.setattr(bc, "_stdout_tqdm", lambda *args, **kwargs: DummyPbar())
+    monkeypatch.setattr(bc.animation, "HTMLWriter", DummyWriter)
+
+    bc.display_anim_html(DummyAnim(), 120, desc="Encoding")
+    close_at = order.index(("close", 3))
+    display_at = next(i for i, item in enumerate(order) if item[0] == "display")
+    assert order.index("save-done") < close_at < display_at
 
 
 def test_recipe_comparison_returns_displayed_kernels_without_mutating_recipes(monkeypatch):

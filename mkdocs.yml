@@ -68,7 +68,7 @@ nav:
           - Binary representations: guides/binary-representations.md
   - Further guides:
       - Backend and specialized parsing: tutorial.md
-  - Documentation:
+  - API reference:
       - Overview: reference.md
       - API:
           - Top-level API: api/camat.md

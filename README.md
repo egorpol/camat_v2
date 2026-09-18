@@ -95,8 +95,8 @@ Command-line tools such as `camat-convert`, `camat-check-mei`, and
 
 The PyPI wheel is the `camat` package: library code, a few packaged example
 scores, and the MEI 5.1 Common Music Notation schema. This git checkout also
-holds tutorials, documentation sources, tests, and working corpora that are
-not shipped on PyPI.
+holds tutorials, documentation sources, tests, working corpora, and conference
+materials that are not shipped on PyPI.
 
 ```text
 camat_v2/
@@ -105,6 +105,7 @@ camat_v2/
 │   └── schemas/      MEI 5.1 CMN RELAX NG schema
 ├── notebooks/        Showcase tutorials, grouped into independent learning tracks
 ├── docs/             MkDocs sources published on Read the Docs
+├── presentations/    Conference posters and talks (outside the installable package)
 ├── tests/            Pytest suite and synthetic fixtures
 ├── scripts/          Release checks, docs hooks, and maintainer probes
 ├── test_corpus/      Local MEI fixtures and corpus URL manifests

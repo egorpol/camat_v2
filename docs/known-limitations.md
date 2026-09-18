@@ -52,8 +52,12 @@ The linked viewer switches among MEI `<surface>` elements according to the
 measure links on the active Verovio page. If one rendered score page contains
 measures from multiple surfaces, it initially shows the surface referenced by
 the most measures; hovering or clicking a linked measure selects its exact
-surface. Remote MEI and remote `<graphic>` targets require network access when
-they are first loaded.
+surface. Remote MEI is downloaded and cached. The interactive viewer also
+downloads remote `<graphic>` targets at a display width and inlines them,
+because Jupyter and VS Code/Cursor notebook widget iframes cannot fetch
+third-party IIIF URLs. Pass `embed_remote_graphics=False` only for standalone
+HTML in a normal browser; that pane then needs network access for as long as
+it is open.
 
 Verovio preserves `<annot>` records anchored by `@plist` or `@tstamp`, but does
 not engrave their paragraph text. CAMAT supplies an annotation list and score

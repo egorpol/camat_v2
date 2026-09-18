@@ -172,6 +172,7 @@ def test_packaged_example_resolves_without_source_tree(
     assert info.kind == "packaged"
     assert info.local_path.is_file()
     assert "facsimile_viewer_demo.mei" in info.local_path.name
+    assert (info.local_path.parent / "facsimile_viewer_demo.svg").is_file()
 
 
 def _notebook_code(name: str) -> str:

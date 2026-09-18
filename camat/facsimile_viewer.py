@@ -26,6 +26,7 @@ import time
 from typing import Any, Callable
 from urllib.parse import unquote, urljoin, urlparse
 import uuid
+import weakref
 import xml.etree.ElementTree as ET
 
 import verovio
@@ -38,6 +39,20 @@ NS = {"m": MEI_NS}
 
 DEFAULT_PORTRAIT_SIZE = (2100, 2970)
 DEFAULT_LANDSCAPE_SIZE = (2970, 2100)
+# Cap IIIF/full-resolution graphics so notebook iframes stay display-sized.
+DEFAULT_FACSIMILE_DISPLAY_WIDTH = 1200
+# Ceiling for a zoom-driven request. A wide zoom range should buy a sharper scan,
+# but not at the cost of holding several near-original-resolution images decoded.
+MAX_FACSIMILE_REQUEST_WIDTH = 2400
+# An editor saving in place leaves the MEI briefly truncated, so an auto-watch
+# reload that lands mid-write retries instead of reporting a parse error.
+WATCH_PARSE_RETRIES = 3
+WATCH_PARSE_RETRY_SEC = 0.25
+_IIIF_IMAGE_TAIL = re.compile(
+    r"/full/(?P<size>[^/]+)/(?P<rotation>[^/]+)/(?P<quality>[^/.]+)"
+    r"\.(?P<fmt>[A-Za-z0-9]+)$",
+    flags=re.IGNORECASE,
+)
 
 __all__ = [
     "DEFAULT_LANDSCAPE_SIZE",
@@ -58,10 +73,12 @@ __all__ = [
     "embed_viewer_html",
     "mei_file_fingerprint",
     "infer_facsimile_layout",
+    "json_for_script",
     "probe_note_pname",
     "read_facsimile_model",
     "render_verovio_pages",
     "resolve_graphic_src",
+    "display_iiif_url",
     "resolve_mei_source",
     "resolve_mei_source_info",
     "resolve_repo_path",
@@ -119,6 +136,33 @@ def _default_mei_cache_dir(repo_root: Path | None = None) -> Path:
     return Path(get_download_cache_dir())
 
 
+def _packaged_examples_dir() -> Path | None:
+    """Extract ``camat/examples`` into the download cache and return that folder.
+
+    Graphics such as ``facsimile_viewer_demo.svg`` live beside the demo MEI in
+    the wheel. Copying only the MEI left relative ``<graphic @target>`` values
+    unresolvable in cloud notebooks.
+    """
+    from importlib.resources import as_file, files
+
+    examples = files("camat").joinpath("examples")
+    if not examples.is_dir():
+        return None
+    from .music_utils import get_download_cache_dir
+
+    cache = Path(get_download_cache_dir()) / "packaged_examples"
+    cache.mkdir(parents=True, exist_ok=True)
+    for child in examples.iterdir():
+        if not child.is_file():
+            continue
+        target = cache / child.name
+        with as_file(child) as extracted:
+            data = Path(extracted).read_bytes()
+        if not target.is_file() or target.read_bytes() != data:
+            target.write_bytes(data)
+    return cache
+
+
 def _packaged_example_path(source: str | Path) -> Path | None:
     """Return a filesystem path for ``camat/examples/<file>`` from the wheel."""
     posix = Path(source).as_posix()
@@ -128,21 +172,11 @@ def _packaged_example_path(source: str | Path) -> Path | None:
     name = posix[len(prefix) :]
     if not name or "/" in name or name.startswith("."):
         return None
-    from importlib.resources import as_file, files
-
-    resource = files("camat").joinpath("examples", name)
-    if not resource.is_file():
+    cache = _packaged_examples_dir()
+    if cache is None:
         return None
-    from .music_utils import get_download_cache_dir
-
-    cache = Path(get_download_cache_dir()) / "packaged_examples"
-    cache.mkdir(parents=True, exist_ok=True)
     target = cache / name
-    with as_file(resource) as extracted:
-        data = extracted.read_bytes()
-    if not target.is_file() or target.read_bytes() != data:
-        target.write_bytes(data)
-    return target.resolve()
+    return target.resolve() if target.is_file() else None
 
 
 def _is_windows_absolute_path(source: str) -> bool:
@@ -305,6 +339,66 @@ def parse_int_attr(element: ET.Element, attr: str, *, context: str) -> int:
         raise ValueError(f"Invalid @{attr}={value!r} on {context}") from exc
 
 
+_PROBLEM_REPORT_LIMIT = 20
+# Deliberately unanchored, matching every `id="..."` occurrence the substring
+# scan this replaced would have found, including a `data-id="..."` suffix.
+_SVG_ELEMENT_ID = re.compile(r'id="([^"]+)"')
+
+
+def _format_facsimile_problems(
+    problems: list[str], mei_path: Path, repo_root: Path | None
+) -> str:
+    """Render every collected problem as one numbered report."""
+    shown = problems[:_PROBLEM_REPORT_LIMIT]
+    lines = [f"  {index}. {text}" for index, text in enumerate(shown, start=1)]
+    if len(problems) > len(shown):
+        lines.append(f"  … and {len(problems) - len(shown)} more")
+    heading = (
+        f"Found {len(problems)} facsimile problem(s) in "
+        f"{display_path(mei_path, repo_root=repo_root)}:"
+        if len(problems) > 1
+        else f"In {display_path(mei_path, repo_root=repo_root)}:"
+    )
+    return "\n".join([heading, *lines])
+
+
+def _is_measure_zone(zone: ET.Element) -> bool:
+    """Whether ``zone`` is typed as a measure zone.
+
+    ``@type`` is a token list in MEI, so ``type="measure staff"`` is a measure
+    zone. An exact, case-sensitive equality test rejected that, and rejected
+    ``Measure`` too, then reported the file as having no zones at all.
+    """
+    return "measure" in (zone.get("type") or "").lower().split()
+
+
+def _zone_geometry_problem(
+    zone_id: str,
+    corners: dict[str, int],
+    image_width: int,
+    image_height: int,
+) -> str | None:
+    """Describe why ``corners`` cannot be drawn, or ``None`` if they can.
+
+    An inverted or out-of-bounds zone produces an overlay rectangle that is
+    invisible or clipped away, which reads as "the alignment is broken" rather
+    than "this one zone is mis-encoded".
+    """
+    ulx, uly, lrx, lry = (corners["ulx"], corners["uly"], corners["lrx"], corners["lry"])
+    if lrx <= ulx or lry <= uly:
+        return (
+            f"Zone {zone_id} has no area: "
+            f"ulx={ulx} uly={uly} lrx={lrx} lry={lry} "
+            "(lrx/lry must be greater than ulx/uly)"
+        )
+    if ulx < 0 or uly < 0 or lrx > image_width or lry > image_height:
+        return (
+            f"Zone {zone_id} falls outside its {image_width}x{image_height} graphic: "
+            f"ulx={ulx} uly={uly} lrx={lrx} lry={lry}"
+        )
+    return None
+
+
 def resolve_graphic_src(
     target: str,
     mei_path: Path,
@@ -328,11 +422,130 @@ def resolve_graphic_src(
         image_path = mei_path.parent / image_path
     image_path = image_path.resolve()
     if not image_path.is_file():
-        return target
+        posix_target = Path(target).as_posix()
+        if "/" not in posix_target and not parsed.scheme:
+            packaged = _packaged_example_path(f"camat/examples/{Path(target).name}")
+            if packaged is not None:
+                image_path = packaged
+        if not image_path.is_file():
+            return target
 
     mime_type = mimetypes.guess_type(image_path.name)[0] or "application/octet-stream"
     payload = b64encode(image_path.read_bytes()).decode("ascii")
     return f"data:{mime_type};base64,{payload}"
+
+
+def display_iiif_url(url: str, max_width: int) -> str:
+    """Rewrite an IIIF Image API request so its width does not exceed ``max_width``.
+
+    Full-resolution BSB derivatives are several thousand pixels wide. Notebook
+    iframes only need a display-sized image, and requesting the original often
+    stalls or is blocked. Non-IIIF URLs are returned unchanged.
+    """
+    if max_width <= 0:
+        return url
+    match = _IIIF_IMAGE_TAIL.search(url)
+    if not match:
+        return url
+    size = match.group("size")
+    current_width: int | None
+    if re.fullmatch(r"\d+,", size):
+        current_width = int(size[:-1])
+    elif re.fullmatch(r"\d+,\d+", size):
+        current_width = int(size.split(",", 1)[0])
+    elif size.lower() in {"full", "max", "^max"}:
+        current_width = None
+    else:
+        return url
+    if current_width is not None and current_width <= max_width:
+        return url
+    start, end = match.span("size")
+    return f"{url[:start]}{int(max_width)},{url[end:]}"
+
+
+def _facsimile_display_width(
+    *,
+    facsimile_max_width: int,
+    image_width: int | None = None,
+    max_zoom_percent: int | float = 200,
+) -> int:
+    """Pick the width to request a facsimile graphic at.
+
+    Sized for the most the user can zoom to rather than a fixed multiple of the
+    pane. Zooming in to read an ambiguous accidental is the main reason to zoom a
+    facsimile at all, and a derivative narrower than the zoomed pane is exactly
+    where that goes soft.
+    """
+    zoom_factor = max(1.0, float(max_zoom_percent) / 100.0)
+    display_width = max(800, int(int(facsimile_max_width) * zoom_factor))
+    display_width = min(display_width, MAX_FACSIMILE_REQUEST_WIDTH)
+    if image_width and image_width > 0:
+        return min(int(image_width), display_width)
+    return display_width
+
+
+def _embed_remote_graphic_src(
+    src: str,
+    *,
+    max_width: int | None = None,
+    timeout_seconds: int = 60,
+    cache_dir: str | Path | None = None,
+) -> str:
+    """Download an HTTP(S) graphic and return a data URI; otherwise keep ``src``."""
+    parsed = urlparse(src)
+    if parsed.scheme not in {"http", "https"}:
+        return src
+    fetch_url = display_iiif_url(src, max_width) if max_width else src
+    try:
+        from .music_utils import get_file_path
+
+        path = Path(
+            get_file_path(
+                fetch_url,
+                timeout_seconds=timeout_seconds,
+                use_cache=True,
+                cache_dir=(
+                    str(cache_dir)
+                    if cache_dir is not None
+                    else str(_default_mei_cache_dir())
+                ),
+            )
+        )
+        if not path.is_file() or path.stat().st_size == 0:
+            return fetch_url
+        mime_type = mimetypes.guess_type(path.name)[0] or "image/jpeg"
+        payload = b64encode(path.read_bytes()).decode("ascii")
+        return f"data:{mime_type};base64,{payload}"
+    except (OSError, ValueError):
+        return fetch_url
+
+
+def _browser_graphic_src(
+    surface: dict,
+    *,
+    facsimile_max_width: int,
+    embed_remote_graphics: bool = False,
+    max_zoom_percent: int | float = 200,
+) -> str:
+    """Return the ``<img src>`` for a surface, at a display-appropriate width.
+
+    Remote graphics stay as width-capped IIIF URLs when
+    ``embed_remote_graphics`` is false, which is suitable for standalone HTML
+    in a normal browser. Jupyter widget iframes inherit a CSP that blocks those
+    third-party ``<img src>`` requests, so the interactive viewer inlines them
+    as data URIs by default.
+    """
+    src = surface.get("graphic_src") or ""
+    width = _facsimile_display_width(
+        facsimile_max_width=facsimile_max_width,
+        image_width=surface.get("image_width"),
+        max_zoom_percent=max_zoom_percent,
+    )
+    if embed_remote_graphics:
+        return _embed_remote_graphic_src(src, max_width=width)
+    if urlparse(src).scheme in {"http", "https"}:
+        return display_iiif_url(src, width)
+    return src
 
 
 def _local_name(element: ET.Element) -> str:
@@ -515,7 +728,14 @@ def infer_facsimile_layout(model: dict) -> dict:
 
 
 def apply_facsimile_layout(mei_text: str, model: dict) -> tuple[str, dict]:
-    """Inject missing facsimile-derived breaks into a temporary MEI document."""
+    """Inject missing facsimile-derived breaks into a temporary MEI document.
+
+    Returns MEI text for Verovio to render, never touching the file on disk. The
+    text is a round-trip through ElementTree, so it drops the XML declaration and
+    any processing instructions, such as ``<?xml-model?>``, that the source
+    carried. Verovio does not need either, but the result is therefore not a
+    faithful copy of the input beyond its elements and attributes.
+    """
     layout = dict(model.get("layout") or infer_facsimile_layout(model))
     root = ET.fromstring(mei_text)
     parent_map = {child: parent for parent in root.iter() for child in parent}
@@ -581,6 +801,11 @@ def apply_facsimile_layout(mei_text: str, model: dict) -> tuple[str, dict]:
             parent.insert(position, marker)
             position += 1
 
+    # Process-global, and every MEI-writing module in this package registers the
+    # same mapping, so there is nothing to conflict with. Kept at the point of use
+    # rather than at import so serialization here cannot depend on which other
+    # module happened to be imported first. ``default_namespace`` on ``tostring``
+    # is not an alternative: MEI's attributes are unqualified, which it rejects.
     ET.register_namespace("", MEI_NS)
     layout["alignment_applied"] = bool(insertions)
     layout["applied_page_breaks"] = [row["measure_id"] for row in page_targets]
@@ -611,14 +836,17 @@ def read_facsimile_model(
     def score_only_model(reason: str) -> dict:
         measures = []
         for measure in root.findall(".//m:measure", NS):
-            facs = measure.get("facs") or ""
+            facs = (measure.get("facs") or "").strip()
+            zone_ids = [token.removeprefix("#") for token in facs.split()]
             measures.append(
                 {
                     "measure_id": measure.get(XML_ID) or "",
                     "measure_n": measure.get("n") or "",
                     "facs": facs,
-                    "zone_id": facs[1:] if facs.startswith("#") else facs,
+                    "zone_id": zone_ids[0] if zone_ids else "",
+                    "zone_ids": zone_ids,
                     "zone": None,
+                    "zones": [],
                     "surface_id": None,
                     "surface_index": None,
                     "status": "facsimile unavailable",
@@ -662,55 +890,96 @@ def read_facsimile_model(
             return score_only_model(message)
         raise FacsimileUnavailableError(message)
 
-    facsimile = root.find(".//m:facsimile", NS)
-    if facsimile is None:
+    facsimile_elements = root.findall(".//m:facsimile", NS)
+    if not facsimile_elements:
         return unavailable(
             f"No <facsimile> found in {display_path(mei_path, repo_root=repo_root)}"
         )
 
-    surface_elements = facsimile.findall("m:surface", NS)
+    # MEI permits several <facsimile> elements — one per witness in <sourceDesc>,
+    # say — and lets <surfaceGrp> nest surfaces within one. Reading only the
+    # first <facsimile>'s direct children turned zones that measures legitimately
+    # point at into "unresolved measure @facs" errors.
+    surface_elements = [
+        surface
+        for facsimile in facsimile_elements
+        for surface in facsimile.iterfind(".//m:surface", NS)
+    ]
     if not surface_elements:
         return unavailable(
             f"No <surface> found in <facsimile> for {display_path(mei_path, repo_root=repo_root)}"
         )
 
+    # Collect every structural problem rather than raising on the first. This is
+    # a proofreading tool: fixing one bad zone only to be shown the next one on
+    # the following run makes a 200-measure edition tedious to correct.
+    problems: list[str] = []
     surfaces = []
     zones = {}
+    total_zone_count = 0
+    typed_zone_count = 0
     for source_index, surface in enumerate(surface_elements):
-        measure_zones = [
-            zone
-            for zone in surface.findall("m:zone", NS)
-            if zone.get("type") == "measure"
+        all_zone_elements = surface.findall("m:zone", NS)
+        total_zone_count += len(all_zone_elements)
+        typed_zone_count += sum(1 for zone in all_zone_elements if zone.get("type"))
+        surface_zone_elements = [
+            zone for zone in all_zone_elements if _is_measure_zone(zone)
         ]
-        if not measure_zones:
+        if not surface_zone_elements:
             continue
 
         surface_id = surface.get(XML_ID) or f"surface-{source_index + 1}"
         graphic = surface.find("m:graphic", NS)
         if graphic is None:
-            raise RuntimeError(
+            problems.append(
                 f"Facsimile surface {surface_id!r} has measure zones but no <graphic>"
             )
+            continue
         graphic_target = graphic.get("target")
         if not graphic_target:
-            raise RuntimeError(
+            problems.append(
                 f"The <graphic> on facsimile surface {surface_id!r} has no @target"
             )
+            continue
+
+        try:
+            image_width = parse_int_attr(
+                graphic, "width", context=f"graphic on surface {surface_id}"
+            )
+            image_height = parse_int_attr(
+                graphic, "height", context=f"graphic on surface {surface_id}"
+            )
+        except ValueError as exc:
+            problems.append(str(exc))
+            continue
 
         surface_index = len(surfaces)
         surface_zones = {}
-        for zone in measure_zones:
+        for zone in surface_zone_elements:
             zone_id = zone.get(XML_ID)
             if not zone_id:
-                raise RuntimeError("A measure <zone> is missing xml:id")
+                problems.append(f"A measure <zone> on surface {surface_id!r} has no xml:id")
+                continue
             if zone_id in zones:
-                raise RuntimeError(f"Duplicate measure zone xml:id: {zone_id}")
+                problems.append(f"Duplicate measure zone xml:id: {zone_id}")
+                continue
+            try:
+                corners = {
+                    name: parse_int_attr(zone, name, context=f"zone {zone_id}")
+                    for name in ("ulx", "uly", "lrx", "lry")
+                }
+            except ValueError as exc:
+                problems.append(str(exc))
+                continue
+            geometry_problem = _zone_geometry_problem(
+                zone_id, corners, image_width, image_height
+            )
+            if geometry_problem is not None:
+                problems.append(geometry_problem)
+                continue
             zone_model = {
                 "id": zone_id,
-                "ulx": parse_int_attr(zone, "ulx", context=f"zone {zone_id}"),
-                "uly": parse_int_attr(zone, "uly", context=f"zone {zone_id}"),
-                "lrx": parse_int_attr(zone, "lrx", context=f"zone {zone_id}"),
-                "lry": parse_int_attr(zone, "lry", context=f"zone {zone_id}"),
+                **corners,
                 "surface_id": surface_id,
                 "surface_index": surface_index,
             }
@@ -728,20 +997,30 @@ def read_facsimile_model(
                     mei_path,
                     base_uri=source_info.base_uri,
                 ),
-                "image_width": parse_int_attr(
-                    graphic, "width", context=f"graphic on surface {surface_id}"
-                ),
-                "image_height": parse_int_attr(
-                    graphic, "height", context=f"graphic on surface {surface_id}"
-                ),
+                "image_width": image_width,
+                "image_height": image_height,
                 "zones": surface_zones,
             }
         )
 
     if not surfaces:
+        if problems:
+            raise RuntimeError(_format_facsimile_problems(problems, mei_path, repo_root))
+        # Distinguish "this MEI has no zones" from "its zones are typed something
+        # other than measure". Both used to produce the first message, which sent
+        # people looking for missing zones that were in front of them.
+        if total_zone_count == 0:
+            located = "its surfaces contain no <zone> elements"
+        elif typed_zone_count == 0:
+            located = f"{total_zone_count} <zone> element(s) carry no @type"
+        else:
+            located = (
+                f"none of its {total_zone_count} <zone> element(s) are typed as "
+                "measure zones"
+            )
         return unavailable(
             f"No facsimile surface with measure zones found in "
-            f"{display_path(mei_path, repo_root=repo_root)}"
+            f"{display_path(mei_path, repo_root=repo_root)}: {located}"
         )
 
     measures = []
@@ -750,18 +1029,28 @@ def read_facsimile_model(
     for measure in root.findall(".//m:measure", NS):
         measure_id = measure.get(XML_ID)
         measure_n = measure.get("n") or ""
-        facs = measure.get("facs") or ""
-        zone_id = facs[1:] if facs.startswith("#") else facs
-        zone = zones.get(zone_id) if zone_id else None
-        status = "linked" if zone else "missing facs" if not zone_id else "unresolved facs"
+        facs = (measure.get("facs") or "").strip()
+        # @facs holds a *list* of URIs: a measure broken across a system or page
+        # break carries one zone per fragment.
+        zone_ids = [token.removeprefix("#") for token in facs.split()]
+        measure_zones = [zones[zone_id] for zone_id in zone_ids if zone_id in zones]
+        if not zone_ids:
+            status = "missing facs"
+        elif len(measure_zones) < len(zone_ids):
+            status = "unresolved facs"
+        else:
+            status = "linked"
+        primary = measure_zones[0] if measure_zones else None
         row = {
             "measure_id": measure_id or "",
             "measure_n": measure_n,
             "facs": facs,
-            "zone_id": zone_id,
-            "zone": zone,
-            "surface_id": zone["surface_id"] if zone else None,
-            "surface_index": zone["surface_index"] if zone else None,
+            "zone_id": zone_ids[0] if zone_ids else "",
+            "zone_ids": zone_ids,
+            "zone": primary,
+            "zones": measure_zones,
+            "surface_id": primary["surface_id"] if primary else None,
+            "surface_index": primary["surface_index"] if primary else None,
             "status": status,
         }
         measures.append(row)
@@ -773,8 +1062,28 @@ def read_facsimile_model(
     if not measures:
         raise RuntimeError(f"No score <measure> elements found in {display_path(mei_path, repo_root=repo_root)}")
     if unresolved:
-        examples = ", ".join(row["facs"] for row in unresolved[:5])
-        raise RuntimeError(f"Found {len(unresolved)} unresolved measure @facs link(s): {examples}")
+        if problems:
+            # These links point at zones the problems above made unusable, so
+            # listing each one again would bury the causes under its effects.
+            problems.append(
+                f"Found {len(unresolved)} unresolved measure @facs link(s), "
+                "likely a consequence of the problems above"
+            )
+        else:
+            # Name the tokens that failed to resolve, not the whole attribute: a
+            # multi-zone @facs is usually broken in only one of its references.
+            examples = ", ".join(
+                f"#{zone_id}"
+                for row in unresolved[:5]
+                for zone_id in row["zone_ids"]
+                if zone_id not in zones
+            )
+            problems.append(
+                f"Found {len(unresolved)} unresolved measure @facs link(s): {examples}"
+            )
+
+    if problems:
+        raise RuntimeError(_format_facsimile_problems(problems, mei_path, repo_root))
 
     linked = [row for row in measures if row["status"] == "linked"]
     first_surface = surfaces[0]
@@ -790,6 +1099,7 @@ def read_facsimile_model(
         "graphic_src": first_surface["graphic_src"],
         "image_width": first_surface["image_width"],
         "image_height": first_surface["image_height"],
+        "facsimile_count": len(facsimile_elements),
         "surfaces": surfaces,
         "zones": zones,
         "measures": measures,
@@ -850,10 +1160,13 @@ def format_facsimile_summary(model: dict, *, repo_root: Path | None = None) -> s
             f"{len(layout.get('missing_system_breaks', []))} missing <sb>"
         )
     )
+    facsimile_count = model.get("facsimile_count", 1)
+    # Merging several <facsimile> elements is usually right but never obvious.
+    merged = f" (merged from {facsimile_count} <facsimile>)" if facsimile_count > 1 else ""
     return (
         f"MEI:             {display_path(mei_path, repo_root=repo_root)}\n"
         f"Viewer mode:     score + facsimile\n"
-        f"Surfaces:        {len(model.get('surfaces', []))}\n"
+        f"Surfaces:        {len(model.get('surfaces', []))}{merged}\n"
         f"Measures:        {len(model['measures'])}\n"
         f"Linked zones:    {len(model['linked'])}\n"
         f"Missing @facs:   {len(model['missing_facs'])}\n"
@@ -880,6 +1193,7 @@ def build_facsimile_viewer(
     viewer_id: str | None = None,
     viewer_max_height: int = 820,
     facsimile_max_width: int = 600,
+    embed_remote_graphics: bool = False,
     zone_opacity: float = 0.18,
     initial_score_zoom_percent: int | float = 100,
     initial_facsimile_zoom_percent: int | float = 100,
@@ -892,6 +1206,7 @@ def build_facsimile_viewer(
     show_annotations: bool = True,
     annotation_display_limit: int = 300,
     align_to_facsimile: bool = False,
+    clamp_initial_page: bool = False,
 ) -> dict:
     """Render linked facsimiles or fall back to a score-only MEI viewer."""
     source_info = resolve_mei_source_info(mei_path, repo_root=repo_root)
@@ -935,6 +1250,7 @@ def build_facsimile_viewer(
             show_verovio_warnings=show_verovio_warnings,
             mei_text=mei_text,
             annotations=model.get("annotations", []),
+            clamp_initial_page=clamp_initial_page,
         )
         viewer_cache.score_hash = current_score_hash
         viewer_cache.options_hash = current_options_hash
@@ -952,6 +1268,7 @@ def build_facsimile_viewer(
         viewer_id=viewer_id,
         viewer_max_height=viewer_max_height,
         facsimile_max_width=facsimile_max_width,
+        embed_remote_graphics=embed_remote_graphics,
         zone_opacity=zone_opacity,
         initial_score_zoom_percent=initial_score_zoom_percent,
         initial_facsimile_zoom_percent=initial_facsimile_zoom_percent,
@@ -1193,11 +1510,17 @@ def render_verovio_pages(
     show_verovio_warnings: bool = False,
     mei_text: str | None = None,
     annotations: list[dict] | None = None,
+    clamp_initial_page: bool = False,
 ) -> dict:
     """Render all Verovio pages and return SVG strings plus page metadata.
 
     Verovio layout messages such as ``Justification is highly compressed`` are
     suppressed unless ``show_verovio_warnings`` is True.
+
+    An ``initial_page`` past the end is an error by default. Set
+    ``clamp_initial_page`` to fold it into range instead, which is what a reload
+    wants: deleting measures is a normal edit, and the page number was a
+    launch-time preference rather than an assertion about the file's future.
     """
     mei_path = resolve_mei_source(mei_path, repo_root=repo_root)
     mei_text = mei_text if mei_text is not None else mei_path.read_text(encoding="utf-8")
@@ -1211,10 +1534,14 @@ def render_verovio_pages(
             )
 
         page_count = toolkit.getPageCount()
+        requested_page = initial_page
         if initial_page < 1 or initial_page > page_count:
-            raise ValueError(
-                f"initial_page={initial_page} is outside the rendered page range 1..{page_count}"
-            )
+            if not clamp_initial_page:
+                raise ValueError(
+                    f"initial_page={initial_page} is outside the rendered page "
+                    f"range 1..{page_count}"
+                )
+            initial_page = max(1, min(initial_page, page_count))
 
         pages = []
         for page_number in range(1, page_count + 1):
@@ -1230,6 +1557,7 @@ def render_verovio_pages(
         "page_count": page_count,
         "initial_page": initial_page,
         "initial_page_index": initial_page - 1,
+        "requested_page": requested_page,
         "pages": pages,
         "annotations": resolved_annotations,
     }
@@ -1298,6 +1626,23 @@ def make_diagnostic_table(model: dict, *, show: bool = True) -> str:
     """
 
 
+def json_for_script(payload: Any) -> str:
+    """Serialize ``payload`` for inlining in an HTML ``<script>`` element.
+
+    ``json.dumps`` leaves ``<`` and ``>`` intact, so annotation text or an
+    ``xml:id`` containing ``</script>`` would close the element early and let
+    the remainder of the MEI run as script. The escapes below are still valid
+    JSON, so the value parses identically. Non-ASCII, including the line
+    separators U+2028 and U+2029, is already escaped by ``ensure_ascii``.
+    """
+    return (
+        json.dumps(payload)
+        .replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+        .replace("&", "\\u0026")
+    )
+
+
 def make_viewer_html(
     model: dict,
     score_pages: list[dict],
@@ -1307,6 +1652,7 @@ def make_viewer_html(
     viewer_id: str | None = None,
     viewer_max_height: int = 820,
     facsimile_max_width: int = 600,
+    embed_remote_graphics: bool = False,
     zone_opacity: float = 0.18,
     initial_score_zoom_percent: int | float = 100,
     initial_facsimile_zoom_percent: int | float = 100,
@@ -1317,6 +1663,8 @@ def make_viewer_html(
     show_annotations: bool = True,
     annotation_display_limit: int = 300,
 ) -> str:
+    if not score_pages:
+        raise ValueError("score_pages must not be empty; there is nothing to display")
     zoom_values = {
         "initial_score_zoom_percent": initial_score_zoom_percent,
         "initial_facsimile_zoom_percent": initial_facsimile_zoom_percent,
@@ -1360,6 +1708,9 @@ def make_viewer_html(
     measure_page = {}
     score_page_html = []
     initial_page_index = max(0, min(initial_page_index, len(score_pages) - 1))
+    linked_measure_ids = {
+        row["measure_id"] for row in model["linked"] if row["measure_id"]
+    }
 
     for index, page in enumerate(score_pages):
         page_number = page["number"]
@@ -1369,35 +1720,42 @@ def make_viewer_html(
             f'{page["svg"]}'
             "</div>"
         )
-        for row in model["linked"]:
-            measure_id = row["measure_id"]
-            if measure_id and f'id="{measure_id}"' in page["svg"]:
-                measure_page[measure_id] = index
+        # One pass over the page rather than one substring scan per linked
+        # measure. The scan dominated a cached reload of a full edition, where
+        # every one of a few hundred measures re-read a half-megabyte of SVG.
+        for element_id in _SVG_ELEMENT_ID.findall(page["svg"]):
+            if element_id in linked_measure_ids:
+                measure_page[element_id] = index
 
     for row in model["linked"]:
-        zone = row["zone"]
         measure_id = row["measure_id"]
         if not measure_id:
             continue
-        width = zone["lrx"] - zone["ulx"]
-        height = zone["lry"] - zone["uly"]
         page_index = measure_page.get(measure_id)
-        surface_index = row["surface_index"]
-        surface_overlays[surface_index].append(
-            f'<rect class="zone" data-measure-id="{escape(measure_id)}" '
-            f'data-zone-id="{escape(zone["id"])}" data-measure-n="{escape(row["measure_n"])}" '
-            f'x="{zone["ulx"]}" y="{zone["uly"]}" width="{width}" height="{height}" />'
-        )
-        pairs.append(
-            {
-                "measureId": measure_id,
-                "measureN": row["measure_n"],
-                "zoneId": zone["id"],
-                "surfaceIndex": surface_index,
-                "pageIndex": page_index,
-                "scorePage": score_pages[page_index]["number"] if page_index is not None else None,
-            }
-        )
+        # One box per zone: a measure split across a system or page break needs
+        # every fragment highlighted, and the fragments may sit on different
+        # surfaces, so the surface comes from the zone rather than the measure.
+        for zone in row["zones"]:
+            width = zone["lrx"] - zone["ulx"]
+            height = zone["lry"] - zone["uly"]
+            surface_index = zone["surface_index"]
+            surface_overlays[surface_index].append(
+                f'<rect class="zone" data-measure-id="{escape(measure_id)}" '
+                f'data-zone-id="{escape(zone["id"])}" data-measure-n="{escape(row["measure_n"])}" '
+                f'x="{zone["ulx"]}" y="{zone["uly"]}" width="{width}" height="{height}" />'
+            )
+            pairs.append(
+                {
+                    "measureId": measure_id,
+                    "measureN": row["measure_n"],
+                    "zoneId": zone["id"],
+                    "surfaceIndex": surface_index,
+                    "pageIndex": page_index,
+                    "scorePage": (
+                        score_pages[page_index]["number"] if page_index is not None else None
+                    ),
+                }
+            )
 
     score_page_surface_indices = []
     for page_index in range(len(score_pages)):
@@ -1416,9 +1774,9 @@ def make_viewer_html(
         if score_page_surface_indices[initial_page_index] is not None
         else 0
     )
-    pairs_json = json.dumps(pairs)
-    score_pages_json = json.dumps([page["number"] for page in score_pages])
-    score_page_surfaces_json = json.dumps(score_page_surface_indices)
+    pairs_json = json_for_script(pairs)
+    score_pages_json = json_for_script([page["number"] for page in score_pages])
+    score_page_surfaces_json = json_for_script(score_page_surface_indices)
     page_number_to_index = {
         page["number"]: index for index, page in enumerate(score_pages)
     }
@@ -1436,7 +1794,7 @@ def make_viewer_html(
             page_number_to_index.get(rendered_pages[0]) if rendered_pages else None
         )
         annotations.append(annotation)
-    annotations_json = json.dumps(annotations)
+    annotations_json = json_for_script(annotations)
     annotation_buttons = []
     for annotation in annotations:
         anchor = annotation.get("anchor_mode", "unanchored")
@@ -1481,7 +1839,15 @@ def make_viewer_html(
                 if surface_index == initial_surface_index
                 else "facsimile-page"
             )
-            graphic_src = escape(surface["graphic_src"], quote=True)
+            graphic_src = escape(
+                _browser_graphic_src(
+                    surface,
+                    facsimile_max_width=facsimile_max_width,
+                    embed_remote_graphics=embed_remote_graphics,
+                    max_zoom_percent=max_zoom_percent,
+                ),
+                quote=True,
+            )
             graphic_target = escape(surface["graphic_target"], quote=True)
             source_attribute = (
                 f'src="{graphic_src}"'
@@ -1493,7 +1859,8 @@ def make_viewer_html(
                 f'data-surface-n="{escape(surface["n"], quote=True)}">'
                 '<div class="facsimile-wrap">'
                 f'<img {source_attribute} alt="Facsimile image from MEI graphic target" '
-                f'title="{graphic_target}" width="{surface["image_width"]}" '
+                f'title="{graphic_target}" referrerpolicy="no-referrer" '
+                f'width="{surface["image_width"]}" '
                 f'height="{surface["image_height"]}">'
                 f'<svg class="zone-layer" viewBox="0 0 {surface["image_width"]} '
                 f'{surface["image_height"]}" preserveAspectRatio="none" '
@@ -1783,7 +2150,7 @@ def make_viewer_html(
 </div>
 <script>
 (() => {{
-  const viewerId = {json.dumps(viewer_id)};
+  const viewerId = {json_for_script(viewer_id)};
   let initializationAttempts = 0;
 
   function initializeViewer(root) {{
@@ -1813,7 +2180,12 @@ def make_viewer_html(
   const facsimileZoomReset = root.querySelector('.facsimile-zoom-reset');
   const facsimileZoomIn = root.querySelector('.facsimile-zoom-in');
   const annotationToggle = root.querySelector('.annotation-toggle');
-  const byMeasure = new Map(pairs.map((item) => [item.measureId, item]));
+  const byMeasure = new Map();
+  for (const item of pairs) {{
+    // A measure split across a break contributes one pair per zone. Navigating
+    // from the score should land on the first fragment, not the last.
+    if (!byMeasure.has(item.measureId)) byMeasure.set(item.measureId, item);
+  }}
   const byZone = new Map(pairs.map((item) => [item.zoneId, item]));
   const initialPageIndex = {initial_page_index};
   let activePageIndex = initialPageIndex;
@@ -1961,6 +2333,15 @@ def make_viewer_html(
   applyScoreZoom(initialScoreZoom);
   applyFacsimileZoom(initialFacsimileZoom);
   showScorePage(initialPageIndex);
+  root.querySelectorAll('.facsimile-wrap img').forEach((image) => {{
+    image.addEventListener('error', () => {{
+      const label = image.getAttribute('title') || image.currentSrc || 'unknown graphic';
+      const loaded = image.currentSrc || image.getAttribute('src') || '';
+      status.textContent = loaded.startsWith('http')
+        ? `Facsimile image failed to load: ${{label}}. Notebook widget iframes cannot fetch third-party scans; relaunch with embed_remote_graphics=True.`
+        : `Facsimile image failed to load: ${{label}}`;
+    }});
+  }});
   const initialItem = pairs.find((item) => item.pageIndex === initialPageIndex) || pairs[0];
   if (initialItem) activate(initialItem);
   }}
@@ -2004,6 +2385,7 @@ def embed_viewer_html(html: str, *, min_height: int) -> str:
         raise ValueError("min_height must be greater than zero")
     inner = f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8">
+<meta name="referrer" content="no-referrer">
 <style>html,body{{margin:0;padding:0;background:#fff;}}</style>
 </head><body>
 {html}
@@ -2061,6 +2443,40 @@ def probe_note_pname(path: Path, note_xml_id: str) -> str:
     return match.group(1) if match else "(note not found)"
 
 
+def _stop_observer(observer: Any) -> None:
+    observer.stop()
+    observer.join(timeout=2)
+
+
+# A watcher outlives the notebook name it was bound to: re-running the launch
+# cell builds a second viewer for the same file while the first one's observer
+# thread keeps firing reloads into widgets nobody can see. Record the current
+# watcher per resolved path so a new viewer can retire its predecessor.
+_active_watchers: dict[Path, weakref.ReferenceType] = {}
+_active_watchers_lock = threading.Lock()
+
+
+def _register_watcher(path: Path, viewer: Any) -> None:
+    """Claim ``path`` for ``viewer`` and stop whichever viewer held it before."""
+    with _active_watchers_lock:
+        previous = _active_watchers.get(path)
+        _active_watchers[path] = weakref.ref(viewer)
+    superseded = previous() if previous is not None else None
+    if superseded is not None and superseded is not viewer:
+        superseded.stop_watch(update_label=False)
+
+
+def _release_watcher(path: Path, viewer: Any) -> None:
+    """Drop ``path`` from the registry unless another viewer has claimed it."""
+    with _active_watchers_lock:
+        current = _active_watchers.get(path)
+        if current is None:
+            return
+        owner = current()
+        if owner is None or owner is viewer:
+            del _active_watchers[path]
+
+
 class InteractiveFacsimileViewer:
     """Jupyter MEI viewer with facsimile linking and a score-only fallback."""
 
@@ -2079,6 +2495,7 @@ class InteractiveFacsimileViewer:
         verovio_options: dict | None = None,
         viewer_max_height: int = 820,
         facsimile_max_width: int = 600,
+        embed_remote_graphics: bool = True,
         zone_opacity: float = 0.18,
         initial_score_zoom_percent: int | float = 100,
         initial_facsimile_zoom_percent: int | float = 100,
@@ -2113,6 +2530,7 @@ class InteractiveFacsimileViewer:
         self.verovio_options = dict(verovio_options or {})
         self.viewer_max_height = viewer_max_height
         self.facsimile_max_width = facsimile_max_width
+        self.embed_remote_graphics = embed_remote_graphics
         self.zone_opacity = zone_opacity
         self.initial_score_zoom_percent = initial_score_zoom_percent
         self.initial_facsimile_zoom_percent = initial_facsimile_zoom_percent
@@ -2149,14 +2567,17 @@ class InteractiveFacsimileViewer:
             "path": None,
             "callback": None,
             "observer": None,
+            "finalizer": None,
             "reloading": False,
             "pending": False,
+            "parse_attempts": 0,
             "debounce_timer": None,
             "ignore_until": 0.0,
             "file_fp": None,
             "last_checked": None,
             "last_reloaded": None,
         }
+        self._ignoring_watch_toggle = False
 
     def _require_jupyter(self) -> None:
         if self._widgets is not None:
@@ -2201,6 +2622,7 @@ class InteractiveFacsimileViewer:
             viewer_id=render_id,
             viewer_max_height=self.viewer_max_height,
             facsimile_max_width=self.facsimile_max_width,
+            embed_remote_graphics=self.embed_remote_graphics,
             zone_opacity=self.zone_opacity,
             initial_score_zoom_percent=self.initial_score_zoom_percent,
             initial_facsimile_zoom_percent=self.initial_facsimile_zoom_percent,
@@ -2213,6 +2635,9 @@ class InteractiveFacsimileViewer:
             show_annotations=self.show_annotations,
             annotation_display_limit=self.annotation_display_limit,
             align_to_facsimile=self.align_to_facsimile,
+            # Deleting measures is a normal edit; a launch-time page preference
+            # must not turn the next reload into a failure banner.
+            clamp_initial_page=True,
         )
         self.cache = result["cache"]
         return result
@@ -2228,6 +2653,15 @@ class InteractiveFacsimileViewer:
             f"{result['summary']}\n"
             f"Viewer:          {score_render['page_count']} Verovio score page(s), {render_note}"
         )
+        # Clamping is silent by design; saying so is what keeps it from looking
+        # like the viewer ignored verovio_initial_page.
+        requested_page = score_render.get("requested_page")
+        landed_page = score_render.get("initial_page")
+        if requested_page is not None and requested_page != landed_page:
+            summary += (
+                f"\nStart page:      {requested_page} is outside 1..{score_render['page_count']}, "
+                f"showing {landed_page}"
+            )
         if self.status_html is not None:
             self.status_html.value = (
                 "<pre style='margin:0;white-space:pre-wrap'>"
@@ -2238,6 +2672,23 @@ class InteractiveFacsimileViewer:
                 result["html"],
                 min_height=self.viewer_max_height,
             )
+
+    def _refresh_from_toolbar(self, action: str, **kwargs: Any) -> dict | None:
+        """Refresh for a button click, reporting failures in the status area.
+
+        ipywidgets discards exceptions raised inside a click handler, so an
+        unresolved ``@facs`` link or a failed download would otherwise leave the
+        button looking inert.
+        """
+        try:
+            return self.refresh_viewer(**kwargs)
+        except Exception as exc:
+            if self.status_html is not None:
+                self.status_html.value = (
+                    f"<b style='color:#b91c1c'>{escape(action)} failed:</b> "
+                    f"<code>{escape(type(exc).__name__)}</code> {escape(str(exc))}"
+                )
+            return None
 
     def refresh_viewer(
         self,
@@ -2257,7 +2708,39 @@ class InteractiveFacsimileViewer:
         return result
 
     def _set_watch_status(self, text: str) -> None:
-        self.watch_status.value = text
+        if self.watch_status is not None:
+            self.watch_status.value = text
+
+    def _watch_available(self) -> bool:
+        return self.source_info.kind != "remote"
+
+    @staticmethod
+    def _remote_watch_message() -> str:
+        return (
+            "<b style='color:#b45309'>Auto-watch needs a local MEI file.</b> "
+            "This source is an HTTP(S) link — use <b>Reload source</b> to download it again."
+        )
+
+    def _watch_enabled(self) -> bool:
+        """Whether reloads should still fire.
+
+        The toggle is a UI control, not the source of truth. ``start_watch`` is
+        public and works before ``display`` has built any widgets, and in that
+        case there is no toggle for the user to switch off.
+        """
+        toggle = self.watch_toggle
+        return True if toggle is None else bool(toggle.value)
+
+    def _set_watch_toggle_value(self, value: bool) -> None:
+        """Set the toggle without re-entering the click handler."""
+        toggle = self.watch_toggle
+        if toggle is None or bool(toggle.value) == bool(value):
+            return
+        self._ignoring_watch_toggle = True
+        try:
+            toggle.value = value
+        finally:
+            self._ignoring_watch_toggle = False
 
     def _format_always_status(self, *, reloading: bool = False) -> str:
         path = self._watch_state["path"]
@@ -2270,68 +2753,115 @@ class InteractiveFacsimileViewer:
             f"<code>{path.name if path else '?'}</code>"
         )
 
-    def _schedule_on_kernel(self, fn: Callable) -> None:
+    def _schedule_on_kernel(self, fn: Callable, *, delay: float = 0.0) -> None:
+        """Run ``fn`` on the kernel's IO loop, optionally after ``delay`` seconds.
+
+        Sleeping in place would stall everything else that loop serves — widget
+        comms, the heartbeat, other cells' output — for the whole wait. The
+        delay is armed from inside the loop because ``IOLoop.call_later``, unlike
+        ``add_callback``, may not be called from another thread.
+        """
         ip = self._get_ipython() if self._get_ipython is not None else None
-        if ip is not None and hasattr(ip, "kernel"):
-            ip.kernel.io_loop.add_callback(fn)
-        else:
+        loop = getattr(getattr(ip, "kernel", None), "io_loop", None)
+        if loop is None:
+            if delay > 0:
+                time.sleep(delay)
             fn()
+            return
+        if delay > 0:
+            loop.add_callback(lambda: loop.call_later(delay, fn))
+        else:
+            loop.add_callback(fn)
+
+    def _probe_suffix(self, path: Path | None) -> str:
+        if not self.note_probe_id:
+            return ""
+        pname = self._probe_note_pname(path)
+        return f" · on-disk <code>{self.note_probe_id}</code> pname=<code>{pname}</code>"
 
     def _reload_from_watch(self, reason: str, *, quiet: bool = False) -> None:
-        if not self.watch_toggle.value:
+        if not self._watch_enabled():
             return
         if self._watch_state["reloading"]:
             self._watch_state["pending"] = True
             return
 
-        path = self._watch_state["path"]
         self._watch_state["reloading"] = True
         self._watch_state["pending"] = False
+        self._watch_state["parse_attempts"] = 0
         if quiet:
             self._set_watch_status(self._format_always_status(reloading=True))
         else:
-            pname = self._probe_note_pname(path)
-            probe = (
-                f" · on-disk <code>{self.note_probe_id}</code> pname=<code>{pname}</code>"
-                if self.note_probe_id
-                else ""
-            )
+            probe = self._probe_suffix(self._watch_state["path"])
             self._set_watch_status(f"<b>Reloading</b> ({reason}){probe}…")
+        self._schedule_on_kernel(
+            lambda: self._perform_reload(reason, quiet=quiet),
+            delay=max(self.watch_settle_sec, 0.0),
+        )
+
+    def _perform_reload(self, reason: str, *, quiet: bool = False) -> None:
+        """Re-render once the save is expected to have landed."""
+        if not self._watch_enabled():
+            self._finish_reload()
+            return
+
+        path = self._watch_state["path"]
         try:
-            time.sleep(self.watch_settle_sec)
             result = self.refresh_viewer(render_score=True)
-            self._watch_state["ignore_until"] = time.monotonic() + 1.0
-            when = time.strftime("%H:%M:%S")
-            self._watch_state["file_fp"] = mei_file_fingerprint(path)
-            self._watch_state["last_checked"] = when
-            self._watch_state["last_reloaded"] = when
-            if quiet:
-                self._set_watch_status(self._format_always_status())
-            else:
-                pname = self._probe_note_pname(path)
-                render_note = (
-                    "re-rendered score" if result["rendered_score"] else "reused cached score"
-                )
-                probe = (
-                    f" · on-disk <code>{self.note_probe_id}</code> pname=<code>{pname}</code>"
-                    if self.note_probe_id
-                    else ""
-                )
+        except ET.ParseError as exc:
+            # A save in progress is briefly visible as truncated XML. Retry:
+            # no further filesystem event may arrive to clear a stale failure.
+            attempts = self._watch_state["parse_attempts"] + 1
+            self._watch_state["parse_attempts"] = attempts
+            if attempts <= WATCH_PARSE_RETRIES:
                 self._set_watch_status(
-                    f"<b style='color:#047857'>Reloaded</b> at {when} ({render_note}) · "
-                    f"trigger=<code>{reason}</code>{probe} · "
-                    f"mode=<code>{self.auto_watch_mode}</code>"
+                    f"<i>Waiting for the save to finish ({reason}, attempt "
+                    f"{attempts} of {WATCH_PARSE_RETRIES})…</i>"
                 )
+                self._schedule_on_kernel(
+                    lambda: self._perform_reload(reason, quiet=quiet),
+                    delay=WATCH_PARSE_RETRY_SEC,
+                )
+                return
+            self._set_watch_status(
+                f"<b style='color:#b91c1c'>Reload failed:</b> the MEI was still "
+                f"unreadable after {attempts} attempts — {escape(str(exc))}"
+            )
+            self._finish_reload()
+            return
         except Exception as exc:
-            self._set_watch_status(f"<b style='color:#b91c1c'>Reload failed:</b> {exc}")
-        finally:
-            self._watch_state["reloading"] = False
-            if self._watch_state["pending"] and self.watch_toggle.value:
-                self._watch_state["pending"] = False
-                self._schedule_on_kernel(lambda: self._reload_from_watch("queued-change"))
+            self._set_watch_status(
+                f"<b style='color:#b91c1c'>Reload failed:</b> {escape(str(exc))}"
+            )
+            self._finish_reload()
+            return
+
+        self._watch_state["ignore_until"] = time.monotonic() + 1.0
+        when = time.strftime("%H:%M:%S")
+        self._watch_state["file_fp"] = mei_file_fingerprint(path)
+        self._watch_state["last_checked"] = when
+        self._watch_state["last_reloaded"] = when
+        if quiet:
+            self._set_watch_status(self._format_always_status())
+        else:
+            render_note = (
+                "re-rendered score" if result["rendered_score"] else "reused cached score"
+            )
+            self._set_watch_status(
+                f"<b style='color:#047857'>Reloaded</b> at {when} ({render_note}) · "
+                f"trigger=<code>{reason}</code>{self._probe_suffix(path)} · "
+                f"mode=<code>{self.auto_watch_mode}</code>"
+            )
+        self._finish_reload()
+
+    def _finish_reload(self) -> None:
+        self._watch_state["reloading"] = False
+        if self._watch_state["pending"] and self._watch_enabled():
+            self._watch_state["pending"] = False
+            self._schedule_on_kernel(lambda: self._reload_from_watch("queued-change"))
 
     def _request_reload(self, reason: str) -> None:
-        if not self.watch_toggle.value:
+        if not self._watch_enabled():
             return
         if time.monotonic() < self._watch_state["ignore_until"]:
             return
@@ -2349,7 +2879,7 @@ class InteractiveFacsimileViewer:
         timer.start()
 
     def _poll_always(self) -> None:
-        if not self.watch_toggle.value:
+        if not self._watch_enabled():
             return
         if self._watch_state["reloading"]:
             return
@@ -2408,38 +2938,47 @@ class InteractiveFacsimileViewer:
 
         path = self._watch_state["path"]
         target_name = path.name
-        viewer = self
+        # A weak reference, so the observer thread is never what keeps this
+        # viewer alive. Re-running a launch cell drops the only Python name
+        # bound to the previous viewer, and a strong closure here would keep
+        # that viewer, its cached page SVG, and its widgets reachable forever.
+        viewer_ref = weakref.ref(self)
 
         class Handler(FileSystemEventHandler):
+            @staticmethod
+            def _notify(candidate: str | None, reason: str) -> None:
+                viewer = viewer_ref()
+                if viewer is None:
+                    return
+                if viewer._paths_match_target(candidate, path):
+                    viewer._request_reload(reason)
+
             def on_moved(self, event):
                 if event.is_directory:
                     return
-                if viewer._paths_match_target(getattr(event, "dest_path", None), path):
-                    viewer._request_reload("moved")
+                self._notify(getattr(event, "dest_path", None), "moved")
 
             def on_created(self, event):
                 if event.is_directory:
                     return
-                if viewer._paths_match_target(event.src_path, path):
-                    viewer._request_reload("created")
+                self._notify(event.src_path, "created")
 
             def on_modified(self, event):
                 if event.is_directory:
                     return
-                if viewer._paths_match_target(event.src_path, path):
-                    viewer._request_reload("modified")
+                self._notify(event.src_path, "modified")
 
             def on_closed(self, event):
                 if getattr(event, "is_directory", False):
                     return
-                if viewer._paths_match_target(getattr(event, "src_path", None), path):
-                    viewer._request_reload("closed")
+                self._notify(getattr(event, "src_path", None), "closed")
 
         observer = Observer()
         observer.schedule(Handler(), str(path.parent), recursive=False)
         observer.daemon = True
         observer.start()
         self._watch_state["observer"] = observer
+        self._watch_state["finalizer"] = weakref.finalize(self, _stop_observer, observer)
         self._watch_state["ignore_until"] = time.monotonic() + 1.0
         if self.note_probe_id:
             pname = self._probe_note_pname(path)
@@ -2456,11 +2995,11 @@ class InteractiveFacsimileViewer:
 
     def start_watch(self) -> None:
         self.stop_watch(update_label=False)
-        if self.source_info.kind == "remote":
-            self._set_watch_status(
-                "<i>Remote source — use Reload source to download it again</i>"
-            )
-            self.watch_toggle.value = False
+        if not self._watch_available():
+            self._set_watch_status(self._remote_watch_message())
+            self._set_watch_toggle_value(False)
+            if self.watch_toggle is not None:
+                self.watch_toggle.disabled = True
             return
         path = resolve_repo_path(self.mei_path, repo_root=self.repo_root)
         self._watch_state["path"] = path
@@ -2472,9 +3011,10 @@ class InteractiveFacsimileViewer:
 
         if not path.is_file():
             self._set_watch_status(f"<b style='color:#b91c1c'>Missing file:</b> {path}")
-            self.watch_toggle.value = False
+            self._set_watch_toggle_value(False)
             return
 
+        _register_watcher(path, self)
         mode = str(self.auto_watch_mode).lower().strip()
         if mode == "events":
             if not self._start_watch_events():
@@ -2486,7 +3026,7 @@ class InteractiveFacsimileViewer:
                 f"<b style='color:#b91c1c'>Unknown auto_watch_mode={self.auto_watch_mode!r}</b> "
                 "(use 'events' or 'always')"
             )
-            self.watch_toggle.value = False
+            self._set_watch_toggle_value(False)
 
     def stop_watch(self, *, update_label: bool = True) -> None:
         callback = self._watch_state.get("callback")
@@ -2497,11 +3037,17 @@ class InteractiveFacsimileViewer:
         if timer is not None:
             timer.cancel()
             self._watch_state["debounce_timer"] = None
+        finalizer = self._watch_state.get("finalizer")
+        if finalizer is not None:
+            finalizer.detach()
+            self._watch_state["finalizer"] = None
         observer = self._watch_state.get("observer")
         if observer is not None:
-            observer.stop()
-            observer.join(timeout=2)
+            _stop_observer(observer)
             self._watch_state["observer"] = None
+        path = self._watch_state.get("path")
+        if path is not None:
+            _release_watcher(path, self)
         self._watch_state["reloading"] = False
         self._watch_state["pending"] = False
         if update_label:
@@ -2514,12 +3060,26 @@ class InteractiveFacsimileViewer:
 
         self.status_html = widgets.HTML()
         self.viewer_html = widgets.HTML(layout=widgets.Layout(width="100%"))
-        self.watch_status = widgets.HTML(value="<i>Auto-watch off</i>")
+        watch_available = self._watch_available()
+        self.watch_status = widgets.HTML(
+            value=(
+                self._remote_watch_message()
+                if not watch_available
+                else "<i>Auto-watch off</i>"
+            )
+        )
         self.reload_zones_btn = widgets.Button(description="Reload zones", icon="refresh")
         reload_label = "Reload source" if self.source_info.kind == "remote" else "Reload score"
         self.reload_score_btn = widgets.Button(description=reload_label, icon="sync")
         self.watch_toggle = widgets.ToggleButton(
-            description="Auto-watch MEI", value=self.auto_watch_mei
+            description="Auto-watch MEI",
+            value=bool(self.auto_watch_mei) and watch_available,
+            disabled=not watch_available,
+            tooltip=(
+                "Reload when the local MEI file changes"
+                if watch_available
+                else "Auto-watch needs a local MEI file. Use Reload source for HTTP(S) links."
+            ),
         )
 
         controls = widgets.HBox(
@@ -2529,12 +3089,20 @@ class InteractiveFacsimileViewer:
             [controls, self.watch_status, self.status_html, self.viewer_html]
         )
 
-        self.reload_zones_btn.on_click(lambda _: self.refresh_viewer(render_score=False))
+        self.reload_zones_btn.on_click(
+            lambda button: self._refresh_from_toolbar(
+                button.description, render_score=False
+            )
+        )
         self.reload_score_btn.on_click(
-            lambda _: self.refresh_viewer(render_score=True, refresh_source=True)
+            lambda button: self._refresh_from_toolbar(
+                button.description, render_score=True, refresh_source=True
+            )
         )
 
         def _on_watch_toggle(change) -> None:
+            if self._ignoring_watch_toggle:
+                return
             if change["new"]:
                 self.start_watch()
             else:
@@ -2547,6 +3115,8 @@ class InteractiveFacsimileViewer:
         self._display(self.ui)
         if self.watch_toggle.value:
             self.start_watch()
+        elif not watch_available:
+            self._set_watch_status(self._remote_watch_message())
         else:
             self.stop_watch()
         return self
@@ -2556,5 +3126,10 @@ def launch_interactive_facsimile_viewer(
     mei_path: str | Path | ResolvedMeiSource,
     **kwargs: Any,
 ) -> InteractiveFacsimileViewer:
-    """Display a Jupyter viewer for a local path, file URI, or HTTP(S) link."""
+    """Display a Jupyter viewer for a local path, file URI, or HTTP(S) link.
+
+    Remote ``<graphic>`` scans are inlined by default. Notebook widget iframes
+    cannot fetch third-party IIIF URLs; pass ``embed_remote_graphics=False``
+    only for standalone HTML that will run in a normal browser.
+    """
     return InteractiveFacsimileViewer(mei_path, **kwargs).display()

@@ -51,6 +51,13 @@ If you use CAMAT in research, cite the software and state the version used.
 GitHub exposes it through **Cite this repository**. Published versions and
 their dates are listed in [the releases](https://github.com/egorpol/camat_v2/releases).
 
+## Talks and posters
+
+Conference materials live under [`presentations/`](../presentations/) in the
+repository (outside the installable package). The current entry is the
+[ICCCM 2026 poster](../presentations/2026-icccm/)
+(*CAMAT_v2: Cloud-Based Tools for Symbolic Music Analysis*).
+
 ## Licenses and source material
 
 CAMAT's own code is available under the [MIT license](../LICENSE).
