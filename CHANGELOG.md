@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Restored the MkDocs navigation section label from Documentation to
+  API reference.
+
+### Added
+
+- Added a top-level `presentations/` tree for conference posters and talks,
+  starting with the ICCCM 2026 poster. Linked it from the README repository
+  layout and from About → Talks and posters.
+
 ## [0.2.4] - 2026-09-18
 
 ### Fixed
