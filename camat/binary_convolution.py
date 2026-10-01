@@ -336,7 +336,12 @@ def _teaching_phrase_svg(notes, *, show_meter=False):
                         "breaks": "none", "header": "none", "footer": "none"})
     if not toolkit.loadData(mei) or not toolkit.getPageCount():
         raise RuntimeError("Could not render the musical teaching example.")
-    return toolkit.renderToSVG(1)
+    svg = toolkit.renderToSVG(1)
+    # Keep notation readable in both SVG outputs and dark-themed HTML panels.
+    svg = svg.replace('<svg ', '<svg style="background-color:#fff;color:#000" ', 1)
+    root_end = svg.index(">", svg.index("<svg")) + 1
+    background = '<rect width="100%" height="100%" fill="#fff" style="stroke:none"/>'
+    return svg[:root_end] + background + svg[root_end:]
 
 
 def show_musical_overlap_example():
@@ -416,7 +421,8 @@ def show_rhythmic_augmentation_example():
         + _teaching_phrase_svg([(pitch, length * factor) for pitch, length in phrase]) + '</div>'
         for factor, label in zip(factors, labels)
     )
-    display(HTML('<div style="display:flex;gap:1rem;flex-wrap:wrap">' + notation + '</div>'))
+    display(HTML('<div style="display:flex;gap:1rem;flex-wrap:wrap;'
+                 'background:#fff;color:#000;padding:0.5rem">' + notation + '</div>'))
     fig, axes = plt.subplots(1, 3, figsize=(12, 3.8), layout="constrained")
     duration_names = ["eighth / sixteenth / sixteenth / eighth",
                       "quarter / eighth / eighth / quarter",
@@ -457,7 +463,8 @@ def show_pitch_interval_example():
         + _teaching_phrase_svg([("D5", 1.0), (lower_pitch, 1.0)]) + '</div>'
         for label, _kernel, lower_pitch, _distance in panels
     )
-    display(HTML('<div style="display:flex;gap:1rem;flex-wrap:wrap">' + notation + '</div>'))
+    display(HTML('<div style="display:flex;gap:1rem;flex-wrap:wrap;'
+                 'background:#fff;color:#000;padding:0.5rem">' + notation + '</div>'))
     fig, axes = plt.subplots(1, 2, figsize=(8, 3.8), layout="constrained")
     for ax, (label, kernel, _lower_pitch, distance) in zip(axes, panels):
         ax.imshow(kernel, cmap="Greys", origin="upper", aspect="auto", vmin=0, vmax=1,

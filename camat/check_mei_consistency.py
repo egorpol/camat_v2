@@ -29,9 +29,9 @@ from pathlib import Path
 from typing import Iterable
 
 if __package__:
-    from .mei_references import REFERENCE_ATTRS
+    from .mei_references import REFERENCE_ATTRS, resolve_pointer
 else:  # Preserve direct script use without importing CAMAT's consumer stack.
-    from mei_references import REFERENCE_ATTRS
+    from mei_references import REFERENCE_ATTRS, resolve_pointer
 
 
 MEI_NS = "http://www.music-encoding.org/ns/mei"
@@ -739,9 +739,30 @@ class MeiChecker:
                 if clean_attr not in REFERENCE_ATTRS:
                     continue
                 for token in str(value).split():
-                    if not token.startswith("#"):
+                    pointer = resolve_pointer(token, element, self.path, self.parent)
+                    if pointer.document is None:
+                        continue  # Remote references are recorded, never fetched implicitly.
+                    if pointer.document != self.path:
+                        if not pointer.document.is_file():
+                            self.add("error", "references", "missing_reference_document", element,
+                                     f"Local resource in @{clean_attr} does not exist.", actual=token,
+                                     context=str(pointer.document))
+                            continue
+                        if pointer.has_fragment:
+                            try:
+                                target_root = ET.parse(pointer.document).getroot()
+                                target_ids = {node.get(XML_ID) or node.get("id") for node in target_root.iter()}
+                                if not pointer.fragment or pointer.fragment not in target_ids:
+                                    self.add("error", "references", "broken_document_reference", element,
+                                             f"Fragment in @{clean_attr} does not resolve in the explicit document.",
+                                             actual=token, context=str(pointer.document))
+                            except (ET.ParseError, OSError) as exc:
+                                self.add("error", "references", "reference_document_parse", element,
+                                         f"Cannot read the referenced XML document: {exc}", actual=token)
                         continue
-                    ref_id = token[1:]
+                    if not pointer.has_fragment:
+                        continue
+                    ref_id = pointer.fragment
                     if not ref_id:
                         self.add(
                             "error",

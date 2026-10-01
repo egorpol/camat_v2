@@ -230,7 +230,13 @@ from .mensural_utils import (
     normalize_mensural_mei_for_partitura_file,
 )
 
+from .mei_validation import ValidationResult, run_mei_validation, camat_provenance
+from .mei_schematron import run_schematron_validation
+from .mei_resources import image_resource_rows
+
 __all__ = [
+    "ValidationResult", "run_mei_validation", "camat_provenance",
+    "run_schematron_validation", "image_resource_rows",
     '__version__',
     'run_pattern_search',
     'convolution_map',

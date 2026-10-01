@@ -9,10 +9,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Added read-only `run_mei_validation` / `camat-validate-mei` with separate
+  conformance, required-check and consumer results. `run.json` records requested
+  and executed checks, paths, schema/profile, tool versions, installation/Git
+  provenance, source hashes and input hashes. Missing/skipped required validators
+  and empty input selections cannot pass. Incomplete attempts checkpoint progress
+  instead of retaining an earlier completed report.
+- Added real XPath 2 Schematron execution with bundled SchXslt 1.10.1 and
+  SaxonC, retained SVRL, namespace-preserving extraction, stable rule IDs and
+  compiled-validator caching. Schema warnings retain their declared severity;
+  the official MEI 5.1 CMN schema is unchanged. The `validation` extra requires
+  lxml, SaxonC and Pillow; RELAX NG also requires external `xmllint`. Core CAMAT
+  installation does not require SaxonC. Bundled compiler/license files are
+  included in the package.
+- Added general local raster/SVG resource checks, declared surface geometry,
+  multiple-graphic support and optional direct-HTTP image checks. Requested
+  image-network checks without HTTP targets report `not-applicable` with a
+  reason and resource/request counts; local decoding remains offline. General
+  checking does not require facsimiles or images.
+- Added optional CAMAT parsing alongside Verovio load/full-render checks.
+  CAMAT probes record backend and event-table counts with interactive
+  plots/previews/progress disabled. Consumer results remain separate from general
+  conformance; callers may require them for an overall pass.
+- Added a general validation guide covering schema layers, pass/status/report
+  meanings, dependencies, compatibility migration, reproducibility and explicit
+  local/Git/PyPI updates. Linked it from the documentation navigation, setup,
+  workflow and API pages; marked the original boundary assessment as historical.
+
 - Added a frozen MEI checking baseline with a tiny synthetic CMN score, pinned
   Hummel and Webern sample encodings, input hashes, and a local DdT pilot snapshot.
   Added regressions for standalone/assembly references, `resp`/`source`, optional
-  group comparisons, explicit schema selection, and input hash preservation.
+  group comparisons, explicit schema selection, Schematron-only violations,
+  missing validators, resource/network scope, interrupted records and input
+  hash preservation. Retained dated execution evidence alongside the baseline.
+
+- Added worked musical examples to the convolution explainer: a notated phrase
+  translated into a grid, exact/missing-note/accompaniment overlap scores,
+  rhythmic diminution and augmentation, and pitch-interval scaling around a
+  fixed anchor. A reading guide introduces the existing augmentation comparison
+  plots; sampling and rounding details follow the musical examples.
 
 - The facsimile viewer now prints a **Hovered** status row with the MEI element
   name and source `xml:id` of the nearest identified score element under the
@@ -33,26 +68,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   requires `document_mode="assembly"`. Checking and ID copying share the local
   pointer registry, including `resp` and `source`, and score checks exclude
   metadata incipits. The workflow accepts an explicit RELAX NG schema.
-- The consistency notebook uses a portable frozen Hummel example, displays its
-  selected schema and checks, runs base checks once in check-only mode, and
-  rejects cleanup flags for original inputs. Page assembly explicitly prepares
-  copies and writes its page-check report. Actual Schematron execution and full
-  execution records remain a subsequent validation stage.
+- URI resolution handles lists, explicit documents, escaping and `xml:base`.
+  Copy/assembly transformations rebase known resource/document pointers and
+  rewrite selected-page fragments; ambiguous IDs and copy-name collisions are
+  rejected before rewriting.
+- Both MEI checking notebooks use the general validation API with an explicit
+  schema/profile and no DdT publication defaults. They do not install/update
+  CAMAT during checks. The consistency notebook documents a portable frozen
+  Hummel example, runs base checks once in check-only mode, and rejects cleanup
+  flags for originals. Page assembly explicitly prepares copies and writes a
+  separate page-check report.
+- The checking notebooks explain schema layers, each pass, execution statuses,
+  finding fields and validation dependencies. Score-named reports copy the
+  canonical findings exactly, preserving `origin`; printouts distinguish
+  executed checks, grouped findings and report roles.
 
 - The convolution explainer now calls the opening grids an example passage and
   an example pattern, and explains the two edge policies in those words before
   the code names `padding="valid"` (fully inside the passage) and
-  `padding="same"` (silence added so the pattern may hang off the edge).
+  `padding="same"` (an artificial empty border allows the pattern to hang off
+  the edge). A zero means no activity at that pitch and time; padding does not
+  establish that the omitted score is silent.
   Figure labels and the pattern-search guide use the same wording. The catalog
   and helpers are `EXAMPLE_PATTERNS`, `resolve_example_pattern`, and
   `show_example_overview`; the notebook variables are `PATTERN_NAME`,
-  `example_passage`, and `example_pattern`. `padding="same"` is described as
-  zero-padding: the border outside the passage is filled with zeros, and a
-  zero is silence.
+  `example_passage`, and `example_pattern`.
+- The convolution explainer introduces overlap in musical terms before the
+  formula, distinguishes occupied cells from note events, and explains duration
+  weighting and merged repeated attacks. It clarifies why added accompaniment
+  can retain a perfect overlap score, why normalised cross-correlation returns
+  zero for constant patterns, and how stride and grid alignment affect which
+  placements are checked. Padding and stride figures label passage coordinates
+  and actual candidate starts.
 - `scripts/prepare_release.py` rejects GitHub mention tokens such as
   `` `facs` `` written with a leading `@` in the dated release notes, so MEI
   attribute names do not appear as false Contributors on the GitHub release
   page.
+
+### Fixed
+
+- All rendered notation in the convolution explainer now has an opaque white
+  background and black captions, so the examples remain readable in dark-themed
+  notebooks. Refreshed the saved notation outputs.
 
 ## [0.2.4] - 2026-09-18
 

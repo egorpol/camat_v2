@@ -424,13 +424,13 @@ def test_copied_pipeline_notebooks_use_package_imports_and_safe_defaults() -> No
     assert ast.literal_eval(assignments["STRIP_ACCID_GES"]) is False
     assert "/home/" not in consistency and "/Users/" not in consistency
     assert "test_corpus/buxtehude_pages" in consistency
-    assert "run_editorial_checks" in consistency
+    assert "run_mei_validation" in consistency
     assert "combine_meis" in consistency
     assert "RUN_PIPELINE = False" in consistency
     assert "COMBINE_PAGES" in consistency
     assert "ANNOTATE_COMBINED = False" in consistency
     assert "Bach-JS_Ein_feste_Burg.mei" in consistency
-    assert "CHECK_IIIF_LINKS = False" in consistency
+    assert "CHECK_IMAGE_NETWORK = False" in consistency
     assert "from camat_corpus" not in consistency
     assert "import camat_corpus" not in consistency
     assert "COMBINED_STEM" in consistency
@@ -447,7 +447,7 @@ def test_copied_pipeline_notebooks_use_package_imports_and_safe_defaults() -> No
     assert "ANNOTATE_COMBINED" not in combine_pages
     check_report = code_for("notebooks/mei_check_report.ipynb")
     assert "import setup_camat" in check_report
-    assert "run_editorial_checks" in check_report
+    assert "run_mei_validation" in check_report
     assert "RUN_CHECKS = False" in check_report
     assert "combine_meis" not in check_report
     assert "COMBINE_PAGES" not in check_report

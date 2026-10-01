@@ -18,6 +18,11 @@ viewer, conversion to analysis MEI, and the default Verovio parser all assume
 **common-notation MEI**. Workflow 1 notebooks and the packaged MEI 5.1 CMN
 RELAX NG schema follow that contract.
 
+General validation accepts an explicit alternative schema, but this does not
+establish support for every notation customization in the musical diagnostics,
+assembly helpers or consumers. The configured schema and descriptive profile
+are recorded; a directory or composer never selects a DdT profile implicitly.
+
 Two other paths exist but have **not been tested thoroughly**:
 
 - **mensural** — a specialized mensural-MEI backend and duration-normalization
@@ -28,6 +33,32 @@ Two other paths exist but have **not been tested thoroughly**:
 Treat those backends as prototypes. Do not rely on them for production
 editions or unattended analysis. The APIs are documented under
 [Backend and specialized parsing](tutorial.md).
+
+## General MEI validation scope
+
+The [validation guide](guides/mei-validation.md) describes the passes and result
+categories. Current limits include:
+
+- Local/bundle references are checked; remote authority references are recorded
+  without fetching their documents. Schematron inputs must be self-contained;
+  external include graphs are rejected.
+- Rhythm diagnostics cover common written durations, dots, enclosing tuplets,
+  meter changes, grace exclusion and `metcon="false"`. Timing through editorial
+  alternatives such as `choice`/`app`, duration defaults and additive durations
+  is not comprehensively supported. Review those findings in their score context.
+  Separate tie-continuity, accidental-consistency and source-comparison passes
+  are not implemented.
+- CAMAT parsing verifies that a consumer returns nonempty tables and records
+  their row counts. It does not prove an exact match between each XML event and
+  the parsed music. Verovio warnings can occur on schema-conformant scores.
+- HTTP image checks use HEAD reachability/content type, without downloading or
+  decoding the remote image. Geometry uses declared surface bounds and does
+  not infer a coordinate mapping from the first graphic's pixel dimensions.
+- Interrupted runs retain incomplete progress records, but native validator and
+  consumer calls do not yet have automatic hard timeouts.
+
+General conformance does not decide editorial fidelity, licensing or corpus
+publication acceptance. Those require the corpus policy and editorial review.
 
 ## Experimental MIDI conversion
 

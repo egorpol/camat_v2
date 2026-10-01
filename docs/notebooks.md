@@ -55,8 +55,14 @@ with document structure and editorial concepts.
 
 Use [Inspect scores and facsimiles](../notebooks/mei_facsimile_viewer.ipynb)
 for read-only inspection of a score, with optional links to source-image
-regions. [Create an editorial report](../notebooks/mei_check_report.ipynb)
-runs checks and writes a CSV report; inspect the score again after corrections.
+regions. [Create a general MEI check report](../notebooks/mei_check_report.ipynb)
+runs read-only checks and writes CSV/JSON findings plus an execution record;
+inspect the score again after corrections. The explicit packaged CMN 5.1
+schema selects RELAX NG and Schematron; these notebooks apply no DdT publication
+policy and require no facsimiles. Install the `validation` extra and `xmllint`
+before running them; they do not install or update validators in their setup
+cells. See [General MEI validation](guides/mei-validation.md) for the individual
+checks, statuses and report contents.
 
 ### Prepare an edition with facsimiles
 
@@ -67,7 +73,7 @@ Use this sequence when working from page files and source images:
    to add facsimile links and measure zones.
 2. [Combine MEI pages](../notebooks/mei_combine_pages.ipynb) to join page files
    into one `*_full.mei` score when needed.
-3. [Create an editorial report](../notebooks/mei_check_report.ipynb), correct
+3. [Create a general MEI check report](../notebooks/mei_check_report.ipynb), correct
    the score, and return to
    [Inspect scores and facsimiles](../notebooks/mei_facsimile_viewer.ipynb).
 

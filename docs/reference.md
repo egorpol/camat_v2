@@ -10,7 +10,9 @@ through `import camat`. The pages below contain the full module documentation.
 ## Handle and inspect MEI
 
 - [Edition and IIIF pipeline](api/edition_pipeline.md): facsimile integration and edition preparation.
-- [MEI consistency and cleanup](api/mei_consistency.md): editorial validation and maintenance.
+- [MEI consistency and cleanup](api/mei_consistency.md): general validation,
+  Schematron, resources, execution records and legacy maintenance helpers.
+  Start with the [validation guide](guides/mei-validation.md) for setup and results.
 - [Facsimile viewer](api/facsimile_viewer.md): linked score and image inspection.
 - [Verovio rendering](api/verovio_render.md): SVG scores, annotations, and highlights.
 

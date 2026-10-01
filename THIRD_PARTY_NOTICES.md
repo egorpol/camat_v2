@@ -1,5 +1,12 @@
 # Third-party notices
 
+## SchXslt 1.10.1
+
+CAMAT bundles the unmodified SchXslt XSLT 2.0 compiler under
+`camat/schemas/schxslt`, copyright 2018–2021 David Maus, under the MIT license.
+See `LICENSES/SchXslt-MIT.txt` and the bundled README for the fixed release
+URL and archive checksum. SaxonC is an optional, separately installed processor.
+
 CAMAT's own code is licensed under the [MIT license](LICENSE). The following
 material retains its own terms.
 

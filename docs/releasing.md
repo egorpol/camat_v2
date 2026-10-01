@@ -117,10 +117,22 @@ Use the tag for the version being prepared.
 To run the additional checks locally from the repository root:
 
 ```bash
-python -m pip install -e ".[test]" -r docs/requirements.txt
+python -m pip install -e ".[test,validation]" -r docs/requirements.txt
 python -m pytest tests --ignore=tests/release -q
 python -m mkdocs build --strict
 ```
+
+Also provide libxml2's `xmllint` on `PATH` for RELAX NG integration tests.
+The current CI checkout/wheel jobs install the `test` extra, not `validation`;
+tests requiring absent optional processors can therefore skip. Their green
+status alone does not certify the complete MEI validation engine. Before
+releasing these validation changes, run
+`tests/test_mei_validation_execution.py` with the validation dependencies and
+retain its non-skipped results. Exercise the built wheel in a separate
+environment with its `validation` extra and `xmllint`, confirming that the
+packaged RNG, SchXslt compiler and license are present and the tiny baseline
+passes both RELAX NG and Schematron. See
+[the baseline](../test_corpus/validation_baseline/README.md) for input provenance.
 
 ## Documentation and package versions
 

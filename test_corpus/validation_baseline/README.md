@@ -52,22 +52,36 @@ CMN RELAX NG results. The ignored `local/pre-refactor/` directory preserves
 the original checker, workflow, notebook and consistency-test bytes, including
 the notebook's working configuration. [after.json](after.json) records the first
 boundary refactor and optional Verovio checks. An `incomplete` overall status is
-intentional: actual Schematron execution and CAMAT consumer probing remain the
-next shared-validation stage. Musical warnings are diagnostic evidence, not
-automatically invalid MEI.
+intentional for that historical stage: Schematron execution and CAMAT consumer
+probing had not yet landed. Those passes are now implemented and recorded in
+the later execution snapshot below. Musical warnings are diagnostic evidence,
+not automatically invalid MEI.
 
 The external examples also exercise consumer limitations: the recorded Verovio
 run reported 26 findings for Hummel and 29 for Webern, while the synthetic score
 and pilot had none. These are unchanged upstream samples, not warning-free
-rendering gold standards. Inspect the recorded messages and execute Schematron
-before deciding which cases qualify as full conformance passes.
+rendering gold standards. Inspect the recorded messages and the later
+Schematron results before deciding which cases qualify as full conformance passes.
 
 Run the focused checks offline from the repository root:
 
 ```sh
-python -m pytest tests/test_mei_validation_boundary.py tests/test_mei_consistency.py tests/test_edition_pipeline.py -q
+python -m pip install -e '.[test,validation]'
+python -m pytest tests/test_mei_validation_boundary.py tests/test_mei_consistency.py tests/test_mei_validation_execution.py tests/test_edition_pipeline.py -q
 ```
 
-Use an environment with CAMAT's dependencies and pytest installed. The RELAX NG
+Use an environment with CAMAT's validation dependencies and pytest installed. The RELAX NG
 integration test requires `xmllint`; it reports a test skip if the executable is
 absent. Such a skip is not a release-validation pass.
+
+
+The later execution snapshot is [execution-2026-10-01.json](execution-2026-10-01.json).
+It records real Schematron, resources, Verovio and CAMAT parser results. The three
+portable scores pass general conformance. The pilot retains ten schema warnings
+for external IIIF canvas `corresp` values; these remain advisory in general
+conformance and require a publication disposition in the corpus profile.
+Run the execution regressions with `tests/test_mei_validation_execution.py` in
+addition to the earlier boundary tests. Install the `validation` extra for the
+real SaxonC tests; skipped optional test dependencies are not validation evidence.
+This snapshot belongs to its recorded implementation and input hashes. Later
+edits require a new execution record; keep the existing dated evidence intact.

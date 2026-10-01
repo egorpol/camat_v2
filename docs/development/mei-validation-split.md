@@ -1,8 +1,35 @@
 # Separating CAMAT MEI validation from DdT publication checks
 
-Assessment date: 2026-09-30. This is an implementation plan, not a delivered
-validator. The checker, notebook, corpus MEI, and schema were inspected without
-editing them. Existing uncommitted changes were preserved.
+## Implementation status — 2026-10-01
+
+The shared `run_mei_validation` / `camat-validate-mei` engine now executes
+RELAX NG and embedded Schematron, records execution/provenance/input hashes,
+resolves local URI/base contexts and checks image resources. Both checking
+notebooks use general mode with an explicit schema/profile. Copy/assembly
+transforms remain explicit; optional consumer probes run without interactive
+plots. Image-network checks with no HTTP targets report `not-applicable`.
+Score-named exports copy the canonical findings exactly.
+
+The DdT wrapper is implemented in the corpus with a pilot work list and
+review/release rules. Its official IIIF canvas warnings remain pending review.
+No permanent CAMAT pin or new package release has been made; the local editable
+checkout is recorded by revision and source hashes. The branch/commit title is
+not the package version.
+
+Use [General MEI validation](../guides/mei-validation.md) and the
+[API reference](../api/mei_consistency.md) for current behavior, and the corpus's
+`validation/README.md` for publication policy. The
+[dated baseline execution](../../test_corpus/validation_baseline/execution-2026-10-01.json)
+is evidence for its recorded source/input bytes, not a regenerated certificate
+for later edits. Remaining limits are documented under
+[Known limitations](../known-limitations.md#general-mei-validation-scope).
+
+## Historical assessment — 2026-09-30
+
+Everything below preserves the original assessment and implementation proposals.
+References to missing features or future stages describe that date, not the
+current implementation. The initial inspection did not edit the checker,
+notebook, corpus MEI or schema, and preserved existing uncommitted changes.
 
 The inventory below describes that initial assessment. The first implementation
 slice has since added the [frozen baseline](../../test_corpus/validation_baseline/README.md)
@@ -12,18 +39,20 @@ now permits absent facsimiles, defaults to standalone references, checks local
 and group comparisons optional. The notebook uses the portable Hummel baseline,
 shows its selected schema/checks, and rejects check-only transformations.
 
-Focused validation passed 27 regression tests. The baseline records independent
+At that first boundary-refactor stage, focused validation passed 27 regression
+tests. Its baseline records independent
 RELAX NG and Verovio results and unchanged source hashes. Hummel and Webern have
-consumer warnings, retained as diagnostics. Actual Schematron execution,
-schema-aware URI/base-URI resolution, complete execution records, CAMAT parsing,
-and the local DdT entry point are still subsequent stages. Do not describe this
-first slice as complete MEI conformance or corpus release acceptance.
+consumer warnings, retained as diagnostics. Schematron, URI/base resolution,
+complete execution records, CAMAT parsing and the DdT entry point had not yet
+landed at that stage. That earlier slice is not complete conformance or corpus
+release evidence; later work is described above.
 
 Context was recovered from the corpus chat **Assess MEI header and schema** and
-checked against the current DdT files, especially
-[validation-workflow.md](/home/egor/Nextcloud/code/public_repos/camat_corpus_editions/DdT_1_vol_11/docs/validation-workflow.md),
-[mei-encoding-profile.md](/home/egor/Nextcloud/code/public_repos/camat_corpus_editions/DdT_1_vol_11/docs/mei-encoding-profile.md),
-and [editorial-policy.md](/home/egor/Nextcloud/code/public_repos/camat_corpus_editions/DdT_1_vol_11/docs/editorial-policy.md).
+checked against the then-current files in the
+[DdT repository](https://github.com/egorpol/DdT_1_vol_11), especially
+`docs/validation-workflow.md`, `docs/mei-encoding-profile.md` and
+`docs/editorial-policy.md`. These paths identify corpus-owned documents, not
+CAMAT validation dependencies.
 
 ## Recommendation
 
@@ -55,9 +84,9 @@ would change the validator between otherwise identical runs. During development,
 an editable installation from this checkout is useful; record its revision and
 dirty source hashes.
 
-## What the notebook currently does
+## What the notebook did at the assessment date
 
-The notebook is already mostly orchestration:
+At the assessment date, the notebook was already mostly orchestration:
 
 - Cell 1 imports the package's checker, workflow, report, and transformation
   functions. Its cloud fallback can install an unpinned CAMAT release; the local
@@ -93,7 +122,7 @@ record. Preserve the failure behavior and make incomplete execution explicit.
 
 ## Rule ownership inventory
 
-The IDs below are the current report IDs. “General” means CAMAT owns the
+The IDs below are the report IDs inspected at the assessment date. “General” means CAMAT owns the
 mechanism. “Diagnostic” means CAMAT may offer it without making it a universal
 MEI requirement. “DdT” means the local profile owns the expectation and severity.
 Reusable helpers may stay in CAMAT even when DdT selects the policy.
@@ -278,7 +307,7 @@ policy and pitch checks.
 
 ## Assessment evidence and baseline
 
-The companion [baseline record](mei-validation-baseline.json) contains current
+The companion [baseline record](mei-validation-baseline.json) contains the assessment-date
 revisions, worktree state, hashes, and focused probe results. The original pilot
 and source files had identical hashes before and after the probes.
 
@@ -320,8 +349,8 @@ Focused results with PPQ comparison enabled:
 No Verovio render, CAMAT consumer parse, network-resource pass, or new
 Schematron run was performed here. The earlier corpus chat's full validation
 evidence applies to its recorded input state, not automatically to future bytes.
-The temporary probe script is at
-[/tmp/camat-mei-assessment/probe.py](/tmp/camat-mei-assessment/probe.py).
+The temporary probe script was at `/tmp/camat-mei-assessment/probe.py` in the
+assessment environment; it is not a portable project artifact.
 
 ## Proposed minimal architecture
 

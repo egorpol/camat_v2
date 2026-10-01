@@ -105,14 +105,25 @@ Schema validation can answer questions such as:
 - Is this attribute value part of the MEI vocabulary?
 - Is required structural information missing?
 
-Project-level consistency checks complement the schema by testing relationships
-that a schema alone may not enforce, such as local publication rules or whether
-every reference resolves to an existing `xml:id`.
+MEI validation has two schema layers. **RELAX NG** checks the permitted
+structure; **Schematron** checks additional relationships expressed as
+assertions. For example, a `<harm>` can have allowed structure but still fail
+a rule requiring a starting anchor. CAMAT executes both layers from the
+explicitly selected schema; an `xml-model` declaration in the file does not
+itself run either validator.
+
+CAMAT's local-reference checks complement those layers by resolving supported
+pointers to IDs. A corpus adds its publication rules, such as required source
+metadata or facsimile coverage. These rules are separate from general MEI
+conformance.
 
 Together, schema validation and consistency checks make encodings more
 consistent, collaboration safer, and exchange between tools more reliable.
 Within CAMAT, the [MEI consistency tools](../api/mei_consistency.md) provide
-both the packaged MEI 5.1 CMN schema pass and additional editorial checks.
+read-only validation with the official MEI 5.1 CMN schema as the explicit
+default. CMN means Common Music Notation, not a particular corpus or composer.
+See [General MEI validation](mei-validation.md) for the checks, dependencies,
+statuses and reports.
 
 ## How XML, MEI, and the schema fit together
 
