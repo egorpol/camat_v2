@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import io
 import json
 from pathlib import Path
 import subprocess
+import tarfile
+import urllib.error
 
 import pytest
 
@@ -10,6 +13,8 @@ from camat.facsimile_viewer import find_camat_root as viewer_find_camat_root
 from camat.facsimile_viewer import resolve_mei_source_info
 from camat.notebook_workspace import (
     WORKSPACE_ENV,
+    _extract_tutorial_archive,
+    _parse_github_repo,
     activate_workspace,
     fetch_tutorial_workspace,
     find_camat_root,
@@ -123,6 +128,143 @@ def test_fetch_tutorial_workspace_sparse_clone(
     assert not (dest / "CAMAT_old" / "archive.ipynb").exists()
     again = fetch_tutorial_workspace(dest, repo=str(remote), ref="main")
     assert again == dest.resolve()
+
+
+def _github_archive_bytes(root: str = "camat_v2-main") -> bytes:
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w:gz") as tar:
+
+        def add(name: str, payload: bytes) -> None:
+            info = tarfile.TarInfo(name=name)
+            info.size = len(payload)
+            tar.addfile(info, io.BytesIO(payload))
+
+        add(f"{root}/notebooks/demo.ipynb", b"{}\n")
+        add(f"{root}/test_corpus/sample.mei", b"<mei/>\n")
+        add(f"{root}/CAMAT_old/archive.ipynb", b"{}\n")
+        add(f"{root}/notebooks/../../escaped.txt", b"nope\n")
+    return buffer.getvalue()
+
+
+def test_parse_github_repo() -> None:
+    assert _parse_github_repo("https://github.com/egorpol/camat_v2.git") == (
+        "egorpol",
+        "camat_v2",
+    )
+    assert _parse_github_repo("https://github.com/egorpol/camat_v2") == (
+        "egorpol",
+        "camat_v2",
+    )
+    assert _parse_github_repo("git@github.com:egorpol/camat_v2.git") == (
+        "egorpol",
+        "camat_v2",
+    )
+    assert _parse_github_repo("/tmp/camat_v2.git") is None
+
+
+def test_extract_tutorial_archive_keeps_tutorial_paths(tmp_path: Path) -> None:
+    archive = tmp_path / "source.tar.gz"
+    archive.write_bytes(_github_archive_bytes())
+    dest = tmp_path / "copied"
+
+    _extract_tutorial_archive(archive, dest, ("notebooks", "test_corpus"))
+
+    assert (dest / "notebooks" / "demo.ipynb").read_text(encoding="utf-8") == "{}\n"
+    assert (dest / "test_corpus" / "sample.mei").is_file()
+    assert not (dest / "CAMAT_old").exists()
+    assert not (tmp_path / "escaped.txt").exists()
+    assert not (dest / "escaped.txt").exists()
+
+
+def test_fetch_tutorial_workspace_uses_github_archive(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    payload = _github_archive_bytes()
+    calls: list[str] = []
+
+    def fake_urlopen(request, timeout=0):
+        url = request.full_url
+        calls.append(url)
+        if url.endswith("/refs/heads/main"):
+            return io.BytesIO(payload)
+        raise urllib.error.HTTPError(url, 404, "Not Found", hdrs=None, fp=None)
+
+    monkeypatch.setattr("camat.notebook_workspace.urllib.request.urlopen", fake_urlopen)
+
+    def fail_git(*args, **kwargs):
+        raise AssertionError("git should not be used for a GitHub repository")
+
+    monkeypatch.setattr("camat.notebook_workspace.subprocess.run", fail_git)
+    dest = tmp_path / "copied"
+
+    root = fetch_tutorial_workspace(
+        dest,
+        repo="https://github.com/egorpol/camat_v2.git",
+        ref="main",
+    )
+
+    assert root == dest.resolve()
+    assert (dest / "notebooks" / "demo.ipynb").is_file()
+    assert not (dest / "CAMAT_old").exists()
+    assert calls == [
+        "https://codeload.github.com/egorpol/camat_v2/tar.gz/refs/tags/main",
+        "https://codeload.github.com/egorpol/camat_v2/tar.gz/refs/heads/main",
+    ]
+    again = fetch_tutorial_workspace(
+        dest,
+        repo="https://github.com/egorpol/camat_v2.git",
+        ref="main",
+    )
+    assert again == dest.resolve()
+    assert len(calls) == 2
+
+
+def test_github_archive_falls_back_to_main(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    payload = _github_archive_bytes()
+    calls: list[str] = []
+
+    def fake_urlopen(request, timeout=0):
+        url = request.full_url
+        calls.append(url)
+        if url.endswith("/refs/heads/main"):
+            return io.BytesIO(payload)
+        raise urllib.error.HTTPError(url, 404, "Not Found", hdrs=None, fp=None)
+
+    monkeypatch.setattr("camat.notebook_workspace.urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr(
+        "camat.notebook_workspace._ref_candidates",
+        lambda ref: ["v9.9.9", "main"],
+    )
+
+    fetch_tutorial_workspace(
+        tmp_path / "copied",
+        repo="https://github.com/egorpol/camat_v2.git",
+    )
+
+    assert calls[0].endswith("/refs/tags/v9.9.9")
+    assert calls[-1].endswith("/refs/heads/main")
+
+
+def test_github_download_error_does_not_require_git(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fake_urlopen(request, timeout=0):
+        raise urllib.error.URLError("offline")
+
+    monkeypatch.setattr("camat.notebook_workspace.urllib.request.urlopen", fake_urlopen)
+
+    with pytest.raises(RuntimeError, match="Could not download") as exc_info:
+        fetch_tutorial_workspace(
+            tmp_path / "copied",
+            repo="https://github.com/egorpol/camat_v2.git",
+            ref="main",
+        )
+
+    message = str(exc_info.value)
+    assert "git is required" not in message
+    assert "Install git" not in message
 
 
 def test_cli_writes_tutorial_workspace(

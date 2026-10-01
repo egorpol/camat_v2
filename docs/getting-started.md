@@ -96,8 +96,9 @@ camat-fetch-tutorials
 python -m jupyterlab camat_tutorials/notebooks
 ```
 
-That sparse copy does not include documentation sources, tests, or the
-development archive. On [Jupyter4NFDI](https://hub.nfdi-jupyter.de) or
+That copy does not include documentation sources, tests, or the
+development archive. The command downloads GitHub's source archive for the
+installed CAMAT version. On [Jupyter4NFDI](https://hub.nfdi-jupyter.de) or
 Google Colab, see [Cloud notebooks](cloud-notebooks.md).
 
 To develop CAMAT itself, clone the repository so the installed code and

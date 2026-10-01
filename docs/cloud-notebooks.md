@@ -17,9 +17,9 @@ camat-fetch-tutorials
 ```
 
 That creates `camat_tutorials/notebooks/` and `camat_tutorials/test_corpus/`
-in the current directory. The command uses a sparse git clone of the tag that
-matches the installed CAMAT version, then `main` if that tag is missing.
-Python 3.11 or later and `git` are required.
+in the current directory. The command downloads the GitHub source archive for
+the tag that matches the installed CAMAT version, then `main` if that tag is
+missing, and keeps only those two folders. Python 3.11 or later is required.
 
 The same steps from a notebook cell:
 
