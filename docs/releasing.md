@@ -99,7 +99,10 @@ requests, and manual dispatches. It includes:
 The tag-driven release workflow calls this whole workflow first. Release
 building and PyPI publishing wait for all six jobs to pass. Before building,
 `scripts/prepare_release.py` checks the tag, both package version declarations,
-and a nonempty, dated changelog section. The validated notes are passed to the
+and a nonempty, dated changelog section. It also rejects GitHub `@mention`
+tokens such as `@facs` in those notes, because release pages would otherwise
+list unrelated accounts under Contributors. Write MEI attributes as `` `facs` ``
+or `` &#64;facs `` instead. The validated notes are passed to the
 GitHub release as an artifact. Prerelease versions such as `0.2.2b1` are marked
 as GitHub prereleases and do not replace the latest stable release.
 

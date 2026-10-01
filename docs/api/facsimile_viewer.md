@@ -52,6 +52,26 @@ by measures on that page. Hovering or clicking an individual measure selects
 its exact linked surface and zone. Only links whose zone id occurs on no
 surface are errors.
 
+## Inspect element IDs
+
+Hover over any rendered score element to show its MEI element name and
+`xml:id` on the **Hovered** row of the status area. The measure, facsimile
+zone, and score page stay visible above it. This works in score-only mode
+and in measures without a facsimile link, as well as in the linked view.
+
+The inspector uses IDs from the source MEI for every element type, including
+notes, dynamics, rests, clefs, accidentals, and slurs. It selects the nearest
+identified element: an accidental with its own `xml:id` takes precedence over
+its note, while a generated stem or notehead resolves to its identified MEI
+ancestor. Continuation fragments of spanning elements resolve to the same
+source ID. Elements without a visible rendering cannot be hovered; annotations
+remain accessible through the annotation list.
+
+Moving within a measure updates the element details without rerendering or
+reselecting its facsimile zone. Leaving the score clears the hovered ID;
+changing pages also clears the previous measure context. Source IDs are
+refreshed on reload, including when the notation SVG is reused from cache.
+
 ## Notebook source selection and local API
 
 The companion notebook exposes one configuration value:

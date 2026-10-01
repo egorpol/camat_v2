@@ -7,7 +7,7 @@ title: Binary convolution
 Teaching helpers for sliding-window overlap on binary pitch × time grids.
 The score-map math lives in [pattern search](pattern_search.md)
 (`convolution_map`, `score_kernel_at`, `pad_for_same`). This module holds the
-toy kernel catalog and explainer plots used by
+example-pattern catalog (`EXAMPLE_PATTERNS`) and explainer plots used by
 [`binary_convolution_explained.ipynb`](../../notebooks/binary_convolution_explained.ipynb).
 
 `binary_score_details` reports every cell's contribution and the intermediate

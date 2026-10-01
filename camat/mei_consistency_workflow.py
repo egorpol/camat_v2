@@ -29,13 +29,13 @@ from .check_mei_consistency import (
 )
 from .convert_harm_startid_to_tstamp import convert_file as convert_harm_startid_to_tstamp
 from .link_pb_to_surface import link_file as link_pb_to_surface
+from .mei_references import REFERENCE_ATTRS
 from .verovio_guard import python_executable
 
 
 MEI_NS = "http://www.music-encoding.org/ns/mei"
 XML_NS = "http://www.w3.org/XML/1998/namespace"
 XML_ID = f"{{{XML_NS}}}id"
-REFERENCE_ATTRS = {"facs", "startid", "endid", "target", "plist", "corresp", "sameas", "next", "prev", "copyof", "synch", "decls"}
 MEI_CMN_51_SCHEMA = Path(__file__).with_name("schemas") / "mei-CMN-5.1.rng"
 
 ET.register_namespace("", MEI_NS)
@@ -796,6 +796,9 @@ def run_checker(
     json_out: Path | None = None,
     check_ppq: bool = False,
     publication_profile: bool = False,
+    document_mode: str = "standalone",
+    editorial_diagnostics: bool = False,
+    group_diagnostics: bool | None = None,
 ) -> list[Finding]:
     """Run the package checker and write its CSV and optional JSON reports."""
     files = list(files)
@@ -804,6 +807,9 @@ def run_checker(
         root_dir=root,
         check_ppq=check_ppq,
         publication_profile=publication_profile,
+        document_mode=document_mode,
+        editorial_diagnostics=editorial_diagnostics,
+        group_diagnostics=group_diagnostics,
     )
     write_csv(csv_out, findings)
     if json_out is not None:
@@ -1497,12 +1503,16 @@ def run_editorial_checks(
     check_ppq: bool = True,
     publication_profile: bool = True,
     check_relaxng: bool = True,
-    check_fb_tstamp: bool = True,
-    check_pb_facs: bool = True,
+    check_fb_tstamp: bool | None = None,
+    check_pb_facs: bool | None = None,
     check_verovio: bool = True,
     verovio_render_pages: bool = True,
     check_iiif_links: bool = False,
     iiif_timeout: int = 15,
+    schema: Path = MEI_CMN_51_SCHEMA,
+    document_mode: str = "standalone",
+    editorial_diagnostics: bool = False,
+    group_diagnostics: bool | None = None,
 ):
     """Run the combined-score editorial check suite and return one report DataFrame.
 
@@ -1519,15 +1529,20 @@ def run_editorial_checks(
         json_out=None,
         check_ppq=check_ppq,
         publication_profile=publication_profile,
+        document_mode=document_mode,
+        editorial_diagnostics=editorial_diagnostics,
+        group_diagnostics=group_diagnostics,
     )
     df = load_report(csv_out)
     extra_rows: list[dict[str, str]] = []
-    if check_fb_tstamp:
+    include_fb_style = publication_profile if check_fb_tstamp is None else check_fb_tstamp
+    include_pb_policy = publication_profile if check_pb_facs is None else check_pb_facs
+    if include_fb_style:
         extra_rows.extend(figured_bass_report_rows(files, root=root, apply=False))
-    if check_pb_facs:
+    if include_pb_policy:
         extra_rows.extend(page_break_facs_report_rows(files, root=root, apply=False))
     if check_relaxng:
-        extra_rows.extend(run_relaxng_validation(files, root=root).rows)
+        extra_rows.extend(run_relaxng_validation(files, root=root, schema=schema).rows)
     if check_iiif_links:
         extra_rows.extend(iiif_graphic_target_rows(files, root=root, timeout=iiif_timeout))
     if check_verovio:

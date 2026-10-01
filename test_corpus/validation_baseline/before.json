@@ -1,0 +1,90 @@
+{
+  "scope": "Pre-refactor base checker plus explicit CMN RELAX NG only; no full conformance/release pass is claimed.",
+  "inputs": [
+    {
+      "path": "minimal-cmn-51.mei",
+      "sha256": "9bf22175e5abccbbe1de144b658d9fd7ca12144099b56dde8a6d07f18d9aac75",
+      "xml": "passed",
+      "relaxng": "passed",
+      "schematron": "not-executed",
+      "consumer_parse": "not-executed",
+      "verovio": "not-executed",
+      "check_ppq": true,
+      "publication_profile": false,
+      "findings_by_rule": {
+        "measure_facs": 2,
+        "missing_instrdef": 1
+      },
+      "findings_by_severity": {
+        "warning": 2,
+        "info": 1
+      }
+    },
+    {
+      "path": "Hummel_Preludes_Op67_No11.mei",
+      "sha256": "25e0b1d7b74469cc541fbfc177e736e5dd2185b0bbfa868e682c82ec1118ece4",
+      "xml": "passed",
+      "relaxng": "passed",
+      "schematron": "not-executed",
+      "consumer_parse": "not-executed",
+      "verovio": "not-executed",
+      "check_ppq": true,
+      "publication_profile": false,
+      "findings_by_rule": {
+        "corpus_term_spelling_variants": 1,
+        "dur_ppq_mismatch": 7,
+        "layer_duration_overfull": 1,
+        "layer_duration_underfull": 4,
+        "measure_facs": 8,
+        "measure_sequence": 1,
+        "missing_instrdef": 4,
+        "missing_meter": 2,
+        "rhythm_no_meter": 3,
+        "term_anchor": 1,
+        "term_spelling_variants_in_file": 1
+      },
+      "findings_by_severity": {
+        "warning": 16,
+        "info": 17
+      }
+    },
+    {
+      "path": "Webern_Variations_for_Piano_Op27_No2.mei",
+      "sha256": "67e6c2bf7db26f4ce6f5bc791340d565095a902b7e73bdadb3066b948671b479",
+      "xml": "passed",
+      "relaxng": "passed",
+      "schematron": "not-executed",
+      "consumer_parse": "not-executed",
+      "verovio": "not-executed",
+      "check_ppq": true,
+      "publication_profile": false,
+      "findings_by_rule": {
+        "corpus_term_spelling_variants": 1,
+        "measure_facs": 14,
+        "measure_sequence": 1,
+        "missing_instrdef": 4,
+        "missing_meter": 2,
+        "rhythm_no_meter": 4,
+        "term_anchor": 1,
+        "term_spelling_variants_in_file": 1
+      },
+      "findings_by_severity": {
+        "warning": 17,
+        "info": 11
+      }
+    },
+    {
+      "path": "local/buxtehude_op1_01_sonata_f_major_corr.mei",
+      "sha256": "3dd9d312905249e0dcf60b54b5596cbbdcf2420b235eb21988128bf3850c2d55",
+      "xml": "passed",
+      "relaxng": "passed",
+      "schematron": "not-executed",
+      "consumer_parse": "not-executed",
+      "verovio": "not-executed",
+      "check_ppq": true,
+      "publication_profile": false,
+      "findings_by_rule": {},
+      "findings_by_severity": {}
+    }
+  ]
+}

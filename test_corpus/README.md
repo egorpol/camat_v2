@@ -4,6 +4,11 @@ This directory contains both URL manifests and checked-in MEI fixtures.
 See [Test sources](../docs/guides/sources.md) for the external encoding projects
 and commands that consume the manifests.
 
+The [frozen validation baseline](validation_baseline/README.md) selects a tiny
+synthetic CMN score, pinned Hummel and Webern encodings from the existing links,
+and an ignored local DdT integration snapshot. It records provenance, input
+hashes and before/after results for the general-checking boundary refactor.
+
 ## Local Buxtehude fixtures
 
 The standalone Buxtehude MEI files and `buxtehude_pages/` are used by editorial

@@ -49,3 +49,25 @@ def test_missing_or_invalid_dated_section_blocks_publication(tmp_path, heading):
     (root / "CHANGELOG.md").write_text(f"{heading}\n\n- Fixed parsing.\n")
     with pytest.raises(ValueError):
         prepare_release(root, "v0.2.1")
+
+
+@pytest.mark.parametrize("notes", [
+    "- Fixed unresolved measure @facs links.",
+    "- Fixed unresolved measure `@facs` links.",
+    "- Linked `<graphic @target>` images.",
+    "- Matched zones on `@type`.",
+])
+def test_github_mention_tokens_block_publication(tmp_path, notes):
+    root = release_checkout(tmp_path, notes=notes)
+    with pytest.raises(ValueError, match="false Contributors"):
+        prepare_release(root, "v0.2.1")
+
+
+@pytest.mark.parametrize("notes", [
+    "- Fixed unresolved measure `facs` links.",
+    "- Linked `<graphic &#64;target>` images.",
+    "- Contact support@example.com for corpus access.",
+])
+def test_safe_attribute_spellings_and_emails_are_allowed(tmp_path, notes):
+    root = release_checkout(tmp_path, notes=notes)
+    assert prepare_release(root, "v0.2.1") == ("0.2.1", False, f"{notes}\n")

@@ -619,6 +619,31 @@ def _read_annotation_models(root: ET.Element) -> list[dict]:
     return annotations
 
 
+def _read_source_elements(root: ET.Element) -> dict[str, dict]:
+    """Index actual MEI IDs, including non-note and nonvisual elements.
+
+    SVG also contains IDs invented by Verovio. Keeping the source index lets
+    the browser skip those and inspect the nearest identified MEI ancestor.
+    Carry measure context in one traversal, including for ID-less measures.
+    """
+    elements = {}
+    pending = [(root, None, None)]
+    while pending:
+        element, measure_id, measure_n = pending.pop()
+        name = _local_name(element)
+        if name == "measure":
+            measure_id = element.get(XML_ID)
+            measure_n = element.get("n")
+        if element_id := element.get(XML_ID):
+            elements[element_id] = {
+                "name": name,
+                "measure_id": measure_id,
+                "measure_n": measure_n,
+            }
+        pending.extend((child, measure_id, measure_n) for child in reversed(element))
+    return elements
+
+
 def _encoded_breaks_before(root: ET.Element) -> tuple[list[dict], list[str]]:
     page_breaks: list[dict] = []
     system_breaks: list[str] = []
@@ -831,6 +856,7 @@ def read_facsimile_model(
     tree = ET.parse(mei_path)
     root = tree.getroot()
     annotations = _read_annotation_models(root)
+    source_elements = _read_source_elements(root)
     encoded_page_breaks, encoded_system_breaks = _encoded_breaks_before(root)
 
     def score_only_model(reason: str) -> dict:
@@ -874,6 +900,7 @@ def read_facsimile_model(
             "missing_facs": measures,
             "other_surface_links": [],
             "annotations": annotations,
+            "source_elements": source_elements,
             "encoded_page_breaks": encoded_page_breaks,
             "encoded_system_breaks": encoded_system_breaks,
             "layout": infer_facsimile_layout(
@@ -1109,6 +1136,7 @@ def read_facsimile_model(
             row for row in linked if (row["surface_index"] or 0) > 0
         ],
         "annotations": annotations,
+        "source_elements": source_elements,
         "encoded_page_breaks": encoded_page_breaks,
         "encoded_system_breaks": encoded_system_breaks,
     }
@@ -1702,6 +1730,7 @@ def make_viewer_html(
 
     viewer_id = viewer_id or f"mei-viewer-{uuid.uuid4().hex}"
     has_facsimile = model.get("has_facsimile", True)
+    source_elements_json = json_for_script(model.get("source_elements", {}))
     surfaces = model.get("surfaces", [])
     surface_overlays = {surface["index"]: [] for surface in surfaces}
     pairs = []
@@ -1872,7 +1901,7 @@ def make_viewer_html(
     <div class="viewer-pane facsimile-pane" aria-label="Facsimile with measure zones">
       {''.join(facsimile_pages)}
     </div>"""
-        viewer_status = "Hover or click a rendered measure or facsimile zone."
+        viewer_status = "Hover a score element to inspect it, or select a facsimile zone."
         grid_class = "viewer-grid"
         facsimile_zoom_controls = f"""
     <div class="zoom-controls" aria-label="Facsimile zoom controls">
@@ -1908,6 +1937,18 @@ def make_viewer_html(
     border-radius: 6px;
     background: #f8fafc;
     font-size: 13px;
+    overflow-wrap: anywhere;
+  }}
+  #{viewer_id} .viewer-hover {{
+    margin-top: 4px;
+    min-height: 1.5em;
+  }}
+  #{viewer_id} .hover-id {{
+    user-select: text;
+  }}
+  #{viewer_id} .viewer-message {{
+    margin-top: 4px;
+    color: #b91c1c;
   }}
   #{viewer_id} .score-toolbar {{
     display: flex;
@@ -2123,7 +2164,11 @@ def make_viewer_html(
   }}
 </style>
 <div id="{viewer_id}" class="mei-viewer">
-  <div class="viewer-status" aria-live="polite">{viewer_status}</div>
+  <div class="viewer-status" aria-live="polite">
+    <div class="viewer-context">{viewer_status}</div>
+    <div class="viewer-hover"><span class="hover-label">Hovered: —</span><code class="hover-id"></code></div>
+    <div class="viewer-message" hidden></div>
+  </div>
   <div class="score-toolbar" aria-label="Rendered score page controls">
     <button type="button" class="score-prev" {disabled_prev}>Previous score page</button>
     <button type="button" class="score-next" {disabled_next}>Next score page</button>
@@ -2158,6 +2203,7 @@ def make_viewer_html(
     root.dataset.camatViewerInitialized = 'true';
 
   const pairs = {pairs_json};
+  const sourceElements = new Map(Object.entries({source_elements_json}));
   const annotations = {annotations_json};
   const scorePages = {score_pages_json};
   const scorePageSurfaces = {score_page_surfaces_json};
@@ -2168,7 +2214,11 @@ def make_viewer_html(
   const zoomStep = {zoom_step_percent};
   const minZoom = {min_zoom_percent};
   const maxZoom = {max_zoom_percent};
-  const status = root.querySelector('.viewer-status');
+  const contextStatus = root.querySelector('.viewer-context');
+  const hoverLabel = root.querySelector('.hover-label');
+  const hoverId = root.querySelector('.hover-id');
+  const messageStatus = root.querySelector('.viewer-message');
+  const scorePane = root.querySelector('.score-pane');
   const pageLabel = root.querySelector('.score-page-label');
   const surfaceLabel = root.querySelector('.facsimile-page-label');
   const prevButton = root.querySelector('.score-prev');
@@ -2192,6 +2242,75 @@ def make_viewer_html(
   let activeSurfaceIndex = {initial_surface_index};
   let scoreZoom = initialScoreZoom;
   let facsimileZoom = initialFacsimileZoom;
+  let activeScoreMeasure = null;
+  let hoveredId = null;
+
+  function setContext(text) {{
+    if (contextStatus.textContent !== text) contextStatus.textContent = text;
+  }}
+
+  function setHover(match) {{
+    const nextId = match ? match.id : null;
+    if (nextId === hoveredId) return;
+    hoveredId = nextId;
+    hoverLabel.textContent = match ? `Hovered: ${{match.info.name}} | xml:id: ` : 'Hovered: —';
+    hoverId.textContent = nextId || '';
+  }}
+
+  function sourceElement(node) {{
+    const id = node.getAttribute('data-id') || node.id;
+    if (sourceElements.has(id)) return {{id, info: sourceElements.get(id)}};
+    // Continuations of slurs, ties, etc. reference their source via a class.
+    if (node.classList.contains('spanning')) {{
+      for (const token of node.classList) {{
+        if (token.startsWith('id-') && sourceElements.has(token.slice(3))) {{
+          const sourceId = token.slice(3);
+          return {{id: sourceId, info: sourceElements.get(sourceId)}};
+        }}
+      }}
+    }}
+    return null;
+  }}
+
+  function inspectScoreTarget(target) {{
+    const page = root.querySelector('.score-page.is-active');
+    if (!(target instanceof Element) || !page || !page.contains(target)) {{
+      setHover(null);
+      return;
+    }}
+    let match = null;
+    for (let node = target; node && node !== page; node = node.parentElement) {{
+      match = sourceElement(node);
+      if (match) break;
+    }}
+    if (!match) {{
+      setHover(null);
+      return;
+    }}
+    // Use the visible measure for continuation fragments, which may be drawn
+    // on a different page from the source element's containing measure.
+    const measure = target.closest('.measure');
+    if (measure && measure !== activeScoreMeasure) {{
+      const measureSource = sourceElement(measure);
+      const measureId = measureSource ? measureSource.id : match.info.measure_id;
+      const item = byMeasure.get(measureId);
+      if (item) {{
+        activate(item, false, measure);
+      }} else {{
+        clearActive();
+        measure.classList.add('is-active');
+        activeScoreMeasure = measure;
+        const info = measureSource ? measureSource.info : match.info;
+        const idText = measureId ? ` | ${{measureId}}` : '';
+        const linkText = totalSurfaces ? 'no facsimile link' : 'score-only';
+        setContext(`Measure ${{info.measure_n || '(unnumbered)'}}${{idText}} | ${{linkText}} | score page ${{scorePages[activePageIndex]}}`);
+      }}
+    }} else if (!measure) {{
+      clearActive();
+      setContext(`score page ${{scorePages[activePageIndex]}}`);
+    }}
+    setHover(match);
+  }}
 
   function annotationTargets(item) {{
     return (item.target_ids || []).map((targetId) =>
@@ -2209,6 +2328,8 @@ def make_viewer_html(
   function selectAnnotation(item) {{
     if (!item) return;
     if (item.page_index !== null && item.page_index !== undefined) showScorePage(item.page_index);
+    clearActive();
+    setHover(null);
     root.querySelectorAll('.is-selected-annotation').forEach((node) => node.classList.remove('is-selected-annotation'));
     root.querySelectorAll('.annotation-item.is-active').forEach((node) => node.classList.remove('is-active'));
     const targets = annotationTargets(item);
@@ -2217,7 +2338,7 @@ def make_viewer_html(
     if (button) button.classList.add('is-active');
     if (targets[0]) targets[0].scrollIntoView({{block: 'center', inline: 'center', behavior: 'smooth'}});
     const anchor = item.anchor_mode === 'tstamp' ? `tstamp ${{item.tstamp}}` : item.anchor_mode;
-    status.textContent = `Annotation ${{item.id}} | ${{anchor}} | ${{item.text || '(no text)'}}`;
+    setContext(`Annotation ${{item.id}} | ${{anchor}} | ${{item.text || '(no text)'}}`);
   }}
 
   function clampZoom(value) {{
@@ -2264,6 +2385,9 @@ def make_viewer_html(
     const pageChanged = index !== activePageIndex || !root.querySelector('.score-page.is-active');
     activePageIndex = index;
     if (pageChanged) {{
+      clearActive();
+      setHover(null);
+      setContext(`score page ${{scorePages[activePageIndex]}}`);
       root.querySelectorAll('.score-page').forEach((page, pageIndex) => {{
         page.classList.toggle('is-active', pageIndex === activePageIndex);
       }});
@@ -2276,23 +2400,27 @@ def make_viewer_html(
 
   function clearActive() {{
     root.querySelectorAll('.is-active.measure, .zone.is-active').forEach((node) => node.classList.remove('is-active'));
+    activeScoreMeasure = null;
   }}
 
-  function activate(item, scrollScore = false) {{
+  function activate(item, scrollScore = false, scoreMeasure = null) {{
     if (!item) return;
-    if (item.pageIndex !== null && item.pageIndex !== undefined) showScorePage(item.pageIndex);
+    if (!scoreMeasure && item.pageIndex !== null && item.pageIndex !== undefined) showScorePage(item.pageIndex);
     showFacsimileSurface(item.surfaceIndex);
     clearActive();
+    setHover(null);
     const activePage = root.querySelector('.score-page.is-active');
-    const measure = activePage ? activePage.querySelector(`#${{CSS.escape(item.measureId)}}`) : null;
+    const measure = scoreMeasure || (activePage ? activePage.querySelector(`#${{CSS.escape(item.measureId)}}`) : null);
     const zone = root.querySelector(`.zone[data-zone-id="${{CSS.escape(item.zoneId)}}"]`);
     if (measure) {{
       measure.classList.add('is-active');
+      activeScoreMeasure = measure;
       if (scrollScore) measure.scrollIntoView({{block: 'center', inline: 'center', behavior: 'smooth'}});
     }}
     if (zone) zone.classList.add('is-active');
-    const scorePageText = item.scorePage ? ` | score page ${{item.scorePage}}` : ' | not in rendered score output';
-    status.textContent = `Measure ${{item.measureN || '(unnumbered)'}} | ${{item.measureId}} | ${{item.zoneId}}${{scorePageText}}`;
+    const scorePage = scoreMeasure ? scorePages[activePageIndex] : item.scorePage;
+    const scorePageText = scorePage ? ` | score page ${{scorePage}}` : ' | not in rendered score output';
+    setContext(`Measure ${{item.measureN || '(unnumbered)'}} | ${{item.measureId}} | ${{item.zoneId}}${{scorePageText}}`);
   }}
 
   prevButton.addEventListener('click', () => showScorePage(activePageIndex - 1));
@@ -2306,12 +2434,9 @@ def make_viewer_html(
     facsimileZoomIn.addEventListener('click', () => applyFacsimileZoom(facsimileZoom + zoomStep));
   }}
 
-  root.querySelectorAll('.score-pane .measure[id]').forEach((measure) => {{
-    const item = byMeasure.get(measure.id);
-    if (!item) return;
-    measure.addEventListener('mouseenter', () => activate(item));
-    measure.addEventListener('click', () => activate(item));
-  }});
+  scorePane.addEventListener('pointerover', (event) => inspectScoreTarget(event.target));
+  scorePane.addEventListener('pointerout', (event) => inspectScoreTarget(event.relatedTarget));
+  scorePane.addEventListener('click', (event) => inspectScoreTarget(event.target));
 
   root.querySelectorAll('.zone').forEach((zone) => {{
     const item = byZone.get(zone.dataset.zoneId);
@@ -2337,7 +2462,8 @@ def make_viewer_html(
     image.addEventListener('error', () => {{
       const label = image.getAttribute('title') || image.currentSrc || 'unknown graphic';
       const loaded = image.currentSrc || image.getAttribute('src') || '';
-      status.textContent = loaded.startsWith('http')
+      messageStatus.hidden = false;
+      messageStatus.textContent = loaded.startsWith('http')
         ? `Facsimile image failed to load: ${{label}}. Notebook widget iframes cannot fetch third-party scans; relaunch with embed_remote_graphics=True.`
         : `Facsimile image failed to load: ${{label}}`;
     }});

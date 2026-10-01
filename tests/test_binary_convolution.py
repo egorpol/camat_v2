@@ -4,26 +4,26 @@ import numpy as np
 import pytest
 
 from camat.binary_convolution import (
-    TOY_KERNELS,
+    EXAMPLE_PATTERNS,
     choose_placements,
     make_random_host,
     plot_kernel_augmentations,
     plot_kernel_scales,
-    resolve_toy_kernel,
+    resolve_example_pattern,
 )
 
 
-def test_resolve_toy_kernel_returns_copy() -> None:
-    key, kernel = resolve_toy_kernel("motif")
+def test_resolve_example_pattern_returns_copy() -> None:
+    key, kernel = resolve_example_pattern("motif")
     assert key == "motif"
-    assert kernel.shape == TOY_KERNELS["motif"].shape
+    assert kernel.shape == EXAMPLE_PATTERNS["motif"].shape
     kernel[0, 0] = 0
-    assert TOY_KERNELS["motif"][0, 0] == 1.0
+    assert EXAMPLE_PATTERNS["motif"][0, 0] == 1.0
 
 
 def test_make_random_host_plants_perfect_match() -> None:
     rng = np.random.default_rng(0)
-    _, kernel = resolve_toy_kernel("motif")
+    _, kernel = resolve_example_pattern("motif")
     host, planted = make_random_host(0.0, kernel, rng, shape=(10, 18), plant=True)
     assert planted
     i, j = planted[0]
@@ -35,7 +35,7 @@ def test_make_random_host_plants_perfect_match() -> None:
 
 def test_make_random_host_density_bounds() -> None:
     rng = np.random.default_rng(1)
-    _, kernel = resolve_toy_kernel("hold")
+    _, kernel = resolve_example_pattern("hold")
     with pytest.raises(ValueError, match="density"):
         make_random_host(1.2, kernel, rng)
 

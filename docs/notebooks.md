@@ -117,8 +117,8 @@ rolls, and the original notation. Companion guide:
 Consult these method tutorials when you need more detail:
 
 - [Understand binary convolution](../notebooks/binary_convolution_explained.ipynb)
-  explains sliding windows, scoring, padding, and scaling with toy grids and
-  Bach examples.
+  explains sliding windows, scoring, edge placements, and scaling with small
+  example grids and Bach examples.
 - [Binary search methods](../notebooks/binary_pattern_search.ipynb) compares
   motif, chord, and texture queries, voices, augmentation, filtering, and
   projection back to source notes.

@@ -7,6 +7,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Added a frozen MEI checking baseline with a tiny synthetic CMN score, pinned
+  Hummel and Webern sample encodings, input hashes, and a local DdT pilot snapshot.
+  Added regressions for standalone/assembly references, `resp`/`source`, optional
+  group comparisons, explicit schema selection, and input hash preservation.
+
+- The facsimile viewer now prints a **Hovered** status row with the MEI element
+  name and source `xml:id` of the nearest identified score element under the
+  pointer. Notes, dynamics, rests, clefs, accidentals, slurs, and other
+  rendered types work in linked and score-only mode; Verovio-generated stems
+  and noteheads resolve to their identified MEI ancestor. Moving within a
+  measure updates the element details without reselecting its facsimile zone.
+  `read_facsimile_model` indexes every source ID as `source_elements` so the
+  browser can ignore SVG-only ids. Documented in the API page and the companion
+  notebook.
+
+### Changed
+
+- General MEI consistency checking no longer requires facsimile coverage or
+  applies numbering, naming, and group conventions implicitly. Such diagnostics
+  are explicit options; the legacy DdT publication flag retains its rules.
+  Bare fragments resolve in their own file by default; cross-page resolution
+  requires `document_mode="assembly"`. Checking and ID copying share the local
+  pointer registry, including `resp` and `source`, and score checks exclude
+  metadata incipits. The workflow accepts an explicit RELAX NG schema.
+- The consistency notebook uses a portable frozen Hummel example, displays its
+  selected schema and checks, runs base checks once in check-only mode, and
+  rejects cleanup flags for original inputs. Page assembly explicitly prepares
+  copies and writes its page-check report. Actual Schematron execution and full
+  execution records remain a subsequent validation stage.
+
+- The convolution explainer now calls the opening grids an example passage and
+  an example pattern, and explains the two edge policies in those words before
+  the code names `padding="valid"` (fully inside the passage) and
+  `padding="same"` (silence added so the pattern may hang off the edge).
+  Figure labels and the pattern-search guide use the same wording. The catalog
+  and helpers are `EXAMPLE_PATTERNS`, `resolve_example_pattern`, and
+  `show_example_overview`; the notebook variables are `PATTERN_NAME`,
+  `example_passage`, and `example_pattern`. `padding="same"` is described as
+  zero-padding: the border outside the passage is filled with zeros, and a
+  zero is silence.
+- `scripts/prepare_release.py` rejects GitHub mention tokens such as
+  `` `facs` `` written with a leading `@` in the dated release notes, so MEI
+  attribute names do not appear as false Contributors on the GitHub release
+  page.
+
 ## [0.2.4] - 2026-09-18
 
 ### Added
@@ -23,7 +70,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   against every page's SVG; each page's element ids are collected in one pass.
   On a 183-measure edition with 5.6 MB of SVG this drops from 260 ms to 7.5 ms
   per render, with an identical mapping.
-- The facsimile viewer now downloads HTTP(S)/IIIF `<graphic @target>` images at
+- The facsimile viewer now downloads HTTP(S)/IIIF `<graphic &#64;target>` images at
   a display width and embeds them as data URIs. Notebook iframes were leaving
   full-resolution BSB URLs in `<img src>`, so the pane stayed empty while the
   MEI zones themselves parsed. Packaged `camat/examples` copies also include
@@ -53,7 +100,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   triggered N full Verovio re-renders, most of them into orphaned widgets.
 - **Reload zones** / **Check facsimile** / **Reload score** now report failures
   in the status area. ipywidgets discards exceptions raised inside a click
-  handler, so a single unresolved measure `@facs` link made the button look
+  handler, so a single unresolved measure `facs` link made the button look
   inert instead of naming the bad link.
 - An auto-watch reload that lands while the editor is still writing the MEI now
   retries instead of reporting a parse error. The save is briefly visible as
@@ -70,31 +117,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   nested in `<surfaceGrp>`. MEI permits one `<facsimile>` per witness in
   `<sourceDesc>`, and reading only the first element's direct `<surface>`
   children turned zones that measures legitimately pointed at into "unresolved
-  measure @facs" errors. `format_facsimile_summary` reports when surfaces were
+  measure `facs`" errors. `format_facsimile_summary` reports when surfaces were
   merged from more than one `<facsimile>`, since that is never obvious.
-- Measure `@facs` is now read as the URI *list* MEI defines it to be. A measure
+- Measure `facs` is now read as the URI *list* MEI defines it to be. A measure
   broken across a system or page break carries one zone per fragment, and
   treating the whole attribute as a single id rejected the file outright. Each
   fragment gets its own highlight box, and fragments may sit on different
   surfaces. Model rows gained `zone_ids` and `zones`; `zone_id` and `zone` still
   hold the first fragment.
-- An unresolved `@facs` error now names the tokens that failed to resolve rather
+- An unresolved `facs` error now names the tokens that failed to resolve rather
   than the whole attribute value, which sent readers to the wrong reference when
   only one id in a multi-zone link was wrong.
 - `read_facsimile_model` now reports every structural problem in one numbered
   report instead of raising on the first. Correcting a large edition one
-  discovered problem per run was needlessly slow. Unresolved `@facs` links that
+  discovered problem per run was needlessly slow. Unresolved `facs` links that
   are merely a consequence of an earlier problem are counted rather than listed,
   so causes are not buried under their effects.
 - Zone geometry is now validated. An inverted or zero-area zone (`lrx` at or
   before `ulx`), or one reaching outside its `<graphic>`, draws an overlay
   rectangle that is invisible or clipped, which reads as "the alignment is
   broken" rather than "this one zone is mis-encoded".
-- Measure zones are matched on `@type` case-insensitively and as the token list
+- Measure zones are matched on `type` case-insensitively and as the token list
   MEI defines it, so `type="Measure"` and `type="measure staff"` are recognized.
   An exact equality test dropped them and then reported the file as having no
   zones. When no measure zones are found, the message now distinguishes surfaces
-  with no `<zone>` elements from zones that carry no `@type` and zones typed
+  with no `<zone>` elements from zones that carry no `type` and zones typed
   something else, instead of reading as "there are no zones" in all three cases.
 - Structural problems are no longer masked by the score-only fallback: a
   surface that had to be skipped is now reported rather than silently becoming
