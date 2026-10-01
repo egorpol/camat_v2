@@ -106,6 +106,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The facsimile viewer's split view no longer squeezes the score on small
+  displays and tablets. The facsimile column is capped at 42% of the viewer
+  width, the panes stack below a 720px viewer width (measured with a container
+  query, so standalone HTML behaves the same), and pane height follows the
+  visible screen height up to `viewer_max_height`. Touch screens get 40px
+  controls, and the notebook iframe now also shrinks when its content does.
+  Selecting a measure scrolls the partner pane to it when it is out of view
+  (including the initial measure), without scrolling the surrounding notebook.
+  A **Layout** control (Auto, Side by side, Stacked) and a draggable,
+  keyboard-accessible divider between the panes let users override the
+  automatic split; both choices persist in the browser across reloads.
+- Conversion subprocesses now call `python_executable()` so Verovio still runs
+  when the host rewrites `sys.executable` (for example Cursor's AppImage).
+- The facsimile notebook default example is now
+  `test_corpus/Buxtehude-Anhang-S._175_musicxml_verovio.mei`. The packaged
+  miniature demo remains available as a commented alternative.
 - All rendered notation in the convolution explainer now has an opaque white
   background and black captions, so the examples remain readable in dark-themed
   notebooks. Refreshed the saved notation outputs.

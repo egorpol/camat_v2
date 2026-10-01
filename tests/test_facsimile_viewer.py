@@ -938,7 +938,9 @@ def test_score_only_viewer_can_transition_to_linked_view_without_rerendering(
     assert score_only["rendered_score"] is True
     assert "Score-only mode" in score_only["html"]
     assert "viewer-grid is-score-only" in score_only["html"]
-    assert "facsimile-pane" not in score_only["html"]
+    assert 'class="viewer-pane facsimile-pane"' not in score_only["html"]
+    assert 'class="pane-splitter"' not in score_only["html"]
+    assert 'class="layout-select"' not in score_only["html"]
 
     _write_facsimile_mei(mei_path, include_facsimile=True)
     linked = build_facsimile_viewer(
@@ -1034,6 +1036,41 @@ def test_viewer_page_controls_initialize_after_dom_attachment(tmp_path: Path) ->
     assert "root.dataset.camatViewerInitialized" in html
     assert 'class="score-zoom-out"' in html
     assert '<button type="button" class="facsimile-zoom-out"' not in html
+
+
+def test_viewer_layout_keeps_the_score_readable_on_small_displays(tmp_path: Path) -> None:
+    mei_path = tmp_path / "page.mei"
+    _write_facsimile_mei(mei_path)
+    model = read_facsimile_model(mei_path)
+    html = make_viewer_html(
+        model,
+        [{"number": 1, "svg": '<svg><g class="measure" id="measure-1"/></svg>'}],
+        total_score_pages=1,
+        viewer_id="test-viewer",
+        viewer_max_height=700,
+        facsimile_max_width=480,
+    )
+
+    assert "minmax(0, var(--facsimile-column, min(480px, 42%)))" in html
+    assert "minmax(0, 480px)" not in html
+    assert 'class="viewer-grid layout-auto"' in html
+    assert 'class="pane-splitter" role="separator"' in html
+    assert '<select class="layout-select"' in html
+    assert '<option value="stacked">Stacked</option>' in html
+    assert "camat.facsimileViewer.layout" in html
+    assert "setPointerCapture" in html
+    assert "container-type: inline-size" in html
+    assert "@container (max-width: 720px)" in html
+    assert "@media (pointer: coarse)" in html
+    assert "--pane-max-height: 700px" in html
+    assert "max-height: var(--pane-max-height)" in html
+    assert "const viewerMaxHeight = 700;" in html
+    assert "window.top.innerHeight" in html
+    assert 'aria-label="Previous score page"' in html
+    assert "function revealInPane(node" in html
+    assert "pane.scrollBy(" in html
+    assert ".scrollIntoView(" not in html
+    assert "activate(item, false, null, false)" in html
 
 
 @pytest.mark.parametrize(
@@ -1296,6 +1333,8 @@ def test_embed_viewer_html_uses_iframe_srcdoc_and_escapes_markup() -> None:
     assert "&amp; y" in wrapped
     assert "<div id=" not in wrapped
     assert "syncHeight" in wrapped
+    assert "document.body.getBoundingClientRect().height" in wrapped
+    assert "documentElement.scrollHeight" not in wrapped
     assert "no-referrer" in wrapped
 
 
@@ -1856,7 +1895,10 @@ def test_facsimile_notebook_is_portable_and_has_no_persisted_widget_state() -> N
     )
 
     assert "import setup_camat\nfrom camat import" in code
-    assert 'MEI_SOURCE = "camat/examples/facsimile_viewer_demo.mei"' in code
+    assert (
+        'MEI_SOURCE = "test_corpus/Buxtehude-Anhang-S._175_musicxml_verovio.mei"'
+        in code
+    )
     assert "SHOW_ANNOTATIONS = True" in code
     assert "ALIGN_TO_FACSIMILE = False" in code
     # Notebook widget iframes cannot fetch third-party IIIF <img src>.

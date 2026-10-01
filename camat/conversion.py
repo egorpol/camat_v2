@@ -40,6 +40,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 from urllib.parse import urlparse
 
 from .parser_utils import expand_file_sources
+from .verovio_guard import python_executable
 from .verovio_render import vrv_guess_input_from
 
 
@@ -429,7 +430,7 @@ def _verovio_version() -> str:
     def probe() -> str:
         proc = subprocess.run(
             [
-                sys.executable,
+                python_executable(),
                 "-c",
                 "import verovio; print(verovio.toolkit().getVersion())",
             ],
@@ -1151,7 +1152,7 @@ def _musescore_to_musicxml_path(
     target = intermediate_dir / f"{_safe_stem(str(source_path))}_{_sha12(str(source_path.resolve()))}.musicxml"
 
     cmd = [
-        sys.executable,
+        python_executable(),
         "-c",
         MUSESCORE_EXPORT_CHILD,
         musescore_bin,
@@ -1470,7 +1471,7 @@ def _convert_one(
             "verovio_conversion",
             lambda: subprocess.run(
                 [
-                    sys.executable,
+                    python_executable(),
                     "-X",
                     "faulthandler",
                     "-c",
