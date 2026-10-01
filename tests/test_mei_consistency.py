@@ -74,9 +74,10 @@ def _write_editorial_fixture(path: Path) -> None:
 
 
 def test_package_checker_returns_findings_and_writes_reports(tmp_path: Path) -> None:
-    mei_path = Path("tests/fixtures/basic.mei").resolve()
+    repo_root = Path(__file__).resolve().parents[1]
+    mei_path = repo_root / "tests/fixtures/basic.mei"
 
-    findings = check_mei_files([mei_path], root_dir=Path.cwd())
+    findings = check_mei_files([mei_path], root_dir=repo_root)
 
     assert all(finding.file == "tests/fixtures/basic.mei" for finding in findings)
     assert not any(finding.check == "well_formed_xml" for finding in findings)
@@ -85,7 +86,7 @@ def test_package_checker_returns_findings_and_writes_reports(tmp_path: Path) -> 
     json_path = tmp_path / "report.json"
     written_findings = run_checker(
         [mei_path],
-        root=Path.cwd(),
+        root=repo_root,
         csv_out=csv_path,
         json_out=json_path,
     )

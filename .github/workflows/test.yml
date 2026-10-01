@@ -13,6 +13,37 @@ permissions:
   contents: read
 
 jobs:
+  build-distributions:
+    name: Build shared release files
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - run: python -m pip install "build>=1.2" "twine>=5"
+      - name: Build source archive, then wheel from that archive
+        run: python -m build
+      - run: python -m twine check dist/*
+      - name: Record release file checksums
+        working-directory: dist
+        run: sha256sum -- *.whl *.tar.gz > ../release-checksums.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dists
+          path: |
+            dist/*.whl
+            dist/*.tar.gz
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-checksums
+          path: release-checksums.txt
+          if-no-files-found: error
+
   checkout-tests:
     name: Unit and regression tests
     runs-on: ubuntu-latest
@@ -46,8 +77,63 @@ jobs:
       - run: python -m pip install . -r docs/requirements.txt
       - run: python -m mkdocs build --strict
 
+  installed-wheel-validation:
+    name: MEI validation on Python ${{ matrix.python-version }}
+    needs: build-distributions
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version:
+          - "3.11"
+          - "3.14"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            pyproject.toml
+      - uses: actions/download-artifact@v4
+        with:
+          name: dists
+          path: dist/
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-checksums
+      - name: Verify shared release files
+        working-directory: dist
+        run: sha256sum --check --strict ../release-checksums.txt
+      - name: Install RELAX NG processor
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libxml2-utils
+      - name: Test installed wheel and validation regressions without skips
+        run: >-
+          python scripts/test_release_matrix.py
+          --wheel dist/*.whl
+          --validation
+          --versions "${{ matrix.python-version }}"
+          --python "${{ matrix.python-version }}=python"
+      - name: Retain validation test results and reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: validation-evidence-${{ matrix.python-version }}
+          path: |
+            .release-runs/**/installed-dependencies.json
+            .release-runs/**/tested-wheel.json
+            .release-runs/**/validation-results.xml
+            .release-runs/**/pytest/**/validation-*/**
+          include-hidden-files: true
+          if-no-files-found: warn
+
   installed-wheel-smoke:
     name: Python ${{ matrix.python-version }}
+    needs: build-distributions
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
@@ -67,9 +153,20 @@ jobs:
           cache-dependency-path: |
             requirements.txt
             pyproject.toml
-      - name: Build, install, and test wheel in a fresh venv
+      - uses: actions/download-artifact@v4
+        with:
+          name: dists
+          path: dist/
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-checksums
+      - name: Verify shared release files
+        working-directory: dist
+        run: sha256sum --check --strict ../release-checksums.txt
+      - name: Install and test shared wheel in a fresh venv
         run: >-
           python scripts/test_release_matrix.py
+          --wheel dist/*.whl
           --versions "${{ matrix.python-version }}"
           --python "${{ matrix.python-version }}=python"
       - name: Retain tested dependency versions
@@ -77,6 +174,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: dependency-baseline-${{ matrix.python-version }}
-          path: .release-runs/**/installed-dependencies.json
+          path: |
+            .release-runs/**/installed-dependencies.json
+            .release-runs/**/tested-wheel.json
           include-hidden-files: true
           if-no-files-found: warn

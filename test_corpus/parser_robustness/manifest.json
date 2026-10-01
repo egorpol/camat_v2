@@ -1,0 +1,49 @@
+{
+  "recorded_on": "2026-10-02",
+  "purpose": "Small offline Verovio parser robustness and installed-wheel smoke set; not a full corpus certification.",
+  "paths_relative_to": "repository root",
+  "upstream_license": "test_corpus/validation_baseline/LICENSE.sample-encodings",
+  "parser_options": {
+    "filter_zero_duration": true,
+    "collapse_tied_pitch_events": false
+  },
+  "inputs": [
+    {
+      "role": "bach-chorale",
+      "path": "test_corpus/parser_robustness/Bach-JS_Ein_feste_Burg.mei",
+      "source": "https://raw.githubusercontent.com/music-encoding/sample-encodings/f3f1baba02e32279b25dad660b82c834bac034b4/MEI_5.0/Music/Complete_examples/Bach-JS_Ein_feste_Burg.mei",
+      "upstream_commit": "f3f1baba02e32279b25dad660b82c834bac034b4",
+      "modified": false,
+      "source_notes": 236,
+      "source_grace_notes": 0,
+      "expected_pitch_rows": 236,
+      "music_measures": 14,
+      "sha256": "e731d992feeca8445e8cfcc38b5aac8994186aa643f3981d6642a1949e55a1f5",
+      "bytes": 54341
+    },
+    {
+      "role": "hummel-grace-notes",
+      "path": "test_corpus/validation_baseline/Hummel_Preludes_Op67_No11.mei",
+      "source": "https://raw.githubusercontent.com/music-encoding/sample-encodings/f3f1baba02e32279b25dad660b82c834bac034b4/MEI_5.1/Music/Complete_examples/Hummel_Preludes_Op67_No11.mei",
+      "upstream_commit": "f3f1baba02e32279b25dad660b82c834bac034b4",
+      "modified": false,
+      "source_notes": 202,
+      "source_grace_notes": 25,
+      "expected_pitch_rows": 177,
+      "music_measures": 7,
+      "sha256": "25e0b1d7b74469cc541fbfc177e736e5dd2185b0bbfa868e682c82ec1118ece4",
+      "bytes": 48196
+    },
+    {
+      "role": "basic-synthetic",
+      "path": "tests/fixtures/basic.mei",
+      "source": "Existing CAMAT-authored synthetic parser fixture.",
+      "source_notes": 5,
+      "source_grace_notes": 0,
+      "expected_pitch_rows": 5,
+      "music_measures": 2,
+      "sha256": "25b1f65225982b9cdb79cf2f764b9c85d88b167b90bf69a27659c94f031702af",
+      "bytes": 1301
+    }
+  ]
+}

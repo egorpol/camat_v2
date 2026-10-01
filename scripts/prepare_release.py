@@ -50,8 +50,9 @@ def prepare_release(root: Path, tag: str) -> tuple[str, bool, str]:
         raise ValueError("camat.__version__ does not match the package version.")
 
     changelog = (root / "CHANGELOG.md").read_text(encoding="utf-8")
+    # Version headings may use a Markdown reference link: [version][link-label].
     sections = list(re.finditer(
-        rf"^## \[{re.escape(version)}\] - (?P<date>[^\n]+)\n"
+        rf"^## \[{re.escape(version)}\](?:\[[^\[\]\n]+\])? - (?P<date>[^\n]+)\n"
         r"(?P<body>.*?)(?=^## \[|\Z)",
         changelog, re.MULTILINE | re.DOTALL,
     ))

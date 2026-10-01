@@ -58,6 +58,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Installed-wheel smoke tests use a fixed local Bach chorale together with the
+  existing Hummel and basic MEI fixtures. The offline set records source revisions,
+  checksums and expected counts. The robustness runner rejects empty inputs and
+  missing lists, refreshes empty reports, and accounts for filtered grace notes.
+- Release preparation accepts plain and reference-linked changelog version
+  headings. The tag workflow validates release metadata before running the
+  compatibility matrix, so invalid release notes fail early.
+- Releases require installed-wheel MEI validation on Python 3.11 and 3.14 with
+  SaxonC and `xmllint`. The validation gate rejects skipped or empty test runs,
+  checks bundled schema/compiler/license files, and verifies passing and failing
+  inputs without modifying them. CI retains test and validation reports.
+- CI builds the release source archive and its wheel once. All installed-wheel
+  jobs test that shared wheel, and releases publish the same files after every
+  required check passes. Downloads verify SHA-256 checksums; test evidence records
+  the exact wheel fingerprint.
 - General MEI consistency checking no longer requires facsimile coverage or
   applies numbering, naming, and group conventions implicitly. Such diagnostics
   are explicit options; the legacy DdT publication flag retains its rules.

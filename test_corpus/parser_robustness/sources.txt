@@ -1,0 +1,4 @@
+# Paths are relative to the CAMAT repository root.
+test_corpus/parser_robustness/Bach-JS_Ein_feste_Burg.mei
+test_corpus/validation_baseline/Hummel_Preludes_Op67_No11.mei
+tests/fixtures/basic.mei

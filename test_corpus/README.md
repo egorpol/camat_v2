@@ -9,6 +9,11 @@ synthetic CMN score, pinned Hummel and Webern encodings from the existing links,
 and an ignored local DdT integration snapshot. It records provenance, input
 hashes and before/after results for the general-checking boundary refactor.
 
+The [offline parser robustness set](parser_robustness/README.md) selects a pinned
+Bach chorale, that existing Hummel encoding and `tests/fixtures/basic.mei` for
+installed-wheel smoke tests and a small local robustness run. Its manifest
+records source revisions, input hashes and expected note/measure counts.
+
 ## Local Buxtehude fixtures
 
 The standalone Buxtehude MEI files and `buxtehude_pages/` are used by editorial

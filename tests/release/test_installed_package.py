@@ -2,12 +2,16 @@ from __future__ import annotations
 
 from importlib.metadata import version as distribution_version
 from importlib.resources import files
+import hashlib
+import json
 import os
 from pathlib import Path
+from typing import Any
 import xml.etree.ElementTree as ET
 
 import numpy as np
 import pandas as pd
+import pytest
 
 import camat
 from camat.parser_registry import normalize_backend_name, parse_files
@@ -17,6 +21,8 @@ FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
 MEI_FIXTURE = FIXTURES / "basic.mei"
 MUSICXML_FIXTURE = FIXTURES / "basic.musicxml"
 DURATION_FIXTURE = FIXTURES / "duration_semantics.mei"
+REPO_ROOT = Path(os.environ["CAMAT_REPO_ROOT"]).resolve()
+PARSER_CORPUS = json.loads((REPO_ROOT / "test_corpus/parser_robustness/manifest.json").read_text())
 
 SAMPLE_TIMELINE = """!!!OTL: Release smoke test
 **recip\t**lyrics\t**ipa\t**stress
@@ -75,6 +81,26 @@ def test_parser_registry_and_default_verovio_mei_parser() -> None:
     assert result["measure_offsets"] == [0.0, 4.0]
     assert result["df_name_pitch"] in frames
     assert last_df is not None and len(last_df) == 5
+
+
+@pytest.mark.parametrize("sample", PARSER_CORPUS["inputs"], ids=lambda item: item["role"])
+def test_fixed_parser_corpus(sample: dict[str, Any]) -> None:
+    source = REPO_ROOT / sample["path"]
+    before = source.read_bytes()
+    assert hashlib.sha256(before).hexdigest() == sample["sha256"]
+    results, _, _ = parse_files(
+        [str(source)], parsing_backend="verovio", include_xml_ids=True,
+        **PARSER_CORPUS["parser_options"], **_parse_kwargs(),
+    )
+    assert len(results) == 1
+    result = results[0]
+    assert result["parser_backend"] == "verovio"
+    pitch = result["df_pitch"]
+    assert len(pitch) == sample["expected_pitch_rows"]
+    assert len(result["measure_offsets"]) == sample["music_measures"]
+    assert (pitch["Duration"] > 0).all()
+    assert np.isfinite(pitch[["Global Onset", "Duration", "MIDI"]].to_numpy(dtype=float)).all()
+    assert source.read_bytes() == before
 
 
 def test_compatibility_parsers() -> None:
