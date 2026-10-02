@@ -5,28 +5,36 @@ checks. A corpus adds its own work list and publication policy. The legacy
 `camat-check-mei` and `run_editorial_checks` remain available, but an empty legacy
 CSV does not establish that all conformance passes ran.
 
-This page describes the development checkout. Install that checkout to use
-unpublished changes; it does not imply they are available in the current PyPI
-release. The repository's MkDocs pages are the documentation source to maintain
-during the migration from the earlier HfM Weimar wiki.
+The validation API described here requires CAMAT 0.2.5 or newer. The repository's
+MkDocs pages are the documentation source to maintain during the migration from
+the earlier HfM Weimar wiki.
 
-## Development installation
+<a id="development-installation"></a>
+
+## Installation
+
+Install the validation extra in the Python environment that runs your corpus
+command or notebook:
+
+```sh
+python -m pip install 'camat[validation]>=0.2.5'
+```
+
+`xmllint` must be available on PATH for RELAX NG. The extra adds lxml, SaxonC
+and Pillow; the fixed SchXslt 1.10.1 XSLT compiler is bundled. No validator is
+installed or downloaded during a validation run.
+
+### Development checkout
 
 ```sh
 python -m pip install -e '.[validation]'
 ```
 
-Install from the CAMAT checkout using the same Python environment as the corpus
-command. `xmllint` must be available on PATH for RELAX NG. The `validation` extra
-adds lxml, SaxonC and Pillow; the fixed SchXslt 1.10.1 XSLT compiler is bundled.
-No validator is installed or downloaded during a validation run. Source changes
-in an editable checkout apply to the next Python invocation. Restart a notebook
-kernel after changes. This does not require a final CAMAT release.
-
-At the 2026-10-01 audit, the branch `beta/0.2.5` has commit `03b387b5c2fe8fe4643dd22a64efe4d0756c6961`
-whose title mentions 0.2.5b1, while package declarations still say 0.2.4. Record
-both identities; do not infer a package version from a branch name. Version
-changes and publishing belong to the separate release process.
+Source changes in an editable checkout apply to the next Python invocation.
+Restart a notebook kernel after changes. Record both the package version and
+the actual installation commit/path; a branch name or commit title does not
+identify the code imported by a running kernel. Historical pre-release identities
+remain in the [dated validation assessment](../development/mei-validation-split.md).
 
 ## Run the general checks
 
@@ -251,9 +259,8 @@ release. It is a snapshot, not continuous updating. Pip may retain an installed
 package when version metadata stays unchanged; a deliberately forced reinstall
 (or fresh environment) avoids assuming that `--upgrade` fetched new branch code.
 Check the recorded installation commit after every update. A PyPI install needs
-an actual published release; the current development API cannot be obtained from
-an older stable package. Neither checking nor this implementation publishes
-0.2.5 automatically. See [pip's editable installation documentation](https://pip.pypa.io/en/stable/topics/local-project-installs/)
+an actual published release that provides the required API version. Running
+checks does not update or publish CAMAT. See [pip's editable installation documentation](https://pip.pypa.io/en/stable/topics/local-project-installs/)
 and [VCS installation documentation](https://pip.pypa.io/en/stable/topics/vcs-support/).
 
 Run records start as incomplete and are atomically checkpointed before and after

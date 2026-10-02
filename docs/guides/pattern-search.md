@@ -28,8 +28,8 @@ Tutorial notebooks:
 - [`binary_convolution_explained.ipynb`](../../notebooks/binary_convolution_explained.ipynb)
   — example passage and pattern placements, including the choice between keeping
   the pattern fully inside the passage (`padding="valid"`) and allowing it to
-  hang off the edge into added silence (`padding="same"`). Then sliding-window
-  intuition, stride, and pattern scaling (time, pitch, or both) on Bach
+  hang off the edge into an artificial empty border (`padding="same"`). Then
+  sliding-window intuition, stride, and pattern scaling (time, pitch, or both) on Bach
   *Ein feste Burg*. Helpers: `convolution_map` / `score_kernel_at` in
   [pattern search](../api/pattern_search.md) and
   [binary convolution](../api/binary_convolution.md) plots;
@@ -80,8 +80,10 @@ and 1.0 does not imply equal matrices. `normalized_cross_correlation` considers
 both active and inactive cells (and returns 0 for constant windows/kernels).
 `padding="valid"` (default) keeps every pattern cell on the passage.
 `padding="same"` zero-pads the border: cells outside the passage are filled
-with zeros, and a zero is silence, not a new note. The pattern may hang off
-that border, and the score map can match the passage size at stride 1.
+with zeros, meaning no occupied pitch/time cell. This is a computational border;
+it does not establish that the music outside the selected passage is silent.
+The pattern may hang off that border, and the score map can match the passage
+size at stride 1.
 "Valid" and "same" are the image-processing names for those two edge policies.
 Stride and kernel scale factors remain the knobs for window motion and size.
 

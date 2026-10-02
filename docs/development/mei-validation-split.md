@@ -12,9 +12,9 @@ Score-named exports copy the canonical findings exactly.
 
 The DdT wrapper is implemented in the corpus with a pilot work list and
 review/release rules. Its official IIIF canvas warnings remain pending review.
-No permanent CAMAT pin or new package release has been made; the local editable
-checkout is recorded by revision and source hashes. The branch/commit title is
-not the package version.
+At this 2026-10-01 checkpoint, no permanent CAMAT pin or new package release had
+been made; the local editable checkout was recorded by revision and source
+hashes. The branch/commit title is not the package version.
 
 Use [General MEI validation](../guides/mei-validation.md) and the
 [API reference](../api/mei_consistency.md) for current behavior, and the corpus's

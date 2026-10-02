@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased][Unreleased]
 
+## [0.2.5][0.2.5] - 2026-10-02
+
 ### Added
 
 - Added read-only `run_mei_validation` / `camat-validate-mei` with separate
@@ -101,8 +103,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the edge). A zero means no activity at that pitch and time; padding does not
   establish that the omitted score is silent.
   Figure labels and the pattern-search guide use the same wording. The catalog
-  and helpers are `EXAMPLE_PATTERNS`, `resolve_example_pattern`, and
-  `show_example_overview`; the notebook variables are `PATTERN_NAME`,
+  and helpers are `EXAMPLE_PASSAGE_SHAPE`, `EXAMPLE_PATTERNS`,
+  `resolve_example_pattern`, and `show_example_overview`, replacing
+  `TOY_HOST_SHAPE`, `TOY_KERNELS`, `resolve_toy_kernel`, and `show_toy_overview`
+  respectively; the notebook variables are `PATTERN_NAME`,
   `example_passage`, and `example_pattern`.
 - The convolution explainer introduces overlap in musical terms before the
   formula, distinguishes occupied cells from note events, and explains duration
@@ -122,8 +126,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - The facsimile viewer's split view no longer squeezes the score on small
-  displays and tablets. The facsimile column is capped at 42% of the viewer
-  width, the panes stack below a 720px viewer width (measured with a container
+  displays and tablets. The default facsimile column is capped at 42% of the
+  viewer width, the panes stack at a viewer width of 720px or less (measured with a container
   query, so standalone HTML behaves the same), and pane height follows the
   visible screen height up to `viewer_max_height`. Touch screens get 40px
   controls, and the notebook iframe now also shrinks when its content does.
@@ -131,7 +135,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (including the initial measure), without scrolling the surrounding notebook.
   A **Layout** control (Auto, Side by side, Stacked) and a draggable,
   keyboard-accessible divider between the panes let users override the
-  automatic split; both choices persist in the browser across reloads.
+  automatic split; both choices persist across reloads when browser storage is
+  available.
 - Conversion subprocesses now call `python_executable()` so Verovio still runs
   when the host rewrites `sys.executable` (for example Cursor's AppImage).
 - The facsimile notebook default example is now
@@ -1000,7 +1005,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-[Unreleased]: https://github.com/egorpol/camat_v2/compare/v0.2.4...HEAD
+[Unreleased]: https://github.com/egorpol/camat_v2/compare/v0.2.5...HEAD
+[0.2.5]: https://github.com/egorpol/camat_v2/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/egorpol/camat_v2/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/egorpol/camat_v2/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/egorpol/camat_v2/compare/v0.2.1...v0.2.2

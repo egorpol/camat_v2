@@ -136,9 +136,9 @@ python -m pip install -e '.[notebooks,validation]'
 Install `xmllint` from libxml2 separately and make it available on `PATH`.
 The extra supplies lxml, SaxonC (`saxonche`) and Pillow; CAMAT bundles the
 SchXslt compiler. These notebooks use the selected installation and do not
-install or update it during checking. The current development validation API
-requires the checkout containing it; an older PyPI release does not supply
-unpublished changes. See [General MEI validation](guides/mei-validation.md)
+install or update it during checking. The validation API requires CAMAT 0.2.5
+or newer, installed from PyPI with the `validation` extra or from the matching
+checkout. See [General MEI validation](guides/mei-validation.md)
 for setup, schema selection and execution records.
 
 Some corpus examples need a download on their first run. In the Bach analysis

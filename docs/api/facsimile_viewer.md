@@ -86,8 +86,10 @@ MEI_SOURCE = "converted_mei/my_score.mei"
 MEI_SOURCE = "https://github.com/owner/repository/blob/main/path/score.mei"
 ```
 
-Its default is the CAMAT corpus edition of
-[Buxtehude's Sonata V in C major, Op. I](https://github.com/egorpol/DdT_1_vol_11/blob/main/11_buxtehude_sonatas_final/buxtehude_op1_05_sonata_c_major_corr.mei).
+Its default is the local
+[`test_corpus/Buxtehude-Anhang-S._175_musicxml_verovio.mei`](../../test_corpus/Buxtehude-Anhang-S._175_musicxml_verovio.mei)
+example. The notebook also shows the packaged miniature
+`camat/examples/facsimile_viewer_demo.mei` as a commented alternative.
 `read_facsimile_model` and `launch_interactive_facsimile_viewer` accept that
 value directly. GitHub `blob` pages are converted to raw-file links, and remote
 MEI is cached under `converted_mei/facsimile_viewer_sources/`.
@@ -115,6 +117,28 @@ The viewer toolbar zooms the score and facsimile independently without
 rerunning Verovio. The percentage button resets its pane to the configured
 initial zoom. Zoom is retained while changing score pages and facsimile
 surfaces.
+
+## Layout and linked scrolling
+
+In linked mode, **Layout** selects **Auto**, **Side by side**, or **Stacked**.
+Auto stacks the panes when the viewer itself is 720 px wide or narrower;
+on wider views, the default facsimile column uses at most 42% of the width and
+respects `facsimile_max_width`. Pane height adapts to the visible screen up to
+`viewer_max_height`. Touch controls have a minimum height of 40 px, and the
+notebook iframe resizes with its content.
+
+Drag the divider to change the score/facsimile width share. You can also focus
+it with Tab and use the left/right arrow keys; holding Shift increases the step.
+Double-click the divider or press Enter to restore its default share. The
+layout mode and width share persist across reloads when browser storage is
+available. Score-only mode uses the full width.
+
+Selecting or hovering a linked measure brings its partner zone into view when
+needed, including the initially selected measure. Only the viewer panes scroll;
+the surrounding notebook stays in place. The **Hovered** element-ID row updates
+while moving within a measure without repeatedly selecting its zone.
+
+## Graphic sources and reloading
 
 Relative local `<graphic target>` paths are resolved from the MEI file's
 directory and embedded into the HTML as data URIs. HTTP(S) targets, including

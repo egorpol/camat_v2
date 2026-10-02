@@ -87,10 +87,10 @@ Colab copies only that `.ipynb`, so `import setup_camat` could not see the
 repository and `test_corpus/` was missing. Most Workflow 1 editing and conversion
 notebooks install CAMAT and copy those folders in their first code cell.
 The two MEI checking notebooks deliberately use an already prepared installation
-and do not install/update it while checking. Prepare the matching checkout,
-`validation` dependencies and `xmllint` in that runtime first; the current
-development API is not supplied by an older PyPI release. See
-[General MEI validation](guides/mei-validation.md#development-installation).
+and do not install/update it while checking. Prepare CAMAT 0.2.5 or newer with
+the `validation` extra and `xmllint` in that runtime first, using the release
+or a matching checkout. See
+[General MEI validation](guides/mei-validation.md#installation).
 
 Colab still starts a **new runtime per notebook tab**. Files written under
 `/content` in one tab are not visible in another. Run the first cell of each
