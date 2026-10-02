@@ -88,6 +88,91 @@ def test_read_facsimile_model_resolves_local_graphic(tmp_path: Path) -> None:
     assert model["missing_facs"] == []
 
 
+@pytest.mark.parametrize("include_facsimile", [True, False])
+def test_source_element_index_includes_nested_and_non_note_ids(
+    tmp_path: Path, include_facsimile: bool
+) -> None:
+    mei_path = tmp_path / "score.mei"
+    _write_facsimile_mei(mei_path, include_facsimile=include_facsimile)
+    mei_path.write_text(
+        mei_path.read_text().replace(
+            '<note xml:id="note-1" pname="c" oct="4" dur="1"/>',
+            '<chord xml:id="chord-1" dur="1">'
+            '<note xml:id="note-1" pname="c" oct="4">'
+            '<accid xml:id="accid-1" accid="s"/></note></chord>',
+        ).replace(
+            "</measure>",
+            '<dynam xml:id="dynamic-1" staff="1" tstamp="1">p</dynam>'
+            '<annot xml:id="annotation-1">Nonvisual text</annot></measure>'
+            '<measure n="2"><staff n="1"><layer n="1">'
+            '<rest xml:id="rest-2" dur="1"/></layer></staff></measure>',
+        ),
+        encoding="utf-8",
+    )
+
+    model = read_facsimile_model(mei_path, allow_missing_facsimile=True)
+    elements = model["source_elements"]
+    for element_id, name in {
+        "measure-1": "measure",
+        "chord-1": "chord",
+        "note-1": "note",
+        "accid-1": "accid",
+        "dynamic-1": "dynam",
+        "annotation-1": "annot",
+    }.items():
+        assert elements[element_id] == {
+            "name": name, "measure_id": "measure-1", "measure_n": "1"
+        }
+    assert elements["rest-2"] == {
+        "name": "rest", "measure_id": None, "measure_n": "2"
+    }
+    if include_facsimile:
+        assert elements["zone-1"] == {
+            "name": "zone", "measure_id": None, "measure_n": None
+        }
+
+
+def test_hover_index_only_contains_source_ids_and_refreshes_after_score_edit(
+    tmp_path: Path,
+) -> None:
+    mei_path = tmp_path / "score.mei"
+    _write_facsimile_mei(mei_path, include_facsimile=False)
+    mei_path.write_text(mei_path.read_text().replace('dur="1"', 'dur="4"'))
+    cache = FacsimileViewerCache()
+    first = build_facsimile_viewer(mei_path, verovio_options={}, cache=cache)
+    svg = ET.fromstring(first["score_render"]["pages"][0]["svg"])
+    generated_stems = [node.get("id") for node in svg.iter() if node.get("class") == "stem"]
+    assert generated_stems
+    assert all(stem_id not in first["model"]["source_elements"] for stem_id in generated_stems)
+    payload = re.search(
+        r"const sourceElements = new Map\(Object.entries\((.*?)\)\);",
+        first["html"], re.S,
+    )
+    assert json.loads(payload.group(1)) == first["model"]["source_elements"]
+
+    mei_path.write_text(mei_path.read_text().replace('xml:id="note-1"', 'xml:id="renamed-note"'))
+    second = build_facsimile_viewer(mei_path, verovio_options={}, cache=cache)
+    assert second["rendered_score"] is True
+    assert "note-1" not in second["model"]["source_elements"]
+    assert second["model"]["source_elements"]["renamed-note"]["name"] == "note"
+
+
+def test_hover_source_ids_are_safe_to_embed_in_script(tmp_path: Path) -> None:
+    mei_path = tmp_path / "score.mei"
+    _write_facsimile_mei(mei_path)
+    mei_path.write_text(mei_path.read_text().replace('xml:id="note-1"', 'xml:id="note&lt;/script&gt;"'))
+    model = read_facsimile_model(mei_path)
+    html = make_viewer_html(
+        model, [{"number": 1, "svg": "<svg/>"}], total_score_pages=1
+    )
+    assert "note</script>" not in html
+    assert html.count("</script>") == 1
+    payload = re.search(
+        r"const sourceElements = new Map\(Object.entries\((.*?)\)\);", html, re.S
+    )
+    assert json.loads(payload.group(1))["note</script>"]["name"] == "note"
+
+
 def _write_two_zone_mei(path: Path, *, facsimile_body: str, measure_facs: str) -> None:
     """An MEI whose single measure carries ``measure_facs``, over ``facsimile_body``."""
     (path.parent / "scan.svg").write_text(
@@ -801,7 +886,7 @@ def test_build_viewer_reuses_score_render_for_zone_only_edit(
         viewer_id="test-viewer",
     )
 
-    _write_facsimile_mei(mei_path, zone_ulx=25)
+    _write_facsimile_mei(mei_path, zone_ulx=25, zone_id="renamed-zone")
     second = build_facsimile_viewer(
         mei_path,
         verovio_options={"scale": 30},
@@ -814,6 +899,8 @@ def test_build_viewer_reuses_score_render_for_zone_only_edit(
     assert len(calls) == 1
     assert 'x="25"' in second["html"]
     assert "Measure-zone diagnostic table (1 measures)" in second["html"]
+    assert "zone-1" not in second["model"]["source_elements"]
+    assert second["model"]["source_elements"]["renamed-zone"]["name"] == "zone"
 
 
 def test_score_only_viewer_can_transition_to_linked_view_without_rerendering(
@@ -851,7 +938,9 @@ def test_score_only_viewer_can_transition_to_linked_view_without_rerendering(
     assert score_only["rendered_score"] is True
     assert "Score-only mode" in score_only["html"]
     assert "viewer-grid is-score-only" in score_only["html"]
-    assert "facsimile-pane" not in score_only["html"]
+    assert 'class="viewer-pane facsimile-pane"' not in score_only["html"]
+    assert 'class="pane-splitter"' not in score_only["html"]
+    assert 'class="layout-select"' not in score_only["html"]
 
     _write_facsimile_mei(mei_path, include_facsimile=True)
     linked = build_facsimile_viewer(
@@ -947,6 +1036,41 @@ def test_viewer_page_controls_initialize_after_dom_attachment(tmp_path: Path) ->
     assert "root.dataset.camatViewerInitialized" in html
     assert 'class="score-zoom-out"' in html
     assert '<button type="button" class="facsimile-zoom-out"' not in html
+
+
+def test_viewer_layout_keeps_the_score_readable_on_small_displays(tmp_path: Path) -> None:
+    mei_path = tmp_path / "page.mei"
+    _write_facsimile_mei(mei_path)
+    model = read_facsimile_model(mei_path)
+    html = make_viewer_html(
+        model,
+        [{"number": 1, "svg": '<svg><g class="measure" id="measure-1"/></svg>'}],
+        total_score_pages=1,
+        viewer_id="test-viewer",
+        viewer_max_height=700,
+        facsimile_max_width=480,
+    )
+
+    assert "minmax(0, var(--facsimile-column, min(480px, 42%)))" in html
+    assert "minmax(0, 480px)" not in html
+    assert 'class="viewer-grid layout-auto"' in html
+    assert 'class="pane-splitter" role="separator"' in html
+    assert '<select class="layout-select"' in html
+    assert '<option value="stacked">Stacked</option>' in html
+    assert "camat.facsimileViewer.layout" in html
+    assert "setPointerCapture" in html
+    assert "container-type: inline-size" in html
+    assert "@container (max-width: 720px)" in html
+    assert "@media (pointer: coarse)" in html
+    assert "--pane-max-height: 700px" in html
+    assert "max-height: var(--pane-max-height)" in html
+    assert "const viewerMaxHeight = 700;" in html
+    assert "window.top.innerHeight" in html
+    assert 'aria-label="Previous score page"' in html
+    assert "function revealInPane(node" in html
+    assert "pane.scrollBy(" in html
+    assert ".scrollIntoView(" not in html
+    assert "activate(item, false, null, false)" in html
 
 
 @pytest.mark.parametrize(
@@ -1209,6 +1333,8 @@ def test_embed_viewer_html_uses_iframe_srcdoc_and_escapes_markup() -> None:
     assert "&amp; y" in wrapped
     assert "<div id=" not in wrapped
     assert "syncHeight" in wrapped
+    assert "document.body.getBoundingClientRect().height" in wrapped
+    assert "documentElement.scrollHeight" not in wrapped
     assert "no-referrer" in wrapped
 
 
@@ -1769,7 +1895,10 @@ def test_facsimile_notebook_is_portable_and_has_no_persisted_widget_state() -> N
     )
 
     assert "import setup_camat\nfrom camat import" in code
-    assert 'MEI_SOURCE = "camat/examples/facsimile_viewer_demo.mei"' in code
+    assert (
+        'MEI_SOURCE = "test_corpus/Buxtehude-Anhang-S._175_musicxml_verovio.mei"'
+        in code
+    )
     assert "SHOW_ANNOTATIONS = True" in code
     assert "ALIGN_TO_FACSIMILE = False" in code
     # Notebook widget iframes cannot fetch third-party IIIF <img src>.
@@ -1825,4 +1954,3 @@ def test_resolve_mei_source_shared_cache_flag(
     )
     assert path == downloaded.resolve()
     assert calls == [str(shared)]
-

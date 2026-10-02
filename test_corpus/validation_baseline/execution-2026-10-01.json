@@ -1,0 +1,368 @@
+{
+  "date": "2026-10-01",
+  "camat": {
+    "module_version": "0.2.4",
+    "git_branch": "beta/0.2.5",
+    "git_commit": "03b387b5c2fe8fe4643dd22a64efe4d0756c6961",
+    "source_tree_sha256": "a28c5294d6c8c52019d8a03551e86ad7aad31919f5711c640622e4ccd1942c1e",
+    "source_hashes": {
+      "__init__.py": "928f921d11b43b33a9ba3112deaa654b957e3977119ae68a1c6209f1fc21f086",
+      "analysis_utils.py": "2dbb7402ee1ace765339a5578e83c3bf0452660b5b410e93853d4d6d528f9dac",
+      "binary_convolution.py": "41e04288e807805f3c73ff2b0f8c9cdf56fa7496351b6d3d632d209311be6bd5",
+      "binary_matrix_designer.py": "4851b1c0fcd8bac3739d76f7cafeea7fa6392b569afa7735fe9a5b0338c7c460",
+      "binary_query.py": "afbac416c48fd23955b3ff431305b6a9b42c31408004d0203bc369c1ff3404e0",
+      "binary_roundtrip.py": "c78e08f853c34dd7c9a605800308f1d6b418043aba5d70982c1202fc95d3bace",
+      "check_bsb_page_coverage.py": "29ec70c683f37068a93b9678117d0ed16c6f9ca58742e620ff64f3d4e5a7f58f",
+      "check_mei_consistency.py": "3c126ba545134466bbade6d38c3301e886e66e3482cfb60a17568d706779f3e1",
+      "conversion.py": "00024b6cefb08255979b857bcacfdab26250fa834816e54aa8e1c084a96be4c6",
+      "convert_harm_startid_to_tstamp.py": "3e9a98b9edacf115cbd45df81fcb0c1cdd623ab0d2e7fb620f728544bd3bcfb0",
+      "corpus_cleanup.py": "c3a6cad10c8cd8722d46ca6cc06ac1eadc49214ef28c2f5736b5460e0bdf9ff4",
+      "facsimile_downloader.py": "218658028af4fd49ad3a7bf497a1977bb8353a8fa51476410b41afc590301e2b",
+      "facsimile_viewer.py": "3ff7c7477eb1a27871ebf6074bbb6b154cbaa5cc587a1cbdbde41e70889f74df",
+      "fetch_bsb_metadata.py": "6bd875c94bd869cd105b8a3238f1ff9d47c370ce5f803ad06a979c289535086b",
+      "generate_volume_pages.py": "f6094fd35cbf72bbac9b3e9e9a957cc5ead61d8d95be85e7275c06a458343894",
+      "iiif_page.py": "9c41ab4bbbbb161b9798c7a2fc20d80e9454687a4a6badee16b68ae0f4a8ca0b",
+      "integrate_measure_annotations.py": "22db7b58948adcc9677f5a93291a4184be6976f355e5468eaad7587836f08df4",
+      "link_pb_to_surface.py": "7c40e264f2d322655c7724f97534d52f1fc106d3772ab9b3b9a344ca6a7723df",
+      "mei_consistency_workflow.py": "a4a382a37bfaf772fb7d9b2fb6e4ddceff209e90d9699865cf0e6f39c0025d8a",
+      "mei_references.py": "a1ee7d46e83c2dc69a682be62958ae586c94d7176f96739961237ef6e3c4bc06",
+      "mei_renderer.py": "373c10bdd2b74521d9baf96c6bed33a26582fa3bdb9d1fe8e999c19232e11212",
+      "mei_resources.py": "b5ef2674f532ce894ad161cb94896e092648c89e45a553293fba3cd85cf6c613",
+      "mei_schematron.py": "32c681d942ca2a865e768147aa0657a6fe0f02bf1fddb526d41c73960d5739a4",
+      "mei_validation.py": "aa1f3cdc2e7843522db169e1cbb025f4c5ceba3b70e3382983c1057a84c523c5",
+      "mensural_backend.py": "eece89b30c69eede3c57462ff532fecd6782089dc2a74f8ea5136d53cb816f28",
+      "mensural_utils.py": "915177616400048394dd4608d391358904749ba7fb74a5fdd45a9600b8b38d23",
+      "midi_timing.py": "a1f2119b2452cb0e4fa9be33669035ff1144044b9ebe47ca9062679157b32fe3",
+      "music21_backend.py": "b70c6660d2bd88c2ad21b0f8fbba7a7c382e69b0b8806de17ed322d80803a56b",
+      "music21_render.py": "26bdd53769823bce1056b1929c706798e1c0916c9596be83fcb8edf5512bee7d",
+      "music_utils.py": "a324024ab27f9ee17dd24673d21fe08b817b0801a33456541dbfd612a5e8974d",
+      "notebook_workspace.py": "a3bf58e48a914c1ef36e5adb716e05f149d9b609539f83a5beb6c49ef81f7397",
+      "overlay.py": "780b43ac639f27bb0c13e5ff3f35490d49c4f81f6f3081a3e39e259060ba21b0",
+      "page_filter.py": "1a180491bcb193858448162c3b5ae83f2b9308c14ac6002a07897a1c2a687c3f",
+      "parser_registry.py": "2449fe1f62b09b54159e164e3bb8e675504d0a82cefee74a9304423268aac08c",
+      "parser_utils.py": "bf57d3b2420725dc89422a8bb36ca476e751b2a75bb8e0c67409dc4d2c79421e",
+      "partitura_backend.py": "ea876be828129900d25b1e0e83ce89ff11a276e8665e91f962ae56163f4b398b",
+      "pattern_search.py": "34fb1ae968fd85d1d5710e2d9dae2b2f23eda474c42c81d2f4c6d56cc9dcc70a",
+      "quiet_utils.py": "cec4268f90b47e0f0e0448997bd4c2ab0200b4da80c389a3811f047d10177aee",
+      "run_pipeline.py": "0954862df96d5f5ef64ef58af665fb49f591ad9ecbd9a5d0f7d04aa632dbcfc9",
+      "schemas/mei-CMN-5.1.rng": "f6440d5eb59c3e903f2a7a64ea26518646186f8449b86096106846a269eb354b",
+      "schemas/schxslt/compile/api-2.0.xsl": "d4df046564af3ba3d9f10976e29cbea1a6c45c746e3e53efcea8377c42c3c8e9",
+      "schemas/schxslt/compile/compile-2.0.xsl": "5f24b8b28be50d650542c5113185ed55983beeaad061eddc4b966ca354751a57",
+      "schemas/schxslt/compile/functions.xsl": "e7d96717677ac768a72edda3b9f45e67c40476525247906271c42b652cf3b397",
+      "schemas/schxslt/compile/templates.xsl": "afd07c44eeb70b8e9daf0feb1319ca655468f06543437c8ecf0e5a232b3038c8",
+      "schemas/schxslt/compile-for-svrl.xsl": "9f64f1ea1164094f1b6dd20d67b40af8b124f3a3579fa2dec07c64359cc108b3",
+      "schemas/schxslt/expand.xsl": "97bc8bee61b23592fe4937f261b47cb0e3725c25516084a9788d33e102cbba79",
+      "schemas/schxslt/include.xsl": "ab6f9359c7a1a17a589568d91bab766f53fc98064beb8cc976e6e3319afb2b24",
+      "schemas/schxslt/pipeline-for-svrl.xsl": "64a535e6d0f0baa809f987d27d9e5b825d420e9ebda7344ef53edf136cdd42fa",
+      "schemas/schxslt/pipeline.xsl": "d0189741f5e6119b76b6914413e1a7c92427efef6f2ecb9b2c34e833c533ec1f",
+      "schemas/schxslt/svrl.xsl": "d2d8ea16cdbb6b0d0efd6d39955459ebcdf511000c24dda38220961f1d7e2611",
+      "schemas/schxslt/util/normalize-svrl.xsl": "37a75ed72e61a820a29e583e483ac9f32bb9d0615513f27f944ac9b2b1e5ed68",
+      "schemas/schxslt/version.xsl": "405b624fad86d226377a32884ad5cda771d697b7e3f15443f0601c12bfe0018e",
+      "timeline_backend.py": "686867870eb29572e76d8290102d8ba62c7ad9f97baedd80ecf9f81b7aef9797",
+      "upload_and_integrate_measure_annotations.py": "34ba12bf9ac79d2ba935136dd3fcb0d9d8b12e0aad7465fbfc8ef56da4f59705",
+      "validate_iiif_vs_local.py": "79be533444af7b748c2b703b1e378969aede44a14777e17c543eedfb73cdbdb9",
+      "verovio_backend.py": "97bbb550040d0005cdc3ce4fc454d983f20d5b1ddc17cce17b4478031092fa42",
+      "verovio_guard.py": "6c496edc62304ae5d5997e6571e8936a9835e40334d935c3de2c5a7a88015ee3",
+      "verovio_render.py": "fa5ba07fe75fe5d36745518b423c7eab7bc065b2f2960d3ea6816c852244c345"
+    }
+  },
+  "schema": {
+    "path": "/home/egor/Nextcloud/code/public_repos/camat_v2/camat/schemas/mei-CMN-5.1.rng",
+    "sha256": "f6440d5eb59c3e903f2a7a64ea26518646186f8449b86096106846a269eb354b"
+  },
+  "python": {
+    "version": "3.14.7",
+    "executable": "/home/egor/miniconda3/envs/py314/bin/python"
+  },
+  "inputs": [
+    {
+      "input": "minimal-cmn-51.mei",
+      "hashes": [
+        {
+          "path": "/home/egor/Nextcloud/code/public_repos/camat_v2/test_corpus/validation_baseline/minimal-cmn-51.mei",
+          "sha256_before": "9bf22175e5abccbbe1de144b658d9fd7ca12144099b56dde8a6d07f18d9aac75",
+          "sha256_after": "9bf22175e5abccbbe1de144b658d9fd7ca12144099b56dde8a6d07f18d9aac75",
+          "unchanged": true
+        }
+      ],
+      "conformance": "passed",
+      "consumer_diagnostics": "passed",
+      "checks": {
+        "xml_references": {
+          "requested": true,
+          "required": true,
+          "status": "passed",
+          "findings_count": 0
+        },
+        "musical_diagnostics": {
+          "requested": true,
+          "required": false,
+          "status": "passed",
+          "findings_count": 0
+        },
+        "relaxng": {
+          "requested": true,
+          "required": true,
+          "status": "passed",
+          "findings_count": 0
+        },
+        "schematron": {
+          "requested": true,
+          "required": true,
+          "status": "passed",
+          "findings_count": 0,
+          "error_assertions": 0,
+          "failed_assertions": 0,
+          "processor": "SaxonC-HE 13.0 from Saxonica"
+        },
+        "resources": {
+          "requested": true,
+          "required": true,
+          "status": "passed",
+          "findings_count": 0
+        },
+        "image_network": {
+          "requested": false,
+          "required": false,
+          "status": "skipped"
+        },
+        "verovio": {
+          "requested": true,
+          "required": false,
+          "status": "passed",
+          "findings_count": 0,
+          "version": "6.3.0-425dd7b"
+        },
+        "camat_parse": {
+          "requested": true,
+          "required": false,
+          "status": "passed",
+          "findings_count": 0
+        },
+        "input_hashes": {
+          "requested": true,
+          "required": true,
+          "status": "passed",
+          "findings_count": 0
+        }
+      }
+    },
+    {
+      "input": "Hummel_Preludes_Op67_No11.mei",
+      "hashes": [
+        {
+          "path": "/home/egor/Nextcloud/code/public_repos/camat_v2/test_corpus/validation_baseline/Hummel_Preludes_Op67_No11.mei",
+          "sha256_before": "25e0b1d7b74469cc541fbfc177e736e5dd2185b0bbfa868e682c82ec1118ece4",
+          "sha256_after": "25e0b1d7b74469cc541fbfc177e736e5dd2185b0bbfa868e682c82ec1118ece4",
+          "unchanged": true
+        }
+      ],
+      "conformance": "passed",
+      "consumer_diagnostics": "failed",
+      "checks": {
+        "xml_references": {
+          "requested": true,
+          "required": true,
+          "status": "passed",
+          "findings_count": 0
+        },
+        "musical_diagnostics": {
+          "requested": true,
+          "required": false,
+          "status": "passed",
+          "findings_count": 11
+        },
+        "relaxng": {
+          "requested": true,
+          "required": true,
+          "status": "passed",
+          "findings_count": 0
+        },
+        "schematron": {
+          "requested": true,
+          "required": true,
+          "status": "passed",
+          "findings_count": 0,
+          "error_assertions": 0,
+          "failed_assertions": 0,
+          "processor": "SaxonC-HE 13.0 from Saxonica"
+        },
+        "resources": {
+          "requested": true,
+          "required": true,
+          "status": "passed",
+          "findings_count": 0
+        },
+        "image_network": {
+          "requested": false,
+          "required": false,
+          "status": "skipped"
+        },
+        "verovio": {
+          "requested": true,
+          "required": false,
+          "status": "failed",
+          "findings_count": 26,
+          "version": "6.3.0-425dd7b"
+        },
+        "camat_parse": {
+          "requested": true,
+          "required": false,
+          "status": "passed",
+          "findings_count": 0
+        },
+        "input_hashes": {
+          "requested": true,
+          "required": true,
+          "status": "passed",
+          "findings_count": 0
+        }
+      }
+    },
+    {
+      "input": "Webern_Variations_for_Piano_Op27_No2.mei",
+      "hashes": [
+        {
+          "path": "/home/egor/Nextcloud/code/public_repos/camat_v2/test_corpus/validation_baseline/Webern_Variations_for_Piano_Op27_No2.mei",
+          "sha256_before": "67e6c2bf7db26f4ce6f5bc791340d565095a902b7e73bdadb3066b948671b479",
+          "sha256_after": "67e6c2bf7db26f4ce6f5bc791340d565095a902b7e73bdadb3066b948671b479",
+          "unchanged": true
+        }
+      ],
+      "conformance": "passed",
+      "consumer_diagnostics": "failed",
+      "checks": {
+        "xml_references": {
+          "requested": true,
+          "required": true,
+          "status": "passed",
+          "findings_count": 0
+        },
+        "musical_diagnostics": {
+          "requested": true,
+          "required": false,
+          "status": "passed",
+          "findings_count": 0
+        },
+        "relaxng": {
+          "requested": true,
+          "required": true,
+          "status": "passed",
+          "findings_count": 0
+        },
+        "schematron": {
+          "requested": true,
+          "required": true,
+          "status": "passed",
+          "findings_count": 0,
+          "error_assertions": 0,
+          "failed_assertions": 0,
+          "processor": "SaxonC-HE 13.0 from Saxonica"
+        },
+        "resources": {
+          "requested": true,
+          "required": true,
+          "status": "passed",
+          "findings_count": 0
+        },
+        "image_network": {
+          "requested": false,
+          "required": false,
+          "status": "skipped"
+        },
+        "verovio": {
+          "requested": true,
+          "required": false,
+          "status": "failed",
+          "findings_count": 29,
+          "version": "6.3.0-425dd7b"
+        },
+        "camat_parse": {
+          "requested": true,
+          "required": false,
+          "status": "passed",
+          "findings_count": 0
+        },
+        "input_hashes": {
+          "requested": true,
+          "required": true,
+          "status": "passed",
+          "findings_count": 0
+        }
+      }
+    },
+    {
+      "input": "local/buxtehude_op1_01_sonata_f_major_corr.mei",
+      "hashes": [
+        {
+          "path": "/home/egor/Nextcloud/code/public_repos/camat_v2/test_corpus/validation_baseline/local/buxtehude_op1_01_sonata_f_major_corr.mei",
+          "sha256_before": "3dd9d312905249e0dcf60b54b5596cbbdcf2420b235eb21988128bf3850c2d55",
+          "sha256_after": "3dd9d312905249e0dcf60b54b5596cbbdcf2420b235eb21988128bf3850c2d55",
+          "unchanged": true
+        }
+      ],
+      "conformance": "passed",
+      "consumer_diagnostics": "passed",
+      "checks": {
+        "xml_references": {
+          "requested": true,
+          "required": true,
+          "status": "passed",
+          "findings_count": 0
+        },
+        "musical_diagnostics": {
+          "requested": true,
+          "required": false,
+          "status": "passed",
+          "findings_count": 0
+        },
+        "relaxng": {
+          "requested": true,
+          "required": true,
+          "status": "passed",
+          "findings_count": 0
+        },
+        "schematron": {
+          "requested": true,
+          "required": true,
+          "status": "passed",
+          "findings_count": 10,
+          "error_assertions": 0,
+          "failed_assertions": 10,
+          "processor": "SaxonC-HE 13.0 from Saxonica"
+        },
+        "resources": {
+          "requested": true,
+          "required": true,
+          "status": "passed",
+          "findings_count": 0
+        },
+        "image_network": {
+          "requested": false,
+          "required": false,
+          "status": "skipped"
+        },
+        "verovio": {
+          "requested": true,
+          "required": false,
+          "status": "passed",
+          "findings_count": 0,
+          "version": "6.3.0-425dd7b"
+        },
+        "camat_parse": {
+          "requested": true,
+          "required": false,
+          "status": "passed",
+          "findings_count": 0
+        },
+        "input_hashes": {
+          "requested": true,
+          "required": true,
+          "status": "passed",
+          "findings_count": 0
+        }
+      }
+    }
+  ],
+  "note": "Official warning-role assertions remain findings; they do not become general conformance errors. Network images were not fetched."
+}

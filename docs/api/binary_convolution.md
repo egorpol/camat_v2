@@ -7,8 +7,25 @@ title: Binary convolution
 Teaching helpers for sliding-window overlap on binary pitch × time grids.
 The score-map math lives in [pattern search](pattern_search.md)
 (`convolution_map`, `score_kernel_at`, `pad_for_same`). This module holds the
-toy kernel catalog and explainer plots used by
+example-pattern catalog (`EXAMPLE_PATTERNS`) and explainer plots used by
 [`binary_convolution_explained.ipynb`](../../notebooks/binary_convolution_explained.ipynb).
+
+`resolve_example_pattern` selects a catalog pattern and `show_example_overview`
+plots it against an example passage. `show_musical_overlap_example` connects
+notation with exact, missing-note and added-accompaniment matches;
+`show_rhythmic_augmentation_example` and `show_pitch_interval_example` explain
+duration changes and pitch-interval scaling around a fixed anchor before the
+grid comparisons. Their notation uses an opaque white background and black
+captions for readability in dark notebook themes.
+
+Padding plots distinguish a pattern fully inside the passage (`valid`) from
+placements over an artificial empty border (`same`). Stride plots label the
+actual candidate starts and their spacing on the passage grid.
+
+When updating code from 0.2.4, replace `TOY_HOST_SHAPE` with
+`EXAMPLE_PASSAGE_SHAPE`, `TOY_KERNELS` with `EXAMPLE_PATTERNS`,
+`resolve_toy_kernel` with `resolve_example_pattern`, and `show_toy_overview`
+with `show_example_overview` in imports and calls.
 
 `binary_score_details` reports every cell's contribution and the intermediate
 counts, means and norms behind normalized overlap, cross-covariance and

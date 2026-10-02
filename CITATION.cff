@@ -1,6 +1,8 @@
 cff-version: 1.2.0
 message: "If you use CAMAT in your research, please cite this software and state the version used."
 type: software
+version: 0.2.5
+date-released: 2026-10-02
 title: "CAMAT: tools for symbolic music parsing, analysis, and rendering"
 authors:
   - family-names: Polyakov

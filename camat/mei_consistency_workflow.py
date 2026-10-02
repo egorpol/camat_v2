@@ -29,13 +29,13 @@ from .check_mei_consistency import (
 )
 from .convert_harm_startid_to_tstamp import convert_file as convert_harm_startid_to_tstamp
 from .link_pb_to_surface import link_file as link_pb_to_surface
+from .mei_references import REFERENCE_ATTRS, resolve_pointer
 from .verovio_guard import python_executable
 
 
 MEI_NS = "http://www.music-encoding.org/ns/mei"
 XML_NS = "http://www.w3.org/XML/1998/namespace"
 XML_ID = f"{{{XML_NS}}}id"
-REFERENCE_ATTRS = {"facs", "startid", "endid", "target", "plist", "corresp", "sameas", "next", "prev", "copyof", "synch", "decls"}
 MEI_CMN_51_SCHEMA = Path(__file__).with_name("schemas") / "mei-CMN-5.1.rng"
 
 ET.register_namespace("", MEI_NS)
@@ -189,26 +189,32 @@ def _local_attr_name(name: str) -> str:
 
 
 def make_unique_xml_id_copies(files: Iterable[Path], output_dir: Path) -> WriteResult:
-    output_files: list[Path] = []
-    seen_ids: set[str] = set()
-    renamed_total = 0
-    output_dir.mkdir(parents=True, exist_ok=True)
+    from urllib.parse import quote
 
+    files = [Path(path).resolve() for path in files]
+    output_dir = output_dir.resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    if len({path.stem for path in files}) != len(files):
+        raise ValueError("Prepared copy basenames must be unique.")
+    targets = {source: output_dir / f"{source.stem}_unique_ids{source.suffix}" for source in files}
+    seen_ids, trees, maps = set(), {}, {}
+    renamed_total = 0
     for source in files:
         tree = ET.parse(source)
-        root = tree.getroot()
-        rename_map: dict[str, str] = {}
-        prefix = source.stem
-
-        for element in root.iter():
+        ids = [element.get(XML_ID) for element in tree.getroot().iter() if element.get(XML_ID)]
+        if len(ids) != len(set(ids)):
+            raise ValueError(f"Cannot rewrite ambiguous duplicate IDs within {source}")
+        rename_map = {}
+        for element in tree.getroot().iter():
             xml_id = element.get(XML_ID)
             if not xml_id:
                 continue
             if xml_id in seen_ids:
-                candidate = f"{prefix}_{xml_id}"
+                prefix = re.sub(r"[^A-Za-z0-9_.-]", "_", source.stem)
+                candidate = f"page_{prefix}_{xml_id}"
                 suffix = 2
                 while candidate in seen_ids:
-                    candidate = f"{prefix}_{xml_id}_{suffix}"
+                    candidate = f"page_{prefix}_{xml_id}_{suffix}"
                     suffix += 1
                 element.set(XML_ID, candidate)
                 rename_map[xml_id] = candidate
@@ -216,27 +222,44 @@ def make_unique_xml_id_copies(files: Iterable[Path], output_dir: Path) -> WriteR
                 renamed_total += 1
             else:
                 seen_ids.add(xml_id)
+        trees[source], maps[source] = tree, rename_map
 
-        if rename_map:
-            for element in root.iter():
-                for attr_name, value in list(element.attrib.items()):
-                    if _local_attr_name(attr_name) not in REFERENCE_ATTRS:
-                        continue
-                    tokens = str(value).split()
-                    updated = [
-                        f"#{rename_map[token[1:]]}"
-                        if token.startswith("#") and token[1:] in rename_map
-                        else token
-                        for token in tokens
-                    ]
-                    if updated != tokens:
-                        element.set(attr_name, " ".join(updated))
+    for source, tree in trees.items():
+        root_element = tree.getroot()
+        parents = {child: parent for parent in root_element.iter() for child in parent}
+        for element in root_element.iter():
+            for attr_name, value in list(element.attrib.items()):
+                if _local_attr_name(attr_name) not in REFERENCE_ATTRS:
+                    continue
+                tokens, updated = str(value).split(), []
+                for token in tokens:
+                    pointer = resolve_pointer(token, element, source, parents)
+                    if pointer.document in targets:
+                        fragment = maps[pointer.document].get(pointer.fragment, pointer.fragment)
+                        if token.startswith("#") and pointer.document == source and not any(
+                            ancestor.get("{http://www.w3.org/XML/1998/namespace}base")
+                            for ancestor in [element, *list(_reference_ancestors(element, parents))]
+                        ):
+                            token = "#" + quote(fragment)
+                        else:
+                            token = targets[pointer.document].as_uri() + ("#" + quote(fragment) if pointer.has_fragment else "")
+                    elif pointer.document is not None:
+                        # Moving a copy must not make relative image/document
+                        # resources resolve against the temporary output folder.
+                        token = pointer.document.as_uri() + ("#" + quote(pointer.fragment) if pointer.has_fragment else "")
+                    else:
+                        token = pointer.uri
+                    updated.append(token)
+                if updated != tokens:
+                    element.set(attr_name, " ".join(updated))
+        _write_tree_with_original_preamble(tree, root_element, source, targets[source])
+    return WriteResult(list(targets.values()), renamed_total, f"Renamed {renamed_total} duplicate xml:id value(s).")
 
-        target = output_dir / f"{source.stem}_unique_ids{source.suffix}"
-        _write_tree_with_original_preamble(tree, root, source, target)
-        output_files.append(target)
 
-    return WriteResult(output_files, renamed_total, f"Renamed {renamed_total} duplicate xml:id value(s).")
+def _reference_ancestors(element, parents):
+    while element in parents:
+        element = parents[element]
+        yield element
 
 
 def strip_ppq_copies(
@@ -796,6 +819,9 @@ def run_checker(
     json_out: Path | None = None,
     check_ppq: bool = False,
     publication_profile: bool = False,
+    document_mode: str = "standalone",
+    editorial_diagnostics: bool = False,
+    group_diagnostics: bool | None = None,
 ) -> list[Finding]:
     """Run the package checker and write its CSV and optional JSON reports."""
     files = list(files)
@@ -804,6 +830,9 @@ def run_checker(
         root_dir=root,
         check_ppq=check_ppq,
         publication_profile=publication_profile,
+        document_mode=document_mode,
+        editorial_diagnostics=editorial_diagnostics,
+        group_diagnostics=group_diagnostics,
     )
     write_csv(csv_out, findings)
     if json_out is not None:
@@ -854,7 +883,7 @@ def run_relaxng_validation(
     for path in files:
         try:
             result = subprocess.run(
-                ["xmllint", "--noout", "--relaxng", str(schema), str(path)],
+                ["xmllint", "--nonet", "--noout", "--relaxng", str(schema), str(path)],
                 cwd=root,
                 text=True,
                 capture_output=True,
@@ -1324,73 +1353,17 @@ def iiif_graphic_target_rows(
     root: Path,
     timeout: int = 15,
 ) -> list[dict[str, str]]:
-    """Record missing, non-IIIF, or unreachable facsimile ``@target`` URLs."""
-    rows: list[dict[str, str]] = []
-    for path in files:
-        shown = _relative_path_text(path, root)
-        try:
-            targets = facsimile_graphic_targets(path)
-        except ET.ParseError as exc:
-            rows.append(
-                _report_row(
-                    severity="error",
-                    category="facsimile",
-                    check="iiif_graphic_target",
-                    file=shown,
-                    message=f"XML parse error: {exc}",
-                )
-            )
-            continue
-        if not targets:
-            rows.append(
-                _report_row(
-                    severity="error",
-                    category="facsimile",
-                    check="iiif_graphic_target",
-                    file=shown,
-                    message="Missing <facsimile>/<graphic @target>.",
-                )
-            )
-            continue
-        for target in targets:
-            if not target:
-                rows.append(
-                    _report_row(
-                        severity="error",
-                        category="facsimile",
-                        check="iiif_graphic_target",
-                        file=shown,
-                        element="graphic",
-                        message="Missing <graphic @target>.",
-                    )
-                )
-                continue
-            if not target.startswith(("http://", "https://")) or "/iiif/" not in target.lower():
-                rows.append(
-                    _report_row(
-                        severity="warning",
-                        category="facsimile",
-                        check="iiif_graphic_target",
-                        file=shown,
-                        element="graphic",
-                        message="Facsimile target is not an IIIF URL.",
-                        actual=target,
-                    )
-                )
-                continue
-            available, status = _iiif_url_available(target, timeout)
-            if not available:
-                rows.append(
-                    _report_row(
-                        severity="error",
-                        category="facsimile",
-                        check="iiif_graphic_target",
-                        file=shown,
-                        element="graphic",
-                        message=f"IIIF facsimile target is unavailable ({status}).",
-                        actual=target,
-                    )
-                )
+    """Compatibility wrapper for generalized image resources (network enabled)."""
+    # Compatibility name: direct HTTP images and local targets are valid too.
+    from .mei_resources import image_resource_rows
+    rows = image_resource_rows(files, check_network=True, timeout=timeout)["rows"]
+    for row in rows:
+        row["context"] = row["check"]
+        row["check"] = "iiif_graphic_target"  # Preserve the legacy public rule ID.
+        row["file"] = _relative_path_text(Path(row["file"]), root)
+        row["category"] = "facsimile"
+        for field in VEROVIO_REPORT_COLUMNS:
+            row.setdefault(field, "")
     return rows
 
 
@@ -1497,12 +1470,16 @@ def run_editorial_checks(
     check_ppq: bool = True,
     publication_profile: bool = True,
     check_relaxng: bool = True,
-    check_fb_tstamp: bool = True,
-    check_pb_facs: bool = True,
+    check_fb_tstamp: bool | None = None,
+    check_pb_facs: bool | None = None,
     check_verovio: bool = True,
     verovio_render_pages: bool = True,
     check_iiif_links: bool = False,
     iiif_timeout: int = 15,
+    schema: Path = MEI_CMN_51_SCHEMA,
+    document_mode: str = "standalone",
+    editorial_diagnostics: bool = False,
+    group_diagnostics: bool | None = None,
 ):
     """Run the combined-score editorial check suite and return one report DataFrame.
 
@@ -1519,15 +1496,20 @@ def run_editorial_checks(
         json_out=None,
         check_ppq=check_ppq,
         publication_profile=publication_profile,
+        document_mode=document_mode,
+        editorial_diagnostics=editorial_diagnostics,
+        group_diagnostics=group_diagnostics,
     )
     df = load_report(csv_out)
     extra_rows: list[dict[str, str]] = []
-    if check_fb_tstamp:
+    include_fb_style = publication_profile if check_fb_tstamp is None else check_fb_tstamp
+    include_pb_policy = publication_profile if check_pb_facs is None else check_pb_facs
+    if include_fb_style:
         extra_rows.extend(figured_bass_report_rows(files, root=root, apply=False))
-    if check_pb_facs:
+    if include_pb_policy:
         extra_rows.extend(page_break_facs_report_rows(files, root=root, apply=False))
     if check_relaxng:
-        extra_rows.extend(run_relaxng_validation(files, root=root).rows)
+        extra_rows.extend(run_relaxng_validation(files, root=root, schema=schema).rows)
     if check_iiif_links:
         extra_rows.extend(iiif_graphic_target_rows(files, root=root, timeout=iiif_timeout))
     if check_verovio:
@@ -1746,6 +1728,26 @@ def _maybe_insert_page_scoredef(
     return True
 
 
+def _rebase_combined_references(root_element, source, output_path, selected_files):
+    from urllib.parse import quote
+    parents = {child: parent for parent in root_element.iter() for child in parent}
+    for element in root_element.iter():
+        for attr, value in list(element.attrib.items()):
+            if _local_attr_name(attr) not in REFERENCE_ATTRS:
+                continue
+            tokens = []
+            for token in value.split():
+                pointer = resolve_pointer(token, element, source, parents)
+                if pointer.document in selected_files and pointer.has_fragment:
+                    has_base = any(node.get("{http://www.w3.org/XML/1998/namespace}base")
+                                   for node in [element, *list(_reference_ancestors(element, parents))])
+                    token = (output_path.as_uri() if has_base else "") + "#" + quote(pointer.fragment)
+                else:
+                    token = pointer.uri
+                tokens.append(token)
+            element.set(attr, " ".join(tokens))
+
+
 def combine_meis(
     files: Iterable[Path],
     output_path: Path,
@@ -1770,13 +1772,15 @@ def combine_meis(
     clefs. Identical page headers are left out. Set
     ``include_page_score_defs=False`` to keep the old section-only join.
     """
-    files = list(files)
+    files = [Path(path).resolve() for path in files]
+    output_path = Path(output_path).resolve()
     if not files:
         raise FileNotFoundError("No active MEI files to combine")
 
     base_path = files[0]
     base_tree = ET.parse(base_path)
     base_root = base_tree.getroot()
+    _rebase_combined_references(base_root, base_path, output_path, set(files))
     base_facsimile = first_descendant(base_root, "facsimile")
     base_section = first_descendant(base_root, "section")
     if base_section is None:
@@ -1793,6 +1797,7 @@ def combine_meis(
     skipped_expansions = 0
     for page_index, path in enumerate(files[1:], start=2):
         page_root = ET.parse(path).getroot()
+        _rebase_combined_references(page_root, path, output_path, set(files))
         page_facsimile = first_descendant(page_root, "facsimile")
         page_section = first_descendant(page_root, "section")
         if page_section is None:

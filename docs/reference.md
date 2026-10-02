@@ -10,7 +10,9 @@ through `import camat`. The pages below contain the full module documentation.
 ## Handle and inspect MEI
 
 - [Edition and IIIF pipeline](api/edition_pipeline.md): facsimile integration and edition preparation.
-- [MEI consistency and cleanup](api/mei_consistency.md): editorial validation and maintenance.
+- [MEI consistency and cleanup](api/mei_consistency.md): general validation,
+  Schematron, resources, execution records and legacy maintenance helpers.
+  Start with the [validation guide](guides/mei-validation.md) for setup and results.
 - [Facsimile viewer](api/facsimile_viewer.md): linked score and image inspection.
 - [Verovio rendering](api/verovio_render.md): SVG scores, annotations, and highlights.
 
@@ -34,7 +36,7 @@ For guided use, start with [Statistics](guides/statistics.md),
 
 - [Analysis utilities](api/analysis_utils.md): distributions, intervals, and piano rolls.
 - [Binary matrix designer](api/binary_matrix_designer.md): pitch/time representations.
-- [Binary convolution](api/binary_convolution.md): toy kernels and explainer plots.
+- [Binary convolution](api/binary_convolution.md): example-pattern catalog and explainer plots.
 - [Independent binary queries](api/binary_query.md): metadata-aware MIDI/chroma searches with explicit tempo scales and transpositions.
 - [Binary roundtrip](api/binary_roundtrip.md): representation audits, voice grids, source provenance and filled match highlights.
 - [Pattern search](api/pattern_search.md): kernels, placements, and similarity.

@@ -19,6 +19,7 @@ conversion is experimental; converted scores still need inspection.
 
 [Editing music with the MEI data format](guides/edition-building.md) ·
 [MEI and XML introduction](guides/mei-introduction.md) ·
+[General MEI validation](guides/mei-validation.md) ·
 [Convert to MEI](guides/formats.md) · [Batch conversion](guides/batch-conversion.md)
 
 ### 2. Parse music into CAMAT representations
@@ -95,8 +96,9 @@ camat-fetch-tutorials
 python -m jupyterlab camat_tutorials/notebooks
 ```
 
-That sparse copy does not include documentation sources, tests, or the
-development archive. On [Jupyter4NFDI](https://hub.nfdi-jupyter.de) or
+That copy does not include documentation sources, tests, or the
+development archive. The command downloads GitHub's source archive for the
+installed CAMAT version. On [Jupyter4NFDI](https://hub.nfdi-jupyter.de) or
 Google Colab, see [Cloud notebooks](cloud-notebooks.md).
 
 To develop CAMAT itself, clone the repository so the installed code and
@@ -124,6 +126,21 @@ Saved outputs let you preview the examples on GitHub. Interactive widgets need
 a running Jupyter kernel; a static preview cannot operate their controls.
 Run cells from the top after restarting the kernel.
 
+For the two MEI checking notebooks in a source checkout, also install the
+validation dependencies in that kernel's environment:
+
+```bash
+python -m pip install -e '.[notebooks,validation]'
+```
+
+Install `xmllint` from libxml2 separately and make it available on `PATH`.
+The extra supplies lxml, SaxonC (`saxonche`) and Pillow; CAMAT bundles the
+SchXslt compiler. These notebooks use the selected installation and do not
+install or update it during checking. The validation API requires CAMAT 0.2.5
+or newer, installed from PyPI with the `validation` extra or from the matching
+checkout. See [General MEI validation](guides/mei-validation.md)
+for setup, schema selection and execution records.
+
 Some corpus examples need a download on their first run. In the Bach analysis
 notebooks, enable `RUN_FETCH` in the configuration cell if the local source is
 not cached, or set the source path to your own MEI file. Check each notebook's
@@ -133,8 +150,9 @@ configuration before enabling network access or writing results.
 
 - MuseScore-native conversion requires an installed MuseScore executable; see
   [format conversion](guides/formats.md).
-- RELAX NG editorial validation uses `xmllint` from libxml2; other checks have
-  their own switches in the [editorial workflow](guides/edition-building.md).
+- Complete general MEI validation requires the `validation` extra and
+  `xmllint` from libxml2. RELAX NG and Schematron are separate required passes;
+  missing tools produce an incomplete result, not a validation pass.
 - Remote corpora, IIIF images, and remote MEI sources require network access.
 
 CI tests Linux (Ubuntu) with Python 3.11–3.14. Windows and macOS are not covered

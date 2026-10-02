@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "camat"
-version = "0.2.4"
+version = "0.2.5"
 description = "CAMAT: tools for symbolic music parsing, analysis, and rendering."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -34,10 +34,12 @@ dynamic = ["dependencies"]
 [project.optional-dependencies]
 test = ["pytest>=8", "packaging>=24"]
 notebooks = ["jupyterlab>=4"]
+validation = ["lxml>=5", "saxonche>=12,<14", "Pillow>=10"]
 
 [project.scripts]
 camat-convert = "camat.conversion:main"
 camat-check-mei = "camat.check_mei_consistency:main"
+camat-validate-mei = "camat.mei_validation:main"
 camat-convert-harm-startid = "camat.convert_harm_startid_to_tstamp:main"
 camat-link-pb-surface = "camat.link_pb_to_surface:main"
 camat-check-bsb-page-coverage = "camat.check_bsb_page_coverage:main"
@@ -65,7 +67,7 @@ include-package-data = false
 include = ["camat*"]
 
 [tool.setuptools.package-data]
-camat = ["examples/*.mei", "examples/*.svg", "schemas/*.rng"]
+camat = ["examples/*.mei", "examples/*.svg", "schemas/*.rng", "schemas/schxslt/*.xsl", "schemas/schxslt/compile/*.xsl", "schemas/schxslt/util/*.xsl", "schemas/schxslt/README.md"]
 
 [tool.setuptools.dynamic]
 dependencies = { file = ["requirements.txt"] }

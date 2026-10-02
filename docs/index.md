@@ -55,6 +55,10 @@ especially after MIDI or OMR-derived input. The hand-off to parsing is a valid
 MEI file with stable `xml:id` values where possible. See
 [Editing music with the MEI data format](guides/edition-building.md).
 
+For general read-only checks, use [General MEI validation](guides/mei-validation.md).
+It explains RELAX NG/Schematron, optional consumer diagnostics, execution
+records and the separate role of a corpus's publication policy.
+
 ## CAMAT music representations
 
 The default Verovio parser reads common-notation MEI and separates two kinds of

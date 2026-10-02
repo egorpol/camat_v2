@@ -57,6 +57,7 @@ nav:
       - 1. Editing music with the MEI data format:
           - Workflow overview: guides/edition-building.md
           - Introduction to MEI and XML: guides/mei-introduction.md
+          - General MEI validation: guides/mei-validation.md
           - Convert to MEI: guides/formats.md
           - Batch conversion: guides/batch-conversion.md
           - Test sources: guides/sources.md

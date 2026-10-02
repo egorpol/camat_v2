@@ -18,9 +18,9 @@ publication. The reusable tools are in this package. The MEI files live in
 separate work-in-progress [edition corpora](edition-corpora.md).
 
 In that production loop, combined or corrected MEI files are edited in
-mei-friend, checked with the same passes exposed here, fixed from the report,
-and re-checked until no encoded inconsistency remains. The tutorial notebooks
-run those checks read-only; optional rewrite helpers stay in
+mei-friend, checked with shared mechanisms plus the corpus's publication policy,
+fixed from the report, and re-checked. The two checking tutorial notebooks run
+general validation read-only; optional legacy rewrite helpers stay in
 [`mei_corrected_full_checks.ipynb`](../../CAMAT_old/mei_corrected_full_checks.ipynb).
 
 ## Choose a starting point
@@ -35,7 +35,8 @@ run those checks read-only; optional rewrite helpers stay in
 | add a IIIF facsimile and detected measure zones to one clean MEI file                | [`mei_single_file_iiif_integration.ipynb`](../../notebooks/mei_single_file_iiif_integration.ipynb) |
 | add IIIF facsimiles and measure zones to several MEI files                           | [`mei_batch_iiif_integration.ipynb`](../../notebooks/mei_batch_iiif_integration.ipynb) |
 | join facsimile-linked page files into one score                                      | [`mei_combine_pages.ipynb`](../../notebooks/mei_combine_pages.ipynb) |
-| run automated editorial checks and write a CSV report (read-only)                    | [`mei_check_report.ipynb`](../../notebooks/mei_check_report.ipynb) |
+| run general MEI checks and write findings plus execution records (read-only)         | [`mei_check_report.ipynb`](../../notebooks/mei_check_report.ipynb) |
+| understand schemas, checks, statuses, reports and validation installation             | [General MEI validation](mei-validation.md) |
 | combine and check in one run, with extra flags                                       | [`mei_consistency_checks.ipynb`](../../notebooks/mei_consistency_checks.ipynb) |
 | check corrected full-score files with optional rewrite/cleanup flags                 | [`mei_corrected_full_checks.ipynb`](../../CAMAT_old/mei_corrected_full_checks.ipynb)                         |
 | see the DdT volumes that motivated this tooling                                      | [Edition corpora](edition-corpora.md)                                                                                                       |
@@ -70,8 +71,9 @@ rest.
      `<scoreDef>` into the combined `<section>` when that page's staff list,
      meter, key, or clefs change;
    - [`mei_check_report.ipynb`](../../notebooks/mei_check_report.ipynb)
-     runs the editorial suite on one page, several pages, or a combined score and
-     writes a CSV report under `TARGET_DIR`;
+     runs general MEI validation on one page, several pages, or a combined score,
+     with an explicit schema/profile, CSV findings and execution records under
+     `TARGET_DIR`; corpus publication rules belong to the corpus wrapper;
    - [`mei_consistency_checks.ipynb`](../../notebooks/mei_consistency_checks.ipynb)
      is the full toolkit when you want combine-then-check in one run, toggle
      individual checks, or optional `<annot>` export (limited by mei-friend's
@@ -82,8 +84,9 @@ rest.
 
 Maintainer notebooks such as
 [`mei_corrected_full_checks.ipynb`](../../CAMAT_old/mei_corrected_full_checks.ipynb)
-sit beside this sequence: same check passes, plus opt-in `CLEAN_*` / `FIX_*`
-rewrites for production corpora.
+sit beside this sequence as legacy development probes with opt-in `CLEAN_*` /
+`FIX_*` rewrites and older publication defaults. They do not provide the new
+complete Schematron/execution-record workflow and are not required by it.
 
 The introductory guide was migrated from the project's earlier HfM Weimar
 wiki. The MkDocs copy is now the project version to maintain; the
@@ -201,7 +204,9 @@ Begin with the two short notebooks when you only need one task:
 - [`mei_combine_pages.ipynb`](../../notebooks/mei_combine_pages.ipynb)
   joins page files into `{stem}_full.mei` under `converted_mei/combine_tutorial/`.
 - [`mei_check_report.ipynb`](../../notebooks/mei_check_report.ipynb)
-  runs the editorial suite and writes a CSV under `converted_mei/check_tutorial/`.
+  runs general validation and writes findings plus execution records under
+  `converted_mei/check_tutorial/`. Both checking notebooks default explicitly to
+  the packaged official MEI 5.1 CMN schema and apply no DdT publication policy.
 
 The full tutorial
 [`mei_consistency_checks.ipynb`](../../notebooks/mei_consistency_checks.ipynb)
@@ -215,14 +220,31 @@ modes in one notebook:
 
 After the user enables `RUN_PIPELINE`, the notebook writes **CSV/JSON reports**
 under `TARGET_DIR` (default `converted_mei/consistency_tutorial/`). In
-**check-only** mode that is typically `input_consistency_report.csv` plus
-`editorial_consistency_report.csv`. In **combine** mode it also writes prepared
-copies under `unique_ids/` and `noppq/`, a joined `{stem}_full.mei`, a
-`page_consistency_report.csv`, and `{stem}_full_consistency_report.csv`.
+**check-only** mode, `validation/` contains `run.json`, `findings.csv`,
+`findings.json` and Schematron artifacts. A score-named
+`{stem}_consistency_report.csv` (or `editorial_consistency_report.csv` for several
+inputs) is an exact copy of those findings, including the `origin` column.
+It is a convenient export of the same results, not another checking pass.
+`WRITE_JSON` adds an identical score-named JSON copy.
+
+In **combine** mode the notebook also writes a joined `{stem}_full.mei` and
+`page_consistency_report.csv` for the earlier assembly checks on prepared pages.
+Prepared copies normally use a temporary directory that is removed after
+combining; `KEEP_PREPARED_PAGES=True` retains them under `TARGET_DIR`.
+The joined score then receives its own complete general validation and
+`{stem}_full_consistency_report.csv` findings copy.
 Each later page's opening `<scoreDef>` is copied into the joined section
 when it changes staffing, meter, key, or clefs; identical page headers are
 left out. `MEI_INPUTS` may list local paths, directories, or `http(s)://`
 links (cached on first use). Source files in `MEI_INPUTS` are not overwritten.
+
+The printout distinguishes MEI conformance, consumer diagnostics, individual
+check execution and grouped finding counts. A finding summary can have fewer
+rows than the CSV because each summary row counts one severity/category/check
+group. `run.json` records checks, dependencies, actual CAMAT source identity and
+before/after input hashes. Reusing `TARGET_DIR/validation` replaces that run's
+reports; keep a complete run folder when preserving evidence. See
+[General MEI validation](mei-validation.md) for schema layers and statuses.
 
 **Recommended workflow:** open the CSV/JSON reports under `TARGET_DIR`, filter
 and track rows there (spreadsheet, pandas, or any text editor), correct the MEI
@@ -251,11 +273,13 @@ the limit is editor display, not encoding. For better support of large
 machine-generated validation sets in mei-friend, see
 [mei-friend/mei-friend issues](https://github.com/mei-friend/mei-friend/issues).
 
-Optional rewrite/cleanup flags stay in the maintainer notebook below.
-
-Checks include general consistency and publication-profile rules, figured-bass
-`@startid` anchors, page-break facsimile links, the packaged MEI 5.1 CMN RELAX NG
-schema, Verovio load/render warnings, and optional IIIF URL reachability.
+General checks include XML/references, the selected RELAX NG and embedded
+Schematron, offline resources and unchanged input hashes. Musical diagnostics
+and optional Verovio/CAMAT consumers or HTTP image checks are reported separately.
+No facsimile, BuxWV identity, publication metadata or DdT page topology is
+required in general mode. The corpus wrapper owns publication acceptance.
+Copy preparation/assembly, figured-bass conversion and cleanup are explicit
+transformations, separate from validation.
 
 The maintainer notebook
 [`mei_corrected_full_checks.ipynb`](../../CAMAT_old/mei_corrected_full_checks.ipynb)
@@ -270,27 +294,30 @@ and `FULL_MEI_INPUTS`; its default flags are read-only. The passes cover:
   `@staff`;
 - Verovio load/render warnings.
 
-The core consistency check is also available without a notebook:
+Complete general validation is also available without a notebook:
 
 ```python
 from pathlib import Path
-from camat import check_mei_files
+from camat import run_mei_validation
 
 mei_path = Path("/path/to/edited.mei")
-findings = check_mei_files(
+result = run_mei_validation(
     [mei_path],
-    root_dir=mei_path.parent,
-    check_ppq=True,
-    publication_profile=True,
+    root=mei_path.parent,
+    output_dir=mei_path.parent / "validation-output",
 )
+print(result.record["conformance"])
 ```
 
-For CSV/JSON reports use `run_checker(...)`, or run
-`camat-check-mei /path/to/edited.mei --publication-profile`. Cleanup and repair
-helpers are opt-in and rewrite the selected MEI files only when `apply=True` or
-the corresponding notebook flag is enabled. The RELAX NG pass uses the
-packaged schema and requires the `xmllint` executable. See the
-[MEI consistency API](../api/mei_consistency.md) for the individual passes.
+The equivalent command is
+`camat-validate-mei /path/to/edited.mei --output-dir /path/to/validation-output`.
+Install the `validation` extra and external `xmllint` first. Legacy
+`check_mei_files`, `run_checker`, `run_editorial_checks` and `camat-check-mei`
+remain available for existing callers; they are not the complete new execution
+suite. `run_editorial_checks` retains its old publication default, so explicitly
+select `publication_profile=False` when using it for general checks. Cleanup
+and repair helpers rewrite only when explicitly requested. See the
+[MEI consistency API](../api/mei_consistency.md) for migration and individual passes.
 
 ## Inspect an MEI page
 

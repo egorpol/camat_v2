@@ -28,6 +28,11 @@ from fractions import Fraction
 from pathlib import Path
 from typing import Iterable
 
+if __package__:
+    from .mei_references import REFERENCE_ATTRS, resolve_pointer
+else:  # Preserve direct script use without importing CAMAT's consumer stack.
+    from mei_references import REFERENCE_ATTRS, resolve_pointer
+
 
 MEI_NS = "http://www.music-encoding.org/ns/mei"
 XML_NS = "http://www.w3.org/XML/1998/namespace"
@@ -35,20 +40,6 @@ XML_ID = f"{{{XML_NS}}}id"
 
 TIMED_EVENTS = {"note", "rest", "chord", "space", "mRest", "mSpace"}
 PITCHED_EVENTS = {"note"}
-REFERENCE_ATTRS = {
-    "facs",
-    "startid",
-    "endid",
-    "target",
-    "plist",
-    "corresp",
-    "sameas",
-    "next",
-    "prev",
-    "copyof",
-    "synch",
-    "decls",
-}
 VALID_DURS = {
     "maxima",
     "long",
@@ -95,7 +86,12 @@ class MeiChecker:
         check_ppq: bool = False,
         publication_profile: bool = False,
         corpus_id_locations: dict[str, list[str]] | None = None,
+        *,
+        document_mode: str = "standalone",
+        editorial_diagnostics: bool = False,
     ):
+        if document_mode not in {"standalone", "assembly"}:
+            raise ValueError("document_mode must be 'standalone' or 'assembly'.")
         self.path = path.resolve()
         self.root_dir = root_dir.resolve()
         try:
@@ -104,6 +100,8 @@ class MeiChecker:
             self.rel_path = self.path.name
         self.check_ppq = check_ppq
         self.publication_profile = publication_profile
+        self.document_mode = document_mode
+        self.editorial_diagnostics = editorial_diagnostics or publication_profile
         self.corpus_id_locations = corpus_id_locations or {}
         self.text = self.path.read_text(encoding="utf-8")
         self.lines = self.text.splitlines()
@@ -189,7 +187,8 @@ class MeiChecker:
             self._check_facsimile_page_structure()
             self._check_empty_structural_elements()
         self._walk_score_for_meters_and_measures()
-        self._check_terms()
+        if self.editorial_diagnostics:
+            self._check_terms()
         self._collect_staff_records()
 
         return self.findings, self.staff_records, self.term_records
@@ -740,9 +739,30 @@ class MeiChecker:
                 if clean_attr not in REFERENCE_ATTRS:
                     continue
                 for token in str(value).split():
-                    if not token.startswith("#"):
+                    pointer = resolve_pointer(token, element, self.path, self.parent)
+                    if pointer.document is None:
+                        continue  # Remote references are recorded, never fetched implicitly.
+                    if pointer.document != self.path:
+                        if not pointer.document.is_file():
+                            self.add("error", "references", "missing_reference_document", element,
+                                     f"Local resource in @{clean_attr} does not exist.", actual=token,
+                                     context=str(pointer.document))
+                            continue
+                        if pointer.has_fragment:
+                            try:
+                                target_root = ET.parse(pointer.document).getroot()
+                                target_ids = {node.get(XML_ID) or node.get("id") for node in target_root.iter()}
+                                if not pointer.fragment or pointer.fragment not in target_ids:
+                                    self.add("error", "references", "broken_document_reference", element,
+                                             f"Fragment in @{clean_attr} does not resolve in the explicit document.",
+                                             actual=token, context=str(pointer.document))
+                            except (ET.ParseError, OSError) as exc:
+                                self.add("error", "references", "reference_document_parse", element,
+                                         f"Cannot read the referenced XML document: {exc}", actual=token)
                         continue
-                    ref_id = token[1:]
+                    if not pointer.has_fragment:
+                        continue
+                    ref_id = pointer.fragment
                     if not ref_id:
                         self.add(
                             "error",
@@ -752,8 +772,19 @@ class MeiChecker:
                             f"Reference '{token}' in @{clean_attr} is empty.",
                             actual=token,
                         )
-                    elif ref_id not in self.ids and ref_id in self.corpus_id_locations:
+                    elif (
+                        self.document_mode == "assembly"
+                        and ref_id not in self.ids
+                        and ref_id in self.corpus_id_locations
+                    ):
                         locations = sorted(set(self.corpus_id_locations[ref_id]))
+                        if len(locations) > 1:
+                            self.add(
+                                "error", "references", "ambiguous_assembly_reference", element,
+                                f"Reference '{token}' in @{clean_attr} has targets in multiple selected files.",
+                                actual=token, context=f"target_files={', '.join(locations)}",
+                            )
+                            continue
                         context_parts = [
                             "Reference resolves in another selected MEI file and should resolve after combining.",
                             f"target_file={', '.join(locations[:3])}",
@@ -808,6 +839,11 @@ class MeiChecker:
                 zones[xml_id] = zone
             if zone.get("type") == "measure":
                 self._check_zone_coordinates(zone)
+
+        # Complete measure-zone coverage is an edition convention. General MEI
+        # may omit facsimiles or link events to other resources/zone types.
+        if not self.publication_profile:
+            return
 
         for measure in self.root.iter():
             if local_name(measure.tag) != "measure":
@@ -884,15 +920,19 @@ class MeiChecker:
 
     def _walk_score_for_meters_and_measures(self) -> None:
         assert self.root is not None
+        music = first_child(self.root, "music")
+        if music is None:
+            return
         previous_measure_n: int | None = None
-        for element in self.root.iter():
+        for element in music.iter():
             tag = local_name(element.tag)
             if tag == "scoreDef":
                 self._apply_score_def(element)
                 if not self.initial_staff_defs and self.current_staff_defs:
                     self.initial_staff_defs = {k: v.copy() for k, v in self.current_staff_defs.items()}
             elif tag == "measure":
-                previous_measure_n = self._check_measure_sequence(element, previous_measure_n)
+                if self.editorial_diagnostics:
+                    previous_measure_n = self._check_measure_sequence(element, previous_measure_n)
                 self._check_measure_staff_inventory(element)
                 self._check_measure_rhythm(element)
 
@@ -955,6 +995,7 @@ class MeiChecker:
         report: bool = True,
         inherited: dict[str, str] | None = None,
     ) -> dict[str, str]:
+        report = report and self.editorial_diagnostics
         inherited = inherited or {}
         parent = self.parent.get(staff_def)
         direct_label_el = first_child(staff_def, "label")
@@ -1111,7 +1152,7 @@ class MeiChecker:
                     "Staff has duplicate layer numbers in the same measure.",
                     actual=", ".join(duplicates),
                 )
-            if len(layers) == 1 and layer_nums[0] and layer_nums[0] != "1":
+            if self.editorial_diagnostics and len(layers) == 1 and layer_nums[0] and layer_nums[0] != "1":
                 self.add(
                     "info",
                     "layering",
@@ -1163,7 +1204,7 @@ class MeiChecker:
                     "@dur.ppq differs from the written duration implied by @dur/@dots under the active @ppq.",
                     expected=format_fraction(duration),
                     actual=format_fraction(ppq_duration),
-                    context="@dur/@dots are treated as authoritative for this facsimile-based edition.",
+                    context="Written notation and performance timing may intentionally differ.",
                 )
             if duration is None:
                 if tag in {"mRest", "mSpace"} and expected is not None:
@@ -1287,7 +1328,10 @@ class MeiChecker:
 
     def _collect_staff_records(self) -> None:
         assert self.root is not None
-        for staff_def in self.root.iter():
+        music = first_child(self.root, "music")
+        if music is None:
+            return
+        for staff_def in music.iter():
             if local_name(staff_def.tag) != "staffDef":
                 continue
             identity = self._staff_identity(staff_def, report=False)
@@ -1659,6 +1703,9 @@ def check_mei_files(
     root_dir: str | Path | None = None,
     check_ppq: bool = False,
     publication_profile: bool = False,
+    document_mode: str = "standalone",
+    editorial_diagnostics: bool = False,
+    group_diagnostics: bool | None = None,
 ) -> list[Finding]:
     """Check explicit MEI files and return sorted, structured findings.
 
@@ -1673,14 +1720,23 @@ def check_mei_files(
     check_ppq
         Compare optional ``@dur.ppq`` values with written durations.
     publication_profile
-        Enable the MEI 5.1 CMN header and facsimile-topology checks.
+        Enable the legacy DdT-specific header and facsimile-topology checks.
+        Retained for compatibility; general callers should leave this false.
+    document_mode
+        ``standalone`` requires bare fragments to resolve in their own file.
+        ``assembly`` also reports targets in another selected page file.
+    editorial_diagnostics
+        Opt into numbering, naming and term-style diagnostics.
+    group_diagnostics
+        Compare staff inventories, labels and terms across the selected group.
+        Defaults off in general mode and on for the legacy publication profile.
     """
     paths = [Path(path) for path in files]
     if not paths:
         return []
 
     root = Path.cwd() if root_dir is None else Path(root_dir)
-    corpus_id_locations = scan_corpus_id_locations(paths, root)
+    corpus_id_locations = scan_corpus_id_locations(paths, root) if document_mode == "assembly" else {}
     findings: list[Finding] = []
     staff_records: list[dict[str, str]] = []
     term_records: list[dict[str, str]] = []
@@ -1692,13 +1748,17 @@ def check_mei_files(
             check_ppq=check_ppq,
             publication_profile=publication_profile,
             corpus_id_locations=corpus_id_locations,
+            document_mode=document_mode,
+            editorial_diagnostics=editorial_diagnostics,
         )
         file_findings, file_staff_records, file_term_records = checker.run()
         findings.extend(file_findings)
         staff_records.extend(file_staff_records)
         term_records.extend(file_term_records)
 
-    add_corpus_findings(findings, staff_records, term_records)
+    include_group_diagnostics = publication_profile if group_diagnostics is None else group_diagnostics
+    if include_group_diagnostics:
+        add_corpus_findings(findings, staff_records, term_records)
     severity_order = {"error": 0, "warning": 1, "info": 2}
     findings.sort(
         key=lambda finding: (
@@ -1734,8 +1794,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--publication-profile",
         action="store_true",
-        help="Also check MEI 5.1 CMN publication metadata, page topology, and structural empties.",
+        help="Enable legacy DdT-specific metadata, page topology, and structural diagnostics.",
     )
+    parser.add_argument("--document-mode", choices=["standalone", "assembly"], default="standalone",
+                        help="Resolve bare fragments locally, or inspect a selected page assembly.")
+    parser.add_argument("--editorial-diagnostics", action="store_true",
+                        help="Include optional naming, numbering and term-style diagnostics.")
+    parser.add_argument("--group-diagnostics", action="store_true", default=None,
+                        help="Compare staff inventories, names and terms in an explicitly related group.")
     parser.add_argument(
         "--strip-ppq-output",
         help="Write ppq-free MEI copies to this directory before checking them. Removes @ppq and @dur.ppq.",
@@ -1771,6 +1837,9 @@ def main(argv: list[str] | None = None) -> int:
         root_dir=root_dir,
         check_ppq=args.check_ppq,
         publication_profile=args.publication_profile,
+        document_mode=args.document_mode,
+        editorial_diagnostics=args.editorial_diagnostics,
+        group_diagnostics=args.group_diagnostics,
     )
 
     output_path = Path(args.output)

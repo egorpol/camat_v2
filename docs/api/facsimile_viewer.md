@@ -52,6 +52,26 @@ by measures on that page. Hovering or clicking an individual measure selects
 its exact linked surface and zone. Only links whose zone id occurs on no
 surface are errors.
 
+## Inspect element IDs
+
+Hover over any rendered score element to show its MEI element name and
+`xml:id` on the **Hovered** row of the status area. The measure, facsimile
+zone, and score page stay visible above it. This works in score-only mode
+and in measures without a facsimile link, as well as in the linked view.
+
+The inspector uses IDs from the source MEI for every element type, including
+notes, dynamics, rests, clefs, accidentals, and slurs. It selects the nearest
+identified element: an accidental with its own `xml:id` takes precedence over
+its note, while a generated stem or notehead resolves to its identified MEI
+ancestor. Continuation fragments of spanning elements resolve to the same
+source ID. Elements without a visible rendering cannot be hovered; annotations
+remain accessible through the annotation list.
+
+Moving within a measure updates the element details without rerendering or
+reselecting its facsimile zone. Leaving the score clears the hovered ID;
+changing pages also clears the previous measure context. Source IDs are
+refreshed on reload, including when the notation SVG is reused from cache.
+
 ## Notebook source selection and local API
 
 The companion notebook exposes one configuration value:
@@ -66,8 +86,10 @@ MEI_SOURCE = "converted_mei/my_score.mei"
 MEI_SOURCE = "https://github.com/owner/repository/blob/main/path/score.mei"
 ```
 
-Its default is the CAMAT corpus edition of
-[Buxtehude's Sonata V in C major, Op. I](https://github.com/egorpol/DdT_1_vol_11/blob/main/11_buxtehude_sonatas_final/buxtehude_op1_05_sonata_c_major_corr.mei).
+Its default is the local
+[`test_corpus/Buxtehude-Anhang-S._175_musicxml_verovio.mei`](../../test_corpus/Buxtehude-Anhang-S._175_musicxml_verovio.mei)
+example. The notebook also shows the packaged miniature
+`camat/examples/facsimile_viewer_demo.mei` as a commented alternative.
 `read_facsimile_model` and `launch_interactive_facsimile_viewer` accept that
 value directly. GitHub `blob` pages are converted to raw-file links, and remote
 MEI is cached under `converted_mei/facsimile_viewer_sources/`.
@@ -95,6 +117,28 @@ The viewer toolbar zooms the score and facsimile independently without
 rerunning Verovio. The percentage button resets its pane to the configured
 initial zoom. Zoom is retained while changing score pages and facsimile
 surfaces.
+
+## Layout and linked scrolling
+
+In linked mode, **Layout** selects **Auto**, **Side by side**, or **Stacked**.
+Auto stacks the panes when the viewer itself is 720 px wide or narrower;
+on wider views, the default facsimile column uses at most 42% of the width and
+respects `facsimile_max_width`. Pane height adapts to the visible screen up to
+`viewer_max_height`. Touch controls have a minimum height of 40 px, and the
+notebook iframe resizes with its content.
+
+Drag the divider to change the score/facsimile width share. You can also focus
+it with Tab and use the left/right arrow keys; holding Shift increases the step.
+Double-click the divider or press Enter to restore its default share. The
+layout mode and width share persist across reloads when browser storage is
+available. Score-only mode uses the full width.
+
+Selecting or hovering a linked measure brings its partner zone into view when
+needed, including the initially selected measure. Only the viewer panes scroll;
+the surrounding notebook stays in place. The **Hovered** element-ID row updates
+while moving within a measure without repeatedly selecting its zone.
+
+## Graphic sources and reloading
 
 Relative local `<graphic target>` paths are resolved from the MEI file's
 directory and embedded into the HTML as data URIs. HTTP(S) targets, including

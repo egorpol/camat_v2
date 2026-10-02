@@ -12,6 +12,24 @@ import tomllib
 
 from packaging.version import Version
 
+# GitHub release pages treat @token as a user @mention. MEI attributes such as
+# @facs, @type, and @target therefore show up as false "Contributors" even when
+# wrapped in backticks. Emails (word@domain) are excluded by the lookbehind.
+GITHUB_MENTION = re.compile(r"(?<![\w])@([A-Za-z][\w-]*)")
+
+
+def assert_no_github_mentions(notes: str) -> None:
+    """Reject release-note tokens that GitHub would render as @mentions."""
+    found = sorted({f"@{match.group(1)}" for match in GITHUB_MENTION.finditer(notes)})
+    if not found:
+        return
+    raise ValueError(
+        "Release notes contain GitHub @mention tokens that would appear as "
+        f"false Contributors on the release page: {', '.join(found)}. "
+        "Write MEI attributes as `facs` (for example '`facs` attribute') or "
+        "`&#64;facs`, not @facs."
+    )
+
 
 def prepare_release(root: Path, tag: str) -> tuple[str, bool, str]:
     """Return the package version, prerelease flag, and validated release notes."""
@@ -32,8 +50,9 @@ def prepare_release(root: Path, tag: str) -> tuple[str, bool, str]:
         raise ValueError("camat.__version__ does not match the package version.")
 
     changelog = (root / "CHANGELOG.md").read_text(encoding="utf-8")
+    # Version headings may use a Markdown reference link: [version][link-label].
     sections = list(re.finditer(
-        rf"^## \[{re.escape(version)}\] - (?P<date>[^\n]+)\n"
+        rf"^## \[{re.escape(version)}\](?:\[[^\[\]\n]+\])? - (?P<date>[^\n]+)\n"
         r"(?P<body>.*?)(?=^## \[|\Z)",
         changelog, re.MULTILINE | re.DOTALL,
     ))
@@ -48,6 +67,7 @@ def prepare_release(root: Path, tag: str) -> tuple[str, bool, str]:
     meaningful_lines = [line for line in notes.splitlines() if line.strip() and not line.startswith("#")]
     if not meaningful_lines:
         raise ValueError(f"Release notes for {version!r} are empty.")
+    assert_no_github_mentions(notes)
     return version, parsed_version.is_prerelease, notes + "\n"
 
 

@@ -17,9 +17,9 @@ camat-fetch-tutorials
 ```
 
 That creates `camat_tutorials/notebooks/` and `camat_tutorials/test_corpus/`
-in the current directory. The command uses a sparse git clone of the tag that
-matches the installed CAMAT version, then `main` if that tag is missing.
-Python 3.11 or later and `git` are required.
+in the current directory. The command downloads the GitHub source archive for
+the tag that matches the installed CAMAT version, then `main` if that tag is
+missing, and keeps only those two folders. Python 3.11 or later is required.
 
 The same steps from a notebook cell:
 
@@ -68,7 +68,9 @@ when the server stops.
 
 Optional tools such as MuseScore and `xmllint` are often absent in the cloud
 image. Conversion notebooks skip MuseScore when the executable is missing;
-RELAX NG editorial validation needs `xmllint`. See
+Complete general MEI validation needs `xmllint` plus CAMAT's `validation` extra
+(including SaxonC for Schematron). A missing required validator produces an
+incomplete result. See
 [Getting started](getting-started.md#optional-tools-and-tested-platforms).
 
 ## Google Colab
@@ -82,8 +84,13 @@ or paste the two cells above into a new notebook.
 
 Opening a single tutorial from GitHub with **Open in Colab** used to fail:
 Colab copies only that `.ipynb`, so `import setup_camat` could not see the
-repository and `test_corpus/` was missing. The Workflow 1 editing and conversion
-notebooks now install CAMAT and copy those folders in their first code cell.
+repository and `test_corpus/` was missing. Most Workflow 1 editing and conversion
+notebooks install CAMAT and copy those folders in their first code cell.
+The two MEI checking notebooks deliberately use an already prepared installation
+and do not install/update it while checking. Prepare CAMAT 0.2.5 or newer with
+the `validation` extra and `xmllint` in that runtime first, using the release
+or a matching checkout. See
+[General MEI validation](guides/mei-validation.md#installation).
 
 Colab still starts a **new runtime per notebook tab**. Files written under
 `/content` in one tab are not visible in another. Run the first cell of each

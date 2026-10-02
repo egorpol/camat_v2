@@ -127,6 +127,12 @@ camat_v2/
 For bugs and suggestions, use [GitHub Issues](https://github.com/egorpol/camat_v2/issues).
 See [Contributing](CONTRIBUTING.md) to work on the project.
 
+The current checkout's [general MEI validation guide](docs/guides/mei-validation.md)
+documents `camat-validate-mei`, RELAX NG/Schematron, dependencies and execution
+records. These development changes are not yet part of a published release;
+install this checkout with `python -m pip install -e '.[validation]'` and provide
+`xmllint` separately. DdT publication policy is maintained in the corpus.
+
 ## Authors and origins
 
 Egor Polyakov — research and development; Martin Pfleiderer — principal investigator.

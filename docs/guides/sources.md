@@ -17,6 +17,12 @@ page files used by the editorial notebooks. See its
 Pass a list file to `scripts/test_verovio_parser_robustness.py` or
 `camat-convert` with `--source`.
 
+For repeatable general MEI validation, start with the
+[frozen validation baseline](../../test_corpus/validation_baseline/README.md):
+a tiny CMN score, pinned Hummel and Webern encodings, and an optional local DdT
+pilot snapshot. Its hashes and dated execution records keep integration
+evidence separate from changing upstream URL lists.
+
 ## How the lists are organized
 
 | File | Role |

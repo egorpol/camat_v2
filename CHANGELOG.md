@@ -5,9 +5,148 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased][Unreleased]
 
-## [0.2.4] - 2026-09-18
+## [0.2.5][0.2.5] - 2026-10-02
+
+### Added
+
+- Added read-only `run_mei_validation` / `camat-validate-mei` with separate
+  conformance, required-check and consumer results. `run.json` records requested
+  and executed checks, paths, schema/profile, tool versions, installation/Git
+  provenance, source hashes and input hashes. Missing/skipped required validators
+  and empty input selections cannot pass. Incomplete attempts checkpoint progress
+  instead of retaining an earlier completed report.
+- Added real XPath 2 Schematron execution with bundled SchXslt 1.10.1 and
+  SaxonC, retained SVRL, namespace-preserving extraction, stable rule IDs and
+  compiled-validator caching. Schema warnings retain their declared severity;
+  the official MEI 5.1 CMN schema is unchanged. The `validation` extra requires
+  lxml, SaxonC and Pillow; RELAX NG also requires external `xmllint`. Core CAMAT
+  installation does not require SaxonC. Bundled compiler/license files are
+  included in the package.
+- Added general local raster/SVG resource checks, declared surface geometry,
+  multiple-graphic support and optional direct-HTTP image checks. Requested
+  image-network checks without HTTP targets report `not-applicable` with a
+  reason and resource/request counts; local decoding remains offline. General
+  checking does not require facsimiles or images.
+- Added optional CAMAT parsing alongside Verovio load/full-render checks.
+  CAMAT probes record backend and event-table counts with interactive
+  plots/previews/progress disabled. Consumer results remain separate from general
+  conformance; callers may require them for an overall pass.
+- Added a general validation guide covering schema layers, pass/status/report
+  meanings, dependencies, compatibility migration, reproducibility and explicit
+  local/Git/PyPI updates. Linked it from the documentation navigation, setup,
+  workflow and API pages; marked the original boundary assessment as historical.
+- Added a frozen MEI checking baseline with a tiny synthetic CMN score, pinned
+  Hummel and Webern sample encodings, input hashes, and a local DdT pilot snapshot.
+  Added regressions for standalone/assembly references, `resp`/`source`, optional
+  group comparisons, explicit schema selection, Schematron-only violations,
+  missing validators, resource/network scope, interrupted records and input
+  hash preservation. Retained dated execution evidence alongside the baseline.
+- Added worked musical examples to the convolution explainer: a notated phrase
+  translated into a grid, exact/missing-note/accompaniment overlap scores,
+  rhythmic diminution and augmentation, and pitch-interval scaling around a
+  fixed anchor. A reading guide introduces the existing augmentation comparison
+  plots; sampling and rounding details follow the musical examples.
+- The facsimile viewer now prints a **Hovered** status row with the MEI element
+  name and source `xml:id` of the nearest identified score element under the
+  pointer. Notes, dynamics, rests, clefs, accidentals, slurs, and other
+  rendered types work in linked and score-only mode; Verovio-generated stems
+  and noteheads resolve to their identified MEI ancestor. Moving within a
+  measure updates the element details without reselecting its facsimile zone.
+  `read_facsimile_model` indexes every source ID as `source_elements` so the
+  browser can ignore SVG-only ids. Documented in the API page and the companion
+  notebook.
+
+### Changed
+
+- Installed-wheel smoke tests use a fixed local Bach chorale together with the
+  existing Hummel and basic MEI fixtures. The offline set records source revisions,
+  checksums and expected counts. The robustness runner rejects empty inputs and
+  missing lists, refreshes empty reports, and accounts for filtered grace notes.
+- Release preparation accepts plain and reference-linked changelog version
+  headings. The tag workflow validates release metadata before running the
+  compatibility matrix, so invalid release notes fail early.
+- Releases require installed-wheel MEI validation on Python 3.11 and 3.14 with
+  SaxonC and `xmllint`. The validation gate rejects skipped or empty test runs,
+  checks bundled schema/compiler/license files, and verifies passing and failing
+  inputs without modifying them. CI retains test and validation reports.
+- CI builds the release source archive and its wheel once. All installed-wheel
+  jobs test that shared wheel, and releases publish the same files after every
+  required check passes. Downloads verify SHA-256 checksums; test evidence records
+  the exact wheel fingerprint.
+- General MEI consistency checking no longer requires facsimile coverage or
+  applies numbering, naming, and group conventions implicitly. Such diagnostics
+  are explicit options; the legacy DdT publication flag retains its rules.
+  Bare fragments resolve in their own file by default; cross-page resolution
+  requires `document_mode="assembly"`. Checking and ID copying share the local
+  pointer registry, including `resp` and `source`, and score checks exclude
+  metadata incipits. The workflow accepts an explicit RELAX NG schema.
+- URI resolution handles lists, explicit documents, escaping and `xml:base`.
+  Copy/assembly transformations rebase known resource/document pointers and
+  rewrite selected-page fragments; ambiguous IDs and copy-name collisions are
+  rejected before rewriting.
+- Both MEI checking notebooks use the general validation API with an explicit
+  schema/profile and no DdT publication defaults. They do not install/update
+  CAMAT during checks. The consistency notebook documents a portable frozen
+  Hummel example, runs base checks once in check-only mode, and rejects cleanup
+  flags for originals. Page assembly explicitly prepares copies and writes a
+  separate page-check report.
+- The checking notebooks explain schema layers, each pass, execution statuses,
+  finding fields and validation dependencies. Score-named reports copy the
+  canonical findings exactly, preserving `origin`; printouts distinguish
+  executed checks, grouped findings and report roles.
+- The convolution explainer now calls the opening grids an example passage and
+  an example pattern, and explains the two edge policies in those words before
+  the code names `padding="valid"` (fully inside the passage) and
+  `padding="same"` (an artificial empty border allows the pattern to hang off
+  the edge). A zero means no activity at that pitch and time; padding does not
+  establish that the omitted score is silent.
+  Figure labels and the pattern-search guide use the same wording. The catalog
+  and helpers are `EXAMPLE_PASSAGE_SHAPE`, `EXAMPLE_PATTERNS`,
+  `resolve_example_pattern`, and `show_example_overview`, replacing
+  `TOY_HOST_SHAPE`, `TOY_KERNELS`, `resolve_toy_kernel`, and `show_toy_overview`
+  respectively; the notebook variables are `PATTERN_NAME`,
+  `example_passage`, and `example_pattern`.
+- The convolution explainer introduces overlap in musical terms before the
+  formula, distinguishes occupied cells from note events, and explains duration
+  weighting and merged repeated attacks. It clarifies why added accompaniment
+  can retain a perfect overlap score, why normalised cross-correlation returns
+  zero for constant patterns, and how stride and grid alignment affect which
+  placements are checked. Padding and stride figures label passage coordinates
+  and actual candidate starts.
+- `scripts/prepare_release.py` rejects GitHub mention tokens such as
+  `` `facs` `` written with a leading `@` in the dated release notes, so MEI
+  attribute names do not appear as false Contributors on the GitHub release
+  page.
+- `camat-fetch-tutorials` downloads GitHub's source archive and extracts
+  `notebooks/` and `test_corpus/` with the Python standard library.
+  Other remotes still use a sparse clone.
+
+### Fixed
+
+- The facsimile viewer's split view no longer squeezes the score on small
+  displays and tablets. The default facsimile column is capped at 42% of the
+  viewer width, the panes stack at a viewer width of 720px or less (measured with a container
+  query, so standalone HTML behaves the same), and pane height follows the
+  visible screen height up to `viewer_max_height`. Touch screens get 40px
+  controls, and the notebook iframe now also shrinks when its content does.
+  Selecting a measure scrolls the partner pane to it when it is out of view
+  (including the initial measure), without scrolling the surrounding notebook.
+  A **Layout** control (Auto, Side by side, Stacked) and a draggable,
+  keyboard-accessible divider between the panes let users override the
+  automatic split; both choices persist across reloads when browser storage is
+  available.
+- Conversion subprocesses now call `python_executable()` so Verovio still runs
+  when the host rewrites `sys.executable` (for example Cursor's AppImage).
+- The facsimile notebook default example is now
+  `test_corpus/Buxtehude-Anhang-S._175_musicxml_verovio.mei`. The packaged
+  miniature demo remains available as a commented alternative.
+- All rendered notation in the convolution explainer now has an opaque white
+  background and black captions, so the examples remain readable in dark-themed
+  notebooks. Refreshed the saved notation outputs.
+
+## [0.2.4][0.2.4] - 2026-09-18
 
 ### Added
 
@@ -23,7 +162,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   against every page's SVG; each page's element ids are collected in one pass.
   On a 183-measure edition with 5.6 MB of SVG this drops from 260 ms to 7.5 ms
   per render, with an identical mapping.
-- The facsimile viewer now downloads HTTP(S)/IIIF `<graphic @target>` images at
+- The facsimile viewer now downloads HTTP(S)/IIIF `<graphic &#64;target>` images at
   a display width and embeds them as data URIs. Notebook iframes were leaving
   full-resolution BSB URLs in `<img src>`, so the pane stayed empty while the
   MEI zones themselves parsed. Packaged `camat/examples` copies also include
@@ -53,7 +192,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   triggered N full Verovio re-renders, most of them into orphaned widgets.
 - **Reload zones** / **Check facsimile** / **Reload score** now report failures
   in the status area. ipywidgets discards exceptions raised inside a click
-  handler, so a single unresolved measure `@facs` link made the button look
+  handler, so a single unresolved measure `facs` link made the button look
   inert instead of naming the bad link.
 - An auto-watch reload that lands while the editor is still writing the MEI now
   retries instead of reporting a parse error. The save is briefly visible as
@@ -70,31 +209,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   nested in `<surfaceGrp>`. MEI permits one `<facsimile>` per witness in
   `<sourceDesc>`, and reading only the first element's direct `<surface>`
   children turned zones that measures legitimately pointed at into "unresolved
-  measure @facs" errors. `format_facsimile_summary` reports when surfaces were
+  measure `facs`" errors. `format_facsimile_summary` reports when surfaces were
   merged from more than one `<facsimile>`, since that is never obvious.
-- Measure `@facs` is now read as the URI *list* MEI defines it to be. A measure
+- Measure `facs` is now read as the URI *list* MEI defines it to be. A measure
   broken across a system or page break carries one zone per fragment, and
   treating the whole attribute as a single id rejected the file outright. Each
   fragment gets its own highlight box, and fragments may sit on different
   surfaces. Model rows gained `zone_ids` and `zones`; `zone_id` and `zone` still
   hold the first fragment.
-- An unresolved `@facs` error now names the tokens that failed to resolve rather
+- An unresolved `facs` error now names the tokens that failed to resolve rather
   than the whole attribute value, which sent readers to the wrong reference when
   only one id in a multi-zone link was wrong.
 - `read_facsimile_model` now reports every structural problem in one numbered
   report instead of raising on the first. Correcting a large edition one
-  discovered problem per run was needlessly slow. Unresolved `@facs` links that
+  discovered problem per run was needlessly slow. Unresolved `facs` links that
   are merely a consequence of an earlier problem are counted rather than listed,
   so causes are not buried under their effects.
 - Zone geometry is now validated. An inverted or zero-area zone (`lrx` at or
   before `ulx`), or one reaching outside its `<graphic>`, draws an overlay
   rectangle that is invisible or clipped, which reads as "the alignment is
   broken" rather than "this one zone is mis-encoded".
-- Measure zones are matched on `@type` case-insensitively and as the token list
+- Measure zones are matched on `type` case-insensitively and as the token list
   MEI defines it, so `type="Measure"` and `type="measure staff"` are recognized.
   An exact equality test dropped them and then reported the file as having no
   zones. When no measure zones are found, the message now distinguishes surfaces
-  with no `<zone>` elements from zones that carry no `@type` and zones typed
+  with no `<zone>` elements from zones that carry no `type` and zones typed
   something else, instead of reading as "there are no zones" in all three cases.
 - Structural problems are no longer masked by the score-only fallback: a
   surface that had to be skipped is now reported rather than silently becoming
@@ -120,7 +259,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   zoom the request is now 1800 px wide instead of 1200, so zooming in to read an
   ambiguous accidental no longer runs past the resolution that was fetched.
 
-## [0.2.3] - 2026-09-11
+## [0.2.3][0.2.3] - 2026-09-11
 
 ### Added
 
@@ -167,7 +306,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so the notebook stays under GitHub's size recommendation. Re-run that cell
   locally to regenerate the movies.
 
-## [0.2.2] - 2026-09-11
+## [0.2.2][0.2.2] - 2026-09-11
 
 ### Added
 
@@ -206,18 +345,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added `notebooks/chord_progression_search.ipynb`, a task-driven D–A–D
   progression search defined independently of the source, comparing MIDI and
   chroma through score maps, binary windows, piano rolls and source notation.
-
 - Kernel augmentation now has independent pitch policies (`fixed`, `intervals`,
   `stretch`), binary event-boundary time scaling, area sampling, and selectable
   interval/event rounding. Search exposes the same controls and identifies
   nondefault policies in variant keys. `plot_kernel_augmentations` compares
   named recipes; the search tutorials select pitch/time policies explicitly,
   keeping one-row notes where intended and geometric options for experiments.
-
 - Added `convolution_map`, `score_kernel_at`, and `kernel_placement_starts` to
   pattern search, plus `camat.binary_convolution` teaching plots and the toy
   kernel catalog used by the convolution explainer notebook.
-
 - Credited Egor Polyakov (research and development) and Martin Pfleiderer
   (supervision), documented the 2021–2022 MusicXML tool as CAMAT's predecessor,
   and recorded that CAMAT stands for Computer-Assisted Music Analysis Toolbox.
@@ -251,7 +387,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   browsing beyond rank five, and names transposed query chords (e.g. C–G–C
   at −2 semitones) without treating partial T–D–T template overlap as a verified
   harmonic-function analysis.
-
 - Moved convolution-explainer helpers out of
   `notebooks/binary_convolution_explained.ipynb` into the package. The toy
   padding section reuses the host generated in the first teaching cell. The
@@ -260,14 +395,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   encoding shows a `tqdm.notebook` bar. Kernel scaling now covers time, pitch,
   and both (factors through ×2), with separate checks for exact cell repetition
   and a planted doubled copy; the redundant filmstrip cell is gone.
-
 - Binary kernel resizing now defaults to nearest-cell sampling, preserving
   exact integer enlargement. Legacy interpolation remains available through
   `resize_kernel(..., method="bilinear")` and
   `run_pattern_search(..., kernel_resize_method="bilinear")`. Fractional scales,
   pitch-row enlargement, and containment scores are explained in the search
   tutorials and the analysis guide.
-
 - Simplified the README, documentation home, and API index; linked the README
   and package metadata to the deployed Read the Docs site, with stable and
   development documentation distinguished explicitly.
@@ -286,7 +419,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   retain their meanings. MIDI values and enharmonic pitch names use the same
   resolved alteration. This corrects downstream piano rolls and binary/chroma
   searches on MEI sources that omit explicit `accid.ges` values.
-
 - Binary grids now end at the latest sounding note end, snap near-integer time
   boundaries before rasterization, clip notes crossing time zero, and avoid
   adding cells for zero-duration notes. Invalid resolutions, nonfinite note
@@ -299,15 +431,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The MusicXML-to-Verovio rendering bridge explicitly selects MusicXML input
   and raises on failed import or empty output instead of returning a silent
   incomplete render.
-
 - Binary search applies stride before scoring and contracts overlap without
   allocating a full placement-by-kernel product, using shared overlap code for
   teaching maps and search. Invalid resize factors now fail explicitly.
-
 - Verovio subprocess checks now spawn the environment's real Python interpreter
   when a host tool rewrites `sys.executable` to a non-Python binary.
 
-## [0.2.1] - 2026-09-07
+## [0.2.1][0.2.1] - 2026-09-07
 
 ### Added
 
@@ -316,18 +446,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Documentation now displays the checkout's package version and resolves
   repository links against the build commit, with checked relative links that
   also work when reading the Markdown on GitHub.
-
 - Added Workflow 4 notebook `notebooks/binary_convolution_explained.ipynb`:
   toy host/kernel placements, then a Bach sliding-window convolution explainer
   with animation, stride / padding (`valid` vs `same`), and kernel time-scale
   demos. Cross-linked from `binary_pattern_search` and the analysis guide.
-
 - Added Workflow 4 binary notebooks `notebooks/binary_roundtrip.ipynb` (MEI →
   `df_pitch` / piano roll → binary → reconstruct → MEI highlight) and
   `notebooks/binary_pattern_search.ipynb` (Bach motif / chord / texture kernels
   with scaled-window normalised-overlap search). Docs: home Workflow 4,
   notebook roadmap, and [Analyse representations](docs/guides/analysis.md).
-
 - Added Workflow 4 tutorial notebook `notebooks/df_statistics.ipynb` (CMN):
   self-contained parse of the Bach *Ein feste Burg* sample to `df_pitch` /
   `df_events`, then pitch, duration, pitch-class, transition, interval, and
@@ -335,14 +462,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   roadmap, and [Analyse representations](docs/guides/analysis.md).
   `display_successive_pitch_transition_heatmaps` is exported from the package
   root alongside the other distribution helpers.
-
 - Added Workflow 3 tutorial notebooks `notebooks/mei_parse_tables.ipynb` (parse
   one CMN MEI file to `df_pitch` / `df_events` and a filtered piano roll) and
   `notebooks/mei_annotate_selection.ipynb` (multi-voice selection, `plist` /
   `tstamp` annotations, and optional saved selection MEI). Docs: home Workflow 3
   section, notebook roadmap, and
   [Parse and represent MEI](docs/guides/parsing-representations.md).
-
 - Added `launch_interactive_mei_renderer` with on-screen score zoom controls
   for the paste-and-render notebook. The renderer uses an A4-like Verovio page
   so the staff stays readable; CSS zoom then enlarges the notation rather than
@@ -367,20 +492,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Dropped the extra `requirements-test.txt` and `requirements-release.txt`
   files. Pytest is the package `test` extra; the release runner installs
   `build` and `twine` directly.
-
 - Convolution explainer notebook: denser toy host/kernel catalog, nonempty
   random windows, a labelled overlap heatmap, and valid vs same padding on
   those same toy placements before the Bach demos. Large animation outputs
   are no longer stored in the notebook file.
-
 - `run_pattern_search(..., padding="valid"|"same")` exposes the convolution
   boundary mode used in the explainer (`valid` remains the default).
-
 - `resolve_mei_source` / `resolve_mei_source_info` accept `fetch=False` (return
   ``None`` for an uncached remote URL instead of downloading) and
   `shared_cache=True` (use the same download cache as `parse_files`). Workflow 3
   notebooks call the packaged helper instead of defining a local copy.
-
 - The facsimile notebook viewer now lives in a single widget iframe instead of
   an ``Output`` HTML display. That stops Cursor/VS Code from drawing a second
   stacked copy, while zone hovers still run on the first render.
@@ -409,14 +530,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   tutorials, cleared saved outputs, and moved report output back into the
   checkout's ignored directory. Updated tests and documentation links for
   maintainer notebooks moved into `CAMAT_old/`.
-
 - `compute_top_matches_df` no longer passes `dropna=` to `DataFrame.stack()`,
   which pandas 2.2+/3 rejects. NA scores are dropped after stacking instead.
-
 - Bokeh piano-roll hover no longer lists fields that are missing from the
   note table (for example `Pitch Enharmonic` when `parse_enharmonic` is
   off), which previously showed as `???`.
-
 - `combine_meis` no longer drops later pages' opening `<scoreDef>` (staff list
   and meter). Those headers sit beside `<section>`, so a section-only join lost
   mid-piece meter and scoring changes. The join now copies a later page's
@@ -466,7 +584,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   initial percentages, step, and range, and documented Verovio's non-visual
   handling of `@plist`- and `@tstamp`-anchored `<annot>` text.
 
-## [0.2.0] - 2026-08-17
+## [0.2.0][0.2.0] - 2026-08-17
 
 ### Added
 
@@ -572,7 +690,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   annotation notebook now reloads the source score at the start of each
   independent render cell to avoid carrying annotations between cells.
 
-## [0.1.13] - 2026-08-11
+## [0.1.13][0.1.13] - 2026-08-11
 
 ### Added
 
@@ -623,7 +741,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   durations are summed exactly once and uncollapsed rows retain their original
   segment durations.
 
-## [0.1.12] - 2026-08-09
+## [0.1.12][0.1.12] - 2026-08-09
 
 ### Added
 
@@ -650,7 +768,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Aligned the Verovio backend's collapsed tied-note handling with Partitura for note-level MEI tie continuations (`tie="m"` / `tie="t"`), including orphan continuation rows without explicit `<tie startid="..." endid="...">` links.
 - Corrected common-notation MEI note timing in the Partitura backend from source symbolic durations when Partitura's importer drifts, fixing the Mozart fugue double-dotted duration at `d1e26843` and the resulting one-quarter onset shift.
 
-## [0.1.11] - 2026-07-07
+## [0.1.11][0.1.11] - 2026-07-07
 
 ### Added
 
@@ -660,7 +778,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Restored the NumPy `row_stack` alias before importing Partitura so Partitura 1.9.0 can run under newer NumPy builds that no longer expose `np.row_stack`.
 
-## [0.1.10] - 2026-06-07
+## [0.1.10][0.1.10] - 2026-06-07
 
 ### Added
 
@@ -686,7 +804,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed MEI note-attachment extraction after common-notation MEI sanitization/conversion so `df_pitch` attachment columns such as `fermata`, `slurred`, `articulations`, and `ornaments` are populated from the persistent source MEI when temporary parser files have already been cleaned up.
 - Fixed `scripts/test_mei_coverage.py` so it resolves CAMAT's hashed remote-download cache filenames, allowing the coverage test to run after normal cached parsing.
 
-## [0.1.9] - 2026-05-05
+## [0.1.9][0.1.9] - 2026-05-05
 
 ### Added
 
@@ -703,7 +821,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Fixed the onset-position histogram producing a separate plot per inferred measure span when `edge_measure_mode='merge_to_regular'` and the source contained internal MEI barline splits (e.g. a 4/4 piece with a 3+1 split mid-piece). Runs of consecutive short internal measures whose spans sum to the regular meter span are now packed into a single virtual regular-sized measure (the second in the run is offset by the first's span), so the combined plot stays unified. With `edge_measure_mode='split_by_span'` the legacy per-span plots are preserved.
 
-## [0.1.8] - 2026-04-17
+## [0.1.8][0.1.8] - 2026-04-17
 
 ### Added
 
@@ -728,7 +846,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added `scripts/test_parallel_parse.py` as a runnable autotest that exercises the parser at `n_jobs=1` and `n_jobs=2` against a fixed set of remote MEI sources, records per-thread timings for `partitura.load_score`, and asserts that no two threads are simultaneously inside the partitura/Verovio critical sections.
 - Separated `testing_annot_stats.ipynb` from the mensural code paths: added a scope comment, removed the commented-out Dufay mensural URL from `FILE_SOURCES`, and explicitly passes `normalize_mensural_durations=False`, `inject_missing_meter_signature=False`, `prefer_verovio_for_mensural=False`, and `use_verovio_mensural_timing=False` to `parse_files(...)` so the partitura backend stays on the common-notation fast path regardless of its defaults. Added `scripts/test_common_notation_only.py` as a matching autotest that runs the same kwargs and asserts the parser log contains no mensural lines.
 
-## [0.1.7] - 2026-03-15
+## [0.1.7][0.1.7] - 2026-03-15
 
 ### Added
 
@@ -754,7 +872,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed the `partitura` fallback-to-`music21` path so it preserves the fallback backend's `df_events` output instead of replacing it with an empty event dataframe.
 - Fixed binary slice reconstruction for row-sliced matrix windows so decoded pitch/time spans stay aligned with the original raw matrix coordinates instead of being reinterpreted as if the slice started at row 0.
 
-## [0.1.6] - 2026-03-08
+## [0.1.6][0.1.6] - 2026-03-08
 
 ### Added
 
@@ -779,13 +897,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed collapsing of distinct mensural barlines that lacked `xml:id` by using a stronger MEI event merge key with per-staff ordering and neighboring note anchors.
 - Filled inferred `Measure` / `Local Onset` values for parsed barline events when a usable measure grid exists, improving event dataframe consistency in the common parser path.
 
-## [0.1.5] - 2026-03-04
+## [0.1.5][0.1.5] - 2026-03-04
 
 ### Fixed
 
 - Fixed GitHub release-note extraction in `.github/workflows/release.yml` so tagged releases correctly capture the body of the matching changelog section instead of treating it as empty.
 
-## [0.1.4] - 2026-03-04
+## [0.1.4][0.1.4] - 2026-03-04
 
 ### Added
 
@@ -807,7 +925,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Removed a pandas future warning in successive-pitch heatmap row normalization by avoiding object-dtype `fillna(...)` during matrix division.
 
-## [0.1.3] - 2026-03-03
+## [0.1.3][0.1.3] - 2026-03-03
 
 ### Added
 
@@ -834,7 +952,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Stopped emitting Verovio `Unsupported option 'svgAdditionalCSS'` errors on builds that do not expose that option by falling back to inline SVG highlight CSS only.
 - Made `vrv_process_annotations(...)` assign stable internal annotation ids when `xml_id` is omitted, preventing repeated notebook runs from stacking duplicate tstamp-based annotations.
 
-## [0.1.2] - 2025-03-02
+## [0.1.2][0.1.2] - 2025-03-02
 
 ### Added
 
@@ -858,7 +976,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Voice color consistency between full and filtered plots by preserving a global voice-to-color mapping order (`preserve_voice_color_mapping`).
 
-## [0.1.1] - 2025-02-01
+## [0.1.1][0.1.1] - 2025-02-01
 
 ### Added
 
@@ -869,7 +987,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Mensural parsing flow now prefers Verovio-first conversion when mensural MEI markers are detected.
 - Kept regex duration normalization and default meter injection as fallback compatibility steps after conversion.
 
-## [0.1.0] - 2025-01-01
+## [0.1.0][0.1.0] - 2025-01-01
 
 ### Added
 
@@ -887,7 +1005,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-[Unreleased]: https://github.com/egorpol/camat_v2/compare/v0.2.4...HEAD
+[Unreleased]: https://github.com/egorpol/camat_v2/compare/v0.2.5...HEAD
+[0.2.5]: https://github.com/egorpol/camat_v2/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/egorpol/camat_v2/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/egorpol/camat_v2/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/egorpol/camat_v2/compare/v0.2.1...v0.2.2

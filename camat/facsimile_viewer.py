@@ -619,6 +619,31 @@ def _read_annotation_models(root: ET.Element) -> list[dict]:
     return annotations
 
 
+def _read_source_elements(root: ET.Element) -> dict[str, dict]:
+    """Index actual MEI IDs, including non-note and nonvisual elements.
+
+    SVG also contains IDs invented by Verovio. Keeping the source index lets
+    the browser skip those and inspect the nearest identified MEI ancestor.
+    Carry measure context in one traversal, including for ID-less measures.
+    """
+    elements = {}
+    pending = [(root, None, None)]
+    while pending:
+        element, measure_id, measure_n = pending.pop()
+        name = _local_name(element)
+        if name == "measure":
+            measure_id = element.get(XML_ID)
+            measure_n = element.get("n")
+        if element_id := element.get(XML_ID):
+            elements[element_id] = {
+                "name": name,
+                "measure_id": measure_id,
+                "measure_n": measure_n,
+            }
+        pending.extend((child, measure_id, measure_n) for child in reversed(element))
+    return elements
+
+
 def _encoded_breaks_before(root: ET.Element) -> tuple[list[dict], list[str]]:
     page_breaks: list[dict] = []
     system_breaks: list[str] = []
@@ -831,6 +856,7 @@ def read_facsimile_model(
     tree = ET.parse(mei_path)
     root = tree.getroot()
     annotations = _read_annotation_models(root)
+    source_elements = _read_source_elements(root)
     encoded_page_breaks, encoded_system_breaks = _encoded_breaks_before(root)
 
     def score_only_model(reason: str) -> dict:
@@ -874,6 +900,7 @@ def read_facsimile_model(
             "missing_facs": measures,
             "other_surface_links": [],
             "annotations": annotations,
+            "source_elements": source_elements,
             "encoded_page_breaks": encoded_page_breaks,
             "encoded_system_breaks": encoded_system_breaks,
             "layout": infer_facsimile_layout(
@@ -1109,6 +1136,7 @@ def read_facsimile_model(
             row for row in linked if (row["surface_index"] or 0) > 0
         ],
         "annotations": annotations,
+        "source_elements": source_elements,
         "encoded_page_breaks": encoded_page_breaks,
         "encoded_system_breaks": encoded_system_breaks,
     }
@@ -1702,6 +1730,7 @@ def make_viewer_html(
 
     viewer_id = viewer_id or f"mei-viewer-{uuid.uuid4().hex}"
     has_facsimile = model.get("has_facsimile", True)
+    source_elements_json = json_for_script(model.get("source_elements", {}))
     surfaces = model.get("surfaces", [])
     surface_overlays = {surface["index"]: [] for surface in surfaces}
     pairs = []
@@ -1872,18 +1901,32 @@ def make_viewer_html(
     <div class="viewer-pane facsimile-pane" aria-label="Facsimile with measure zones">
       {''.join(facsimile_pages)}
     </div>"""
-        viewer_status = "Hover or click a rendered measure or facsimile zone."
-        grid_class = "viewer-grid"
+        viewer_status = "Hover a score element to inspect it, or select a facsimile zone."
+        grid_class = "viewer-grid layout-auto"
         facsimile_zoom_controls = f"""
     <div class="zoom-controls" aria-label="Facsimile zoom controls">
-      <span class="zoom-label">Facsimile zoom</span>
+      <span class="zoom-label">Facsimile<span class="zoom-label-suffix"> zoom</span></span>
       <button type="button" class="facsimile-zoom-out" title="Zoom facsimile out">−</button>
       <button type="button" class="facsimile-zoom-reset" title="Reset facsimile zoom">{initial_facsimile_zoom_percent:g}%</button>
       <button type="button" class="facsimile-zoom-in" title="Zoom facsimile in">+</button>
-    </div>"""
+    </div>
+    <label class="layout-control">Layout
+      <select class="layout-select" aria-label="Pane layout">
+        <option value="auto">Auto</option>
+        <option value="split">Side by side</option>
+        <option value="stacked">Stacked</option>
+      </select>
+    </label>"""
+        pane_splitter = (
+            '<div class="pane-splitter" role="separator" aria-orientation="vertical" '
+            'aria-label="Resize score and facsimile panes" aria-valuemin="30" '
+            'aria-valuemax="80" tabindex="0" '
+            'title="Drag to resize the panes; double-click to reset"></div>'
+        )
     else:
         facsimile_panel = ""
         facsimile_zoom_controls = ""
+        pane_splitter = ""
         viewer_status = (
             "Score-only mode — this MEI has no usable facsimile records. "
             "Add them and use Check facsimile to enable the linked view."
@@ -1898,6 +1941,9 @@ def make_viewer_html(
     --panel-border: #d7dce2;
     --score-zoom: {initial_score_zoom_percent:g}%;
     --facsimile-zoom: {initial_facsimile_zoom_percent:g}%;
+    --pane-max-height: {viewer_max_height}px;
+    --splitter-width: 14px;
+    container-type: inline-size;
     color: #1f2933;
     font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   }}
@@ -1908,6 +1954,18 @@ def make_viewer_html(
     border-radius: 6px;
     background: #f8fafc;
     font-size: 13px;
+    overflow-wrap: anywhere;
+  }}
+  #{viewer_id} .viewer-hover {{
+    margin-top: 4px;
+    min-height: 1.5em;
+  }}
+  #{viewer_id} .hover-id {{
+    user-select: text;
+  }}
+  #{viewer_id} .viewer-message {{
+    margin-top: 4px;
+    color: #b91c1c;
   }}
   #{viewer_id} .score-toolbar {{
     display: flex;
@@ -1962,16 +2020,70 @@ def make_viewer_html(
   }}
   #{viewer_id} .viewer-grid {{
     display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(0, {facsimile_max_width}px);
-    gap: 14px;
+    /* A fixed-max track is filled before 1fr, so a bare pixel cap would starve the score. */
+    grid-template-columns:
+      minmax(0, 1fr) var(--splitter-width)
+      minmax(0, var(--facsimile-column, min({facsimile_max_width}px, 42%)));
+    row-gap: 14px;
     align-items: start;
   }}
   #{viewer_id} .viewer-grid.is-score-only {{
     grid-template-columns: minmax(0, 1fr);
   }}
+  #{viewer_id} .viewer-grid.layout-stacked {{
+    grid-template-columns: minmax(0, 1fr);
+  }}
+  #{viewer_id} .viewer-grid.layout-stacked .pane-splitter {{
+    display: none;
+  }}
+  #{viewer_id} .viewer-grid.layout-stacked .viewer-pane {{
+    max-height: max(240px, calc(var(--pane-max-height) / 2));
+  }}
+  #{viewer_id} .pane-splitter {{
+    align-self: stretch;
+    position: relative;
+    cursor: col-resize;
+    touch-action: none;
+    outline: none;
+  }}
+  #{viewer_id} .pane-splitter::after {{
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 50%;
+    width: 4px;
+    margin-left: -2px;
+    border-radius: 2px;
+    background: transparent;
+  }}
+  #{viewer_id} .pane-splitter:hover::after,
+  #{viewer_id} .pane-splitter:focus-visible::after,
+  #{viewer_id} .pane-splitter.is-dragging::after {{
+    background: var(--linked);
+  }}
+  #{viewer_id}.is-resizing-panes {{
+    cursor: col-resize;
+    user-select: none;
+  }}
+  #{viewer_id} .layout-control {{
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    color: #4b5563;
+    font-size: 12px;
+  }}
+  #{viewer_id} .layout-select {{
+    border: 1px solid var(--panel-border);
+    border-radius: 6px;
+    background: #ffffff;
+    color: #1f2933;
+    font-size: 13px;
+    padding: 4px 6px;
+  }}
   #{viewer_id} .viewer-pane {{
     min-width: 0;
-    max-height: {viewer_max_height}px;
+    max-height: var(--pane-max-height);
     overflow: auto;
     scrollbar-gutter: stable;
     border: 1px solid var(--panel-border);
@@ -2116,23 +2228,67 @@ def make_viewer_html(
   #{viewer_id} .mei-viewer-table th {{
     background: #eef2f7;
   }}
-  @media (max-width: 560px) {{
-    #{viewer_id} .viewer-grid {{
-      grid-template-columns: 1fr;
+  @container (max-width: 720px) {{
+    #{viewer_id} .viewer-grid.layout-auto {{
+      grid-template-columns: minmax(0, 1fr);
+    }}
+    #{viewer_id} .viewer-grid.layout-auto .pane-splitter {{
+      display: none;
+    }}
+    #{viewer_id} .viewer-grid.layout-auto .viewer-pane {{
+      max-height: max(240px, calc(var(--pane-max-height) / 2));
+    }}
+  }}
+  @container (max-width: 640px) {{
+    #{viewer_id} .zoom-label-suffix {{
+      display: none;
+    }}
+  }}
+  @media (pointer: coarse) {{
+    #{viewer_id} .score-toolbar button {{
+      min-height: 40px;
+      font-size: 15px;
+    }}
+    #{viewer_id} .zoom-controls button {{
+      min-width: 40px;
+    }}
+    #{viewer_id} .zoom-controls button[class$="-reset"] {{
+      min-width: 60px;
+    }}
+    #{viewer_id} .annotation-toggle-label input {{
+      width: 20px;
+      height: 20px;
+    }}
+    #{viewer_id} .annotation-item {{
+      padding: 10px;
+    }}
+    #{viewer_id} .layout-select {{
+      min-height: 40px;
+      font-size: 15px;
+    }}
+    #{viewer_id} {{
+      --splitter-width: 24px;
+    }}
+    #{viewer_id} .pane-splitter::after {{
+      background: var(--panel-border);
     }}
   }}
 </style>
 <div id="{viewer_id}" class="mei-viewer">
-  <div class="viewer-status" aria-live="polite">{viewer_status}</div>
+  <div class="viewer-status" aria-live="polite">
+    <div class="viewer-context">{viewer_status}</div>
+    <div class="viewer-hover"><span class="hover-label">Hovered: —</span><code class="hover-id"></code></div>
+    <div class="viewer-message" hidden></div>
+  </div>
   <div class="score-toolbar" aria-label="Rendered score page controls">
-    <button type="button" class="score-prev" {disabled_prev}>Previous score page</button>
-    <button type="button" class="score-next" {disabled_next}>Next score page</button>
+    <button type="button" class="score-prev" aria-label="Previous score page" title="Previous score page" {disabled_prev}>‹ Page</button>
+    <button type="button" class="score-next" aria-label="Next score page" title="Next score page" {disabled_next}>Page ›</button>
     <span class="score-page-label"></span>
     <span class="facsimile-page-label" aria-live="polite"></span>
     {annotation_controls}
     <span class="toolbar-spacer"></span>
     <div class="zoom-controls" aria-label="Score zoom controls">
-      <span class="zoom-label">Score zoom</span>
+      <span class="zoom-label">Score<span class="zoom-label-suffix"> zoom</span></span>
       <button type="button" class="score-zoom-out" title="Zoom score out">−</button>
       <button type="button" class="score-zoom-reset" title="Reset score zoom">{initial_score_zoom_percent:g}%</button>
       <button type="button" class="score-zoom-in" title="Zoom score in">+</button>
@@ -2143,6 +2299,7 @@ def make_viewer_html(
     <div class="viewer-pane score-pane" aria-label="Rendered MEI score">
       {''.join(score_page_html)}
     </div>
+    {pane_splitter}
     {facsimile_panel}
   </div>
   {annotation_panel}
@@ -2158,6 +2315,7 @@ def make_viewer_html(
     root.dataset.camatViewerInitialized = 'true';
 
   const pairs = {pairs_json};
+  const sourceElements = new Map(Object.entries({source_elements_json}));
   const annotations = {annotations_json};
   const scorePages = {score_pages_json};
   const scorePageSurfaces = {score_page_surfaces_json};
@@ -2168,7 +2326,11 @@ def make_viewer_html(
   const zoomStep = {zoom_step_percent};
   const minZoom = {min_zoom_percent};
   const maxZoom = {max_zoom_percent};
-  const status = root.querySelector('.viewer-status');
+  const contextStatus = root.querySelector('.viewer-context');
+  const hoverLabel = root.querySelector('.hover-label');
+  const hoverId = root.querySelector('.hover-id');
+  const messageStatus = root.querySelector('.viewer-message');
+  const scorePane = root.querySelector('.score-pane');
   const pageLabel = root.querySelector('.score-page-label');
   const surfaceLabel = root.querySelector('.facsimile-page-label');
   const prevButton = root.querySelector('.score-prev');
@@ -2180,6 +2342,20 @@ def make_viewer_html(
   const facsimileZoomReset = root.querySelector('.facsimile-zoom-reset');
   const facsimileZoomIn = root.querySelector('.facsimile-zoom-in');
   const annotationToggle = root.querySelector('.annotation-toggle');
+  const statusPanel = root.querySelector('.viewer-status');
+  const toolbar = root.querySelector('.score-toolbar');
+  const viewerGrid = root.querySelector('.viewer-grid');
+  const facsimilePane = root.querySelector('.facsimile-pane');
+  const paneSplitter = root.querySelector('.pane-splitter');
+  const layoutSelect = root.querySelector('.layout-select');
+  const layoutModes = ['auto', 'split', 'stacked'];
+  const layoutStorageKey = 'camat.facsimileViewer.layout';
+  const facsimileShareStorageKey = 'camat.facsimileViewer.facsimileShare';
+  const minFacsimileShare = 20;
+  const maxFacsimileShare = 70;
+  let facsimileShare = null;
+  const viewerMaxHeight = {viewer_max_height};
+  const minPaneHeight = Math.min(320, viewerMaxHeight);
   const byMeasure = new Map();
   for (const item of pairs) {{
     // A measure split across a break contributes one pair per zone. Navigating
@@ -2192,6 +2368,75 @@ def make_viewer_html(
   let activeSurfaceIndex = {initial_surface_index};
   let scoreZoom = initialScoreZoom;
   let facsimileZoom = initialFacsimileZoom;
+  let activeScoreMeasure = null;
+  let hoveredId = null;
+
+  function setContext(text) {{
+    if (contextStatus.textContent !== text) contextStatus.textContent = text;
+  }}
+
+  function setHover(match) {{
+    const nextId = match ? match.id : null;
+    if (nextId === hoveredId) return;
+    hoveredId = nextId;
+    hoverLabel.textContent = match ? `Hovered: ${{match.info.name}} | xml:id: ` : 'Hovered: —';
+    hoverId.textContent = nextId || '';
+  }}
+
+  function sourceElement(node) {{
+    const id = node.getAttribute('data-id') || node.id;
+    if (sourceElements.has(id)) return {{id, info: sourceElements.get(id)}};
+    // Continuations of slurs, ties, etc. reference their source via a class.
+    if (node.classList.contains('spanning')) {{
+      for (const token of node.classList) {{
+        if (token.startsWith('id-') && sourceElements.has(token.slice(3))) {{
+          const sourceId = token.slice(3);
+          return {{id: sourceId, info: sourceElements.get(sourceId)}};
+        }}
+      }}
+    }}
+    return null;
+  }}
+
+  function inspectScoreTarget(target) {{
+    const page = root.querySelector('.score-page.is-active');
+    if (!(target instanceof Element) || !page || !page.contains(target)) {{
+      setHover(null);
+      return;
+    }}
+    let match = null;
+    for (let node = target; node && node !== page; node = node.parentElement) {{
+      match = sourceElement(node);
+      if (match) break;
+    }}
+    if (!match) {{
+      setHover(null);
+      return;
+    }}
+    // Use the visible measure for continuation fragments, which may be drawn
+    // on a different page from the source element's containing measure.
+    const measure = target.closest('.measure');
+    if (measure && measure !== activeScoreMeasure) {{
+      const measureSource = sourceElement(measure);
+      const measureId = measureSource ? measureSource.id : match.info.measure_id;
+      const item = byMeasure.get(measureId);
+      if (item) {{
+        activate(item, false, measure);
+      }} else {{
+        clearActive();
+        measure.classList.add('is-active');
+        activeScoreMeasure = measure;
+        const info = measureSource ? measureSource.info : match.info;
+        const idText = measureId ? ` | ${{measureId}}` : '';
+        const linkText = totalSurfaces ? 'no facsimile link' : 'score-only';
+        setContext(`Measure ${{info.measure_n || '(unnumbered)'}}${{idText}} | ${{linkText}} | score page ${{scorePages[activePageIndex]}}`);
+      }}
+    }} else if (!measure) {{
+      clearActive();
+      setContext(`score page ${{scorePages[activePageIndex]}}`);
+    }}
+    setHover(match);
+  }}
 
   function annotationTargets(item) {{
     return (item.target_ids || []).map((targetId) =>
@@ -2209,15 +2454,52 @@ def make_viewer_html(
   function selectAnnotation(item) {{
     if (!item) return;
     if (item.page_index !== null && item.page_index !== undefined) showScorePage(item.page_index);
+    clearActive();
+    setHover(null);
     root.querySelectorAll('.is-selected-annotation').forEach((node) => node.classList.remove('is-selected-annotation'));
     root.querySelectorAll('.annotation-item.is-active').forEach((node) => node.classList.remove('is-active'));
     const targets = annotationTargets(item);
     targets.forEach((node) => node.classList.add('is-selected-annotation'));
     const button = root.querySelector(`.annotation-item[data-annotation-id="${{CSS.escape(item.id)}}"]`);
     if (button) button.classList.add('is-active');
-    if (targets[0]) targets[0].scrollIntoView({{block: 'center', inline: 'center', behavior: 'smooth'}});
+    if (targets[0]) revealInPane(targets[0]);
     const anchor = item.anchor_mode === 'tstamp' ? `tstamp ${{item.tstamp}}` : item.anchor_mode;
-    status.textContent = `Annotation ${{item.id}} | ${{anchor}} | ${{item.text || '(no text)'}}`;
+    setContext(`Annotation ${{item.id}} | ${{anchor}} | ${{item.text || '(no text)'}}`);
+  }}
+
+  // Inside the notebook iframe, window.innerHeight and vh track the frame,
+  // which is resized to fit this content; sizing panes from them would feed
+  // back. Only the top window (or, cross-origin, the screen) is independent.
+  function hostViewport() {{
+    try {{
+      const height = window.top.innerHeight;
+      if (height > 0) return {{height, chrome: window.top === window ? 24 : 120}};
+    }} catch (_) {{}}
+    const height = window.screen ? window.screen.availHeight : 0;
+    return {{height, chrome: 240}};
+  }}
+
+  function syncPaneHeight() {{
+    if (!root.isConnected) return;
+    const host = hostViewport();
+    if (!host.height) return;
+    const reserved = (statusPanel ? statusPanel.offsetHeight : 0) + (toolbar ? toolbar.offsetHeight : 0) + 20;
+    const available = host.height - host.chrome - reserved;
+    const limit = Math.min(viewerMaxHeight, Math.max(minPaneHeight, available));
+    root.style.setProperty('--pane-max-height', `${{Math.round(limit)}}px`);
+  }}
+
+  function watchHostViewport() {{
+    window.addEventListener('resize', syncPaneHeight);
+    let topWindow = null;
+    try {{
+      if (window.top !== window && window.top.innerHeight > 0) topWindow = window.top;
+    }} catch (_) {{}}
+    if (!topWindow) return;
+    topWindow.addEventListener('resize', syncPaneHeight);
+    window.addEventListener('pagehide', () => {{
+      try {{ topWindow.removeEventListener('resize', syncPaneHeight); }} catch (_) {{}}
+    }});
   }}
 
   function clampZoom(value) {{
@@ -2264,6 +2546,9 @@ def make_viewer_html(
     const pageChanged = index !== activePageIndex || !root.querySelector('.score-page.is-active');
     activePageIndex = index;
     if (pageChanged) {{
+      clearActive();
+      setHover(null);
+      setContext(`score page ${{scorePages[activePageIndex]}}`);
       root.querySelectorAll('.score-page').forEach((page, pageIndex) => {{
         page.classList.toggle('is-active', pageIndex === activePageIndex);
       }});
@@ -2276,23 +2561,158 @@ def make_viewer_html(
 
   function clearActive() {{
     root.querySelectorAll('.is-active.measure, .zone.is-active').forEach((node) => node.classList.remove('is-active'));
+    activeScoreMeasure = null;
   }}
 
-  function activate(item, scrollScore = false) {{
+  // scrollIntoView() would also scroll the notebook page around the iframe;
+  // only the pane holding the node should move, and only if it is not in view.
+  function revealInPane(node, behavior = scrollBehavior()) {{
+    const pane = node ? node.closest('.viewer-pane') : null;
+    if (!pane) return;
+    const box = node.getBoundingClientRect();
+    if (!box.width && !box.height) return;
+    const paneBox = pane.getBoundingClientRect();
+    const viewTop = paneBox.top + pane.clientTop;
+    const viewLeft = paneBox.left + pane.clientLeft;
+    const margin = 12;
+    const offset = (start, end, viewStart, viewSize) => {{
+      const viewEnd = viewStart + viewSize;
+      if (start >= viewStart + margin && end <= viewEnd - margin) return 0;
+      if (end - start + 2 * margin > viewSize) return start - viewStart - margin;
+      return (start + end) / 2 - (viewStart + viewEnd) / 2;
+    }};
+    const top = offset(box.top, box.bottom, viewTop, pane.clientHeight);
+    const left = offset(box.left, box.right, viewLeft, pane.clientWidth);
+    if (top || left) pane.scrollBy({{top, left, behavior}});
+  }}
+
+  function scrollBehavior() {{
+    return window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth';
+  }}
+
+  // Reloading rebuilds this iframe, so layout choices live in localStorage;
+  // sandboxed or cross-origin hosts may refuse it, which only loses persistence.
+  function readSetting(key) {{
+    try {{ return window.localStorage.getItem(key); }} catch (_) {{ return null; }}
+  }}
+
+  function writeSetting(key, value) {{
+    try {{
+      if (value === null) window.localStorage.removeItem(key);
+      else window.localStorage.setItem(key, value);
+    }} catch (_) {{}}
+  }}
+
+  function revealActiveZone() {{
+    const zone = root.querySelector('.zone.is-active');
+    if (zone) revealInPane(zone, 'auto');
+  }}
+
+  function applyLayout(mode, persist = false) {{
+    if (!viewerGrid || !layoutSelect) return;
+    if (!layoutModes.includes(mode)) mode = 'auto';
+    layoutModes.forEach((name) => viewerGrid.classList.toggle(`layout-${{name}}`, name === mode));
+    layoutSelect.value = mode;
+    if (persist) writeSetting(layoutStorageKey, mode);
+  }}
+
+  function currentFacsimileShare() {{
+    if (facsimileShare !== null) return facsimileShare;
+    const gridWidth = viewerGrid ? viewerGrid.getBoundingClientRect().width : 0;
+    const paneWidth = facsimilePane ? facsimilePane.getBoundingClientRect().width : 0;
+    const share = gridWidth && paneWidth ? (paneWidth / gridWidth) * 100 : 42;
+    return Math.min(maxFacsimileShare, Math.max(minFacsimileShare, share));
+  }}
+
+  function applyFacsimileShare(share, persist = false) {{
+    if (!viewerGrid || !paneSplitter) return;
+    if (share === null || !Number.isFinite(share)) {{
+      facsimileShare = null;
+      viewerGrid.style.removeProperty('--facsimile-column');
+    }} else {{
+      facsimileShare = Math.min(maxFacsimileShare, Math.max(minFacsimileShare, share));
+      viewerGrid.style.setProperty('--facsimile-column', `${{facsimileShare.toFixed(2)}}%`);
+    }}
+    paneSplitter.setAttribute('aria-valuenow', String(Math.round(100 - currentFacsimileShare())));
+    if (persist) writeSetting(facsimileShareStorageKey, facsimileShare === null ? null : facsimileShare.toFixed(2));
+  }}
+
+  function watchPaneSplitter() {{
+    if (!paneSplitter || !viewerGrid) return;
+    paneSplitter.addEventListener('pointerdown', (event) => {{
+      if (event.button !== 0) return;
+      event.preventDefault();
+      paneSplitter.setPointerCapture(event.pointerId);
+      paneSplitter.classList.add('is-dragging');
+      root.classList.add('is-resizing-panes');
+      const move = (moveEvent) => {{
+        const box = viewerGrid.getBoundingClientRect();
+        if (!box.width) return;
+        const splitterWidth = paneSplitter.getBoundingClientRect().width;
+        applyFacsimileShare(((box.right - moveEvent.clientX - splitterWidth / 2) / box.width) * 100);
+      }};
+      const stop = () => {{
+        paneSplitter.removeEventListener('pointermove', move);
+        paneSplitter.removeEventListener('pointerup', stop);
+        paneSplitter.removeEventListener('pointercancel', stop);
+        paneSplitter.classList.remove('is-dragging');
+        root.classList.remove('is-resizing-panes');
+        applyFacsimileShare(facsimileShare, true);
+        revealActiveZone();
+      }};
+      paneSplitter.addEventListener('pointermove', move);
+      paneSplitter.addEventListener('pointerup', stop);
+      paneSplitter.addEventListener('pointercancel', stop);
+    }});
+    paneSplitter.addEventListener('dblclick', () => {{
+      applyFacsimileShare(null, true);
+      revealActiveZone();
+    }});
+    paneSplitter.addEventListener('keydown', (event) => {{
+      const step = event.shiftKey ? 10 : 2;
+      if (event.key === 'ArrowLeft') applyFacsimileShare(currentFacsimileShare() + step, true);
+      else if (event.key === 'ArrowRight') applyFacsimileShare(currentFacsimileShare() - step, true);
+      else if (event.key === 'Home') applyFacsimileShare(maxFacsimileShare, true);
+      else if (event.key === 'End') applyFacsimileShare(minFacsimileShare, true);
+      else if (event.key === 'Enter') applyFacsimileShare(null, true);
+      else return;
+      event.preventDefault();
+    }});
+  }}
+
+  function restorePaneLayout() {{
+    if (!layoutSelect) return;
+    applyLayout(readSetting(layoutStorageKey) || 'auto');
+    const storedShare = readSetting(facsimileShareStorageKey);
+    applyFacsimileShare(storedShare === null ? null : Number.parseFloat(storedShare));
+    layoutSelect.addEventListener('change', () => {{
+      applyLayout(layoutSelect.value, true);
+      revealActiveZone();
+    }});
+    watchPaneSplitter();
+  }}
+
+  function activate(item, scrollScore = false, scoreMeasure = null, revealZone = true, behavior = scrollBehavior()) {{
     if (!item) return;
-    if (item.pageIndex !== null && item.pageIndex !== undefined) showScorePage(item.pageIndex);
+    if (!scoreMeasure && item.pageIndex !== null && item.pageIndex !== undefined) showScorePage(item.pageIndex);
     showFacsimileSurface(item.surfaceIndex);
     clearActive();
+    setHover(null);
     const activePage = root.querySelector('.score-page.is-active');
-    const measure = activePage ? activePage.querySelector(`#${{CSS.escape(item.measureId)}}`) : null;
+    const measure = scoreMeasure || (activePage ? activePage.querySelector(`#${{CSS.escape(item.measureId)}}`) : null);
     const zone = root.querySelector(`.zone[data-zone-id="${{CSS.escape(item.zoneId)}}"]`);
     if (measure) {{
       measure.classList.add('is-active');
-      if (scrollScore) measure.scrollIntoView({{block: 'center', inline: 'center', behavior: 'smooth'}});
+      activeScoreMeasure = measure;
+      if (scrollScore) revealInPane(measure, behavior);
     }}
-    if (zone) zone.classList.add('is-active');
-    const scorePageText = item.scorePage ? ` | score page ${{item.scorePage}}` : ' | not in rendered score output';
-    status.textContent = `Measure ${{item.measureN || '(unnumbered)'}} | ${{item.measureId}} | ${{item.zoneId}}${{scorePageText}}`;
+    if (zone) {{
+      zone.classList.add('is-active');
+      if (revealZone) revealInPane(zone, behavior);
+    }}
+    const scorePage = scoreMeasure ? scorePages[activePageIndex] : item.scorePage;
+    const scorePageText = scorePage ? ` | score page ${{scorePage}}` : ' | not in rendered score output';
+    setContext(`Measure ${{item.measureN || '(unnumbered)'}} | ${{item.measureId}} | ${{item.zoneId}}${{scorePageText}}`);
   }}
 
   prevButton.addEventListener('click', () => showScorePage(activePageIndex - 1));
@@ -2306,18 +2726,17 @@ def make_viewer_html(
     facsimileZoomIn.addEventListener('click', () => applyFacsimileZoom(facsimileZoom + zoomStep));
   }}
 
-  root.querySelectorAll('.score-pane .measure[id]').forEach((measure) => {{
-    const item = byMeasure.get(measure.id);
-    if (!item) return;
-    measure.addEventListener('mouseenter', () => activate(item));
-    measure.addEventListener('click', () => activate(item));
-  }});
+  scorePane.addEventListener('pointerover', (event) => inspectScoreTarget(event.target));
+  scorePane.addEventListener('pointerout', (event) => inspectScoreTarget(event.relatedTarget));
+  scorePane.addEventListener('click', (event) => inspectScoreTarget(event.target));
 
   root.querySelectorAll('.zone').forEach((zone) => {{
     const item = byZone.get(zone.dataset.zoneId);
     if (!item) return;
-    zone.addEventListener('mouseenter', () => activate(item));
-    zone.addEventListener('click', () => activate(item, true));
+    // The zone is under the pointer already; scrolling its pane would slide
+    // a neighbouring zone under it and chain further activations.
+    zone.addEventListener('mouseenter', () => activate(item, false, null, false));
+    zone.addEventListener('click', () => activate(item, true, null, false));
   }});
 
   root.querySelectorAll('.annotation-item').forEach((button) => {{
@@ -2330,6 +2749,9 @@ def make_viewer_html(
     applyAnnotationVisibility(annotationToggle.checked);
   }}
 
+  restorePaneLayout();
+  syncPaneHeight();
+  watchHostViewport();
   applyScoreZoom(initialScoreZoom);
   applyFacsimileZoom(initialFacsimileZoom);
   showScorePage(initialPageIndex);
@@ -2337,13 +2759,14 @@ def make_viewer_html(
     image.addEventListener('error', () => {{
       const label = image.getAttribute('title') || image.currentSrc || 'unknown graphic';
       const loaded = image.currentSrc || image.getAttribute('src') || '';
-      status.textContent = loaded.startsWith('http')
+      messageStatus.hidden = false;
+      messageStatus.textContent = loaded.startsWith('http')
         ? `Facsimile image failed to load: ${{label}}. Notebook widget iframes cannot fetch third-party scans; relaunch with embed_remote_graphics=True.`
         : `Facsimile image failed to load: ${{label}}`;
     }});
   }});
   const initialItem = pairs.find((item) => item.pageIndex === initialPageIndex) || pairs[0];
-  if (initialItem) activate(initialItem);
+  if (initialItem) activate(initialItem, false, null, true, 'auto');
   }}
 
   function initializeAttachedViewers() {{
@@ -2386,24 +2809,25 @@ def embed_viewer_html(html: str, *, min_height: int) -> str:
     inner = f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8">
 <meta name="referrer" content="no-referrer">
-<style>html,body{{margin:0;padding:0;background:#fff;}}</style>
+<style>html,body{{margin:0;padding:0;background:#fff;}}body{{display:flow-root;}}</style>
 </head><body>
 {html}
 <script>
 (() => {{
+  // The root element's scrollHeight never drops below the frame's own height,
+  // so measuring it would let the frame grow but never shrink.
   function syncHeight() {{
     const frame = window.frameElement;
-    if (!frame) return;
-    const height = Math.max(
-      document.documentElement.scrollHeight,
-      document.body ? document.body.scrollHeight : 0
-    );
-    frame.style.height = Math.ceil(height) + "px";
+    if (!frame || !document.body) return;
+    const height = Math.ceil(document.body.getBoundingClientRect().height);
+    if (height <= 0) return;
+    frame.style.height = height + "px";
+    frame.style.minHeight = "0px";
   }}
   syncHeight();
   window.addEventListener("load", syncHeight);
   if (typeof ResizeObserver === "function") {{
-    new ResizeObserver(syncHeight).observe(document.documentElement);
+    new ResizeObserver(syncHeight).observe(document.body);
   }}
 }})();
 </script>

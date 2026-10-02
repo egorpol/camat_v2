@@ -15,7 +15,7 @@ Clone the repository and activate a Python 3.11+ virtual environment as shown
 in [Getting started](getting-started.md). From the repository root:
 
 ```bash
-python -m pip install -e ".[test,notebooks]" -r docs/requirements.txt
+python -m pip install -e ".[test,notebooks,validation]" -r docs/requirements.txt
 python -m pytest tests --ignore=tests/release -q
 python -m mkdocs build --strict
 python -m mkdocs serve
@@ -24,6 +24,11 @@ python -m mkdocs serve
 Open the local documentation at <http://127.0.0.1:8000/>. Run MkDocs through
 the same Python environment that imports CAMAT, so its dependencies and the
 Material theme are available.
+
+Install libxml2's `xmllint` on `PATH` to exercise RELAX NG integration tests.
+The `validation` extra enables the real SaxonC/Schematron tests. Dependency
+skips are reported by pytest and do not establish a complete validation pass;
+see the [validation baseline](../test_corpus/validation_baseline/README.md).
 
 Tests run from a Git checkout: they use fixtures and archived notebook probes
 that are deliberately excluded from the PyPI source distribution. The

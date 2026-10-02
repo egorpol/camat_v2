@@ -1,8 +1,9 @@
 """Copy tutorial notebooks without cloning the whole CAMAT repository.
 
 The PyPI package does not include Jupyter notebooks or ``test_corpus/``
-fixtures. Cloud Jupyter sessions (Colab, Jupyter4NFDI, Binder, and similar)
-should install CAMAT, then fetch only those tutorial paths.
+fixtures. Install CAMAT, then fetch only those tutorial paths. The public
+GitHub repository is downloaded as a source archive, so that step uses the
+Python standard library.
 """
 
 from __future__ import annotations
@@ -10,10 +11,16 @@ from __future__ import annotations
 import argparse
 from collections.abc import Sequence
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
+import re
 import shutil
 import subprocess
 import sys
+import tarfile
+import tempfile
+import urllib.error
+import urllib.parse
+import urllib.request
 
 WORKSPACE_ENV = "CAMAT_WORKSPACE"
 DEFAULT_REPO = "https://github.com/egorpol/camat_v2.git"
@@ -142,6 +149,158 @@ def _ref_candidates(ref: str | None) -> list[str]:
     return candidates
 
 
+_GITHUB_HTTPS = re.compile(
+    r"^https?://github\.com/"
+    r"(?P<owner>[\w.-]+)/(?P<name>[\w.-]+?)(?:\.git)?/?$"
+)
+_GITHUB_SSH = re.compile(
+    r"^git@github\.com:(?P<owner>[\w.-]+)/(?P<name>[\w.-]+?)(?:\.git)?$"
+)
+
+
+class _ArchiveNotFound(Exception):
+    """The GitHub source archive for this ref is missing."""
+
+
+def _parse_github_repo(repo: str) -> tuple[str, str] | None:
+    """Return ``(owner, name)`` for a GitHub remote, else ``None``."""
+    text = repo.strip()
+    match = _GITHUB_HTTPS.fullmatch(text) or _GITHUB_SSH.fullmatch(text)
+    if match is None:
+        return None
+    return match.group("owner"), match.group("name")
+
+
+def _github_archive_urls(owner: str, name: str, ref: str) -> list[str]:
+    quoted = urllib.parse.quote(ref, safe="")
+    base = f"https://codeload.github.com/{owner}/{name}/tar.gz"
+    return [
+        f"{base}/refs/tags/{quoted}",
+        f"{base}/refs/heads/{quoted}",
+    ]
+
+
+def _download_url(url: str, dest: Path, *, timeout: float = 120) -> None:
+    request = urllib.request.Request(
+        url,
+        headers={"User-Agent": "camat-fetch-tutorials"},
+    )
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        with dest.open("wb") as handle:
+            shutil.copyfileobj(response, handle)
+
+
+def _download_github_ref(owner: str, name: str, ref: str, dest: Path) -> None:
+    errors: list[str] = []
+    for url in _github_archive_urls(owner, name, ref):
+        try:
+            _download_url(url, dest)
+        except urllib.error.HTTPError as exc:
+            if dest.exists():
+                dest.unlink()
+            errors.append(f"HTTP {exc.code} {url}")
+            continue
+        return
+    detail = "; ".join(errors) or "no archive URL"
+    raise _ArchiveNotFound(detail)
+
+
+def _tutorial_member_rel(name: str, paths: Sequence[str]) -> Path | None:
+    """Return the workspace-relative path for one archive member."""
+    pure = PurePosixPath(name)
+    parts = pure.parts
+    if not parts or pure.is_absolute() or ".." in parts:
+        return None
+    wanted = set(paths)
+    if parts[0] in wanted:
+        rel_parts = parts
+    elif len(parts) >= 2 and parts[1] in wanted:
+        rel_parts = parts[1:]
+    else:
+        return None
+    return Path(*rel_parts)
+
+
+def _extract_tutorial_archive(
+    archive: Path,
+    dest: Path,
+    paths: Sequence[str],
+) -> None:
+    """Extract ``paths`` from a GitHub source archive into ``dest``."""
+    dest.mkdir(parents=True, exist_ok=True)
+    root = dest.resolve()
+    with tarfile.open(archive, "r:gz") as tar:
+        for member in tar.getmembers():
+            rel = _tutorial_member_rel(member.name, paths)
+            if rel is None:
+                continue
+            target = (dest / rel).resolve()
+            if not target.is_relative_to(root):
+                continue
+            if member.isdir():
+                target.mkdir(parents=True, exist_ok=True)
+                continue
+            if not member.isreg():
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            source = tar.extractfile(member)
+            if source is None:
+                continue
+            with source, target.open("wb") as handle:
+                shutil.copyfileobj(source, handle)
+
+
+def _fetch_github_archive(
+    dest: Path,
+    owner: str,
+    name: str,
+    ref: str | None,
+    paths: Sequence[str],
+) -> Path:
+    errors: list[str] = []
+    candidates = _ref_candidates(ref)
+    for candidate in candidates:
+        if dest.exists():
+            shutil.rmtree(dest)
+        print(f"Downloading CAMAT tutorials ({candidate})...", flush=True)
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                archive = Path(tmp) / "source.tar.gz"
+                _download_github_ref(owner, name, candidate, archive)
+                try:
+                    _extract_tutorial_archive(archive, dest, paths)
+                except tarfile.TarError as exc:
+                    errors.append(f"{candidate}: {exc}")
+                    if dest.exists():
+                        shutil.rmtree(dest, ignore_errors=True)
+                    continue
+        except _ArchiveNotFound as exc:
+            errors.append(f"{candidate}: {exc}")
+            if dest.exists():
+                shutil.rmtree(dest, ignore_errors=True)
+            continue
+        except urllib.error.URLError as exc:
+            if dest.exists():
+                shutil.rmtree(dest, ignore_errors=True)
+            reason = getattr(exc, "reason", exc)
+            raise RuntimeError(
+                "Could not download CAMAT tutorial notebooks from "
+                f"https://github.com/{owner}/{name}. {reason}"
+            ) from exc
+        if not is_tutorial_workspace(dest):
+            shutil.rmtree(dest, ignore_errors=True)
+            errors.append(f"{candidate}: archive has no notebooks/ or test_corpus/")
+            continue
+        return activate_workspace(dest)
+
+    joined = "\n".join(errors) or "no refs tried"
+    raise RuntimeError(
+        "Could not download CAMAT tutorial notebooks from "
+        f"https://github.com/{owner}/{name}. "
+        f"Tried: {', '.join(candidates)}.\n{joined}"
+    )
+
+
 def _sparse_clone(repo: str, dest: Path, ref: str, paths: Sequence[str]) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
     filtered = [
@@ -181,11 +340,12 @@ def fetch_tutorial_workspace(
     ref: str | None = None,
     paths: Sequence[str] = TUTORIAL_PATHS,
 ) -> Path:
-    """Clone only the tutorial notebooks and example corpus into ``dest``.
+    """Copy the tutorial notebooks and example corpus into ``dest``.
 
     ``dest`` defaults to ``./camat_tutorials``. An existing tutorial workspace
-    or source checkout at that path is reused. The clone prefers the git tag
-    matching the installed CAMAT version, then ``main``.
+    or source checkout at that path is reused. A GitHub remote is downloaded
+    as a source archive for the installed CAMAT version, then ``main``.
+    Other remotes use a sparse git clone.
     """
     dest_path = Path(dest or Path.cwd() / DEFAULT_DEST_NAME).expanduser().resolve()
     if is_source_checkout(dest_path) or is_tutorial_workspace(dest_path):
@@ -195,6 +355,11 @@ def fetch_tutorial_workspace(
             f"{dest_path} already exists and is not a CAMAT tutorial workspace. "
             "Choose another directory or remove it first."
         )
+
+    github = _parse_github_repo(repo)
+    if github is not None:
+        owner, name = github
+        return _fetch_github_archive(dest_path, owner, name, ref, paths)
 
     errors: list[str] = []
     for candidate in _ref_candidates(ref):
@@ -271,12 +436,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--ref",
         default=None,
-        help="Git branch or tag (default: installed camat version, then main)",
+        help="Branch or tag (default: installed camat version, then main)",
     )
     parser.add_argument(
         "--repo",
         default=DEFAULT_REPO,
-        help="Git remote to copy from",
+        help="GitHub repository or git remote to copy from",
     )
     args = parser.parse_args(argv)
     _warn_python_version()

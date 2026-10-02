@@ -1,0 +1,69 @@
+{
+  "recorded_on": "2026-09-30",
+  "purpose": "Frozen inputs for general CAMAT validation and DdT integration; not a release manifest.",
+  "camat_before_revision": "eebcac61c6585ede868c3869aa5019c6a52f4895",
+  "schema": {
+    "path": "../../camat/schemas/mei-CMN-5.1.rng",
+    "sha256": "f6440d5eb59c3e903f2a7a64ea26518646186f8449b86096106846a269eb354b",
+    "selected_explicitly": "CMN content is checked as configured; unmodified upstream examples declare mei-all."
+  },
+  "upstream_license": "LICENSE.sample-encodings",
+  "inputs": [
+    {
+      "role": "minimal-general",
+      "path": "minimal-cmn-51.mei",
+      "source": "CAMAT-authored adaptation of tests/fixtures/basic.mei; selects MEI 5.1+CMN and a valid empty pubStmt.",
+      "sha256": "9bf22175e5abccbbe1de144b658d9fd7ca12144099b56dde8a6d07f18d9aac75",
+      "bytes": 1267,
+      "meiversion": "5.1+CMN",
+      "music_measures": 2,
+      "facsimile_surfaces": 0
+    },
+    {
+      "role": "ordinary-no-facsimile",
+      "path": "Hummel_Preludes_Op67_No11.mei",
+      "source": "https://raw.githubusercontent.com/music-encoding/sample-encodings/f3f1baba02e32279b25dad660b82c834bac034b4/MEI_5.1/Music/Complete_examples/Hummel_Preludes_Op67_No11.mei",
+      "upstream_commit": "f3f1baba02e32279b25dad660b82c834bac034b4",
+      "modified": false,
+      "declared_schema": "MEI 5.1 mei-all.rng",
+      "sha256": "25e0b1d7b74469cc541fbfc177e736e5dd2185b0bbfa868e682c82ec1118ece4",
+      "bytes": 48196,
+      "meiversion": "5.1",
+      "music_measures": 7,
+      "facsimile_surfaces": 0
+    },
+    {
+      "role": "other-composer",
+      "path": "Webern_Variations_for_Piano_Op27_No2.mei",
+      "source": "https://raw.githubusercontent.com/music-encoding/sample-encodings/f3f1baba02e32279b25dad660b82c834bac034b4/MEI_5.1/Music/Complete_examples/Webern_Variations_for_Piano_Op27_No2.mei",
+      "upstream_commit": "f3f1baba02e32279b25dad660b82c834bac034b4",
+      "modified": false,
+      "declared_schema": "MEI 5.1 mei-all.rng",
+      "sha256": "67e6c2bf7db26f4ce6f5bc791340d565095a902b7e73bdadb3066b948671b479",
+      "bytes": 26411,
+      "meiversion": "5.1",
+      "music_measures": 12,
+      "facsimile_surfaces": 0
+    },
+    {
+      "role": "ddt-integration",
+      "path": "local/buxtehude_op1_01_sonata_f_major_corr.mei",
+      "source_repository": "https://github.com/egorpol/DdT_1_vol_11",
+      "source_path": "11_buxtehude_sonatas_final/buxtehude_op1_01_sonata_f_major_corr.mei",
+      "source_revision": "c17be260143c6da4921ad15022426153c8f25182",
+      "working_tree_snapshot": true,
+      "optional_when_local_snapshot_absent": true,
+      "sha256": "3dd9d312905249e0dcf60b54b5596cbbdcf2420b235eb21988128bf3850c2d55",
+      "bytes": 1265943,
+      "meiversion": "5.1+CMN",
+      "music_measures": 183,
+      "facsimile_surfaces": 10
+    }
+  ],
+  "preserved_local_files": {
+    "local/pre-refactor/camat/check_mei_consistency.py": "c2d3743ec138a972f0f1437bbc1e27192543dec4460a555f3d936e2c77bb8fb4",
+    "local/pre-refactor/camat/mei_consistency_workflow.py": "4b445fc13809ed3bcd000160d8d4bb40a2d180b38344675dd97e8a28307c3eb4",
+    "local/pre-refactor/notebooks/mei_consistency_checks.ipynb": "4c130886d334043ba8595cb380f820e183b3e6407e677a5d498cb808615f6585",
+    "local/pre-refactor/tests/test_mei_consistency.py": "4d66c06ac1fad77f05c86e448d47268d5053ca817b2f19b54066445e43879269"
+  }
+}

@@ -18,6 +18,7 @@ recreates those paths so every release check is a clean wheel installation.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -25,6 +26,7 @@ import shutil
 import subprocess
 import sys
 from typing import Iterable, Sequence
+import xml.etree.ElementTree as ET
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -32,6 +34,13 @@ ENV_ROOT = REPO_ROOT / ".release-venvs"
 DIST_ROOT = REPO_ROOT / ".release-dist"
 RUN_ROOT = REPO_ROOT / ".release-runs"
 RELEASE_TEST = REPO_ROOT / "tests" / "release" / "test_installed_package.py"
+VALIDATION_TESTS = (
+    REPO_ROOT / "tests" / "test_mei_validation_boundary.py",
+    REPO_ROOT / "tests" / "test_mei_validation_execution.py",
+    REPO_ROOT / "tests" / "test_mei_consistency.py",
+    REPO_ROOT / "tests" / "test_edition_pipeline.py",
+    REPO_ROOT / "tests" / "release" / "test_installed_validation.py",
+)
 SUPPORTED_VERSIONS = ("3.11", "3.12", "3.13", "3.14")
 
 
@@ -164,15 +173,35 @@ def _build_wheel(*, reuse: bool) -> Path:
     python = _venv_python(build_env)
     _run([python, "-m", "pip", "install", "--upgrade", "pip"], cwd=REPO_ROOT)
     _run([python, "-m", "pip", "install", "build>=1.2", "twine>=5"], cwd=REPO_ROOT)
-    _run([python, "-m", "build", "--wheel", "--outdir", DIST_ROOT], cwd=REPO_ROOT)
+    # The default build creates an sdist and builds the wheel from that archive.
+    _run([python, "-m", "build", "--outdir", DIST_ROOT], cwd=REPO_ROOT)
     wheels = sorted(DIST_ROOT.glob("camat-*.whl"))
     if len(wheels) != 1:
         raise RuntimeError(f"Expected exactly one CAMAT wheel in {DIST_ROOT}, found {wheels}")
-    _run([python, "-m", "twine", "check", wheels[0]], cwd=REPO_ROOT)
+    archives = sorted(DIST_ROOT.glob("camat-*.tar.gz"))
+    if len(archives) != 1:
+        raise RuntimeError(f"Expected exactly one CAMAT source archive in {DIST_ROOT}, found {archives}")
+    _run([python, "-m", "twine", "check", archives[0], wheels[0]], cwd=REPO_ROOT)
     return wheels[0]
 
 
-def _test_version(version: str, interpreter: str, wheel: Path, *, reuse: bool) -> None:
+def _require_complete_test_report(report: Path) -> None:
+    cases = list(ET.parse(report).getroot().iter("testcase"))
+    if not cases:
+        raise RuntimeError("Validation gate produced no test results.")
+    incomplete = [
+        case.get("name", "unnamed test")
+        for case in cases
+        if any(result.tag in {"skipped", "failure", "error"} for result in case)
+    ]
+    if incomplete:
+        raise RuntimeError("Validation gate requires every test to pass without skips: " + ", ".join(incomplete))
+    print(f"Validation gate: {len(cases)} tests passed, zero skips.", flush=True)
+
+
+def _test_version(
+    version: str, interpreter: str, wheel: Path, *, reuse: bool, validation: bool = False,
+) -> None:
     env_dir = ENV_ROOT / f"py{version.replace('.', '')}"
     run_dir = RUN_ROOT / f"py{version.replace('.', '')}"
     if not reuse:
@@ -181,11 +210,19 @@ def _test_version(version: str, interpreter: str, wheel: Path, *, reuse: bool) -
     env_dir.parent.mkdir(parents=True, exist_ok=True)
     run_dir.mkdir(parents=True, exist_ok=True)
 
+    with wheel.open("rb") as handle:
+        wheel_hash = hashlib.file_digest(handle, "sha256").hexdigest()
+    (run_dir / "tested-wheel.json").write_text(
+        json.dumps({"filename": wheel.name, "sha256": wheel_hash}, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
     _run([interpreter, "-m", "venv", env_dir], cwd=REPO_ROOT)
     python = _venv_python(env_dir)
     _run([python, "-m", "pip", "install", "--upgrade", "pip"], cwd=run_dir)
+    extras = "test,validation" if validation else "test"
     _run(
-        [python, "-m", "pip", "install", "--force-reinstall", f"{wheel}[test]"],
+        [python, "-m", "pip", "install", "--force-reinstall", f"{wheel}[{extras}]"],
         cwd=run_dir,
     )
     _run([python, "-m", "pip", "check"], cwd=run_dir)
@@ -199,6 +236,7 @@ def _test_version(version: str, interpreter: str, wheel: Path, *, reuse: bool) -
 
     test_env = dict(os.environ)
     test_env.pop("CAMAT_PARSER", None)
+    test_env.pop("PYTEST_ADDOPTS", None)
     test_env.update(
         {
             "CAMAT_REPO_ROOT": str(REPO_ROOT),
@@ -206,21 +244,18 @@ def _test_version(version: str, interpreter: str, wheel: Path, *, reuse: bool) -
             "PYTHONNOUSERSITE": "1",
         }
     )
-    _run(
-        [
-            python,
-            "-m",
-            "pytest",
-            "-q",
-            "--disable-warnings",
-            "--maxfail=1",
-            "--import-mode=importlib",
-            f"--rootdir={run_dir}",
-            RELEASE_TEST,
-        ],
-        cwd=run_dir,
-        env=test_env,
-    )
+    command: list[str | Path] = [
+        python, "-I", "-m", "pytest", "-q", "-rs", "--disable-warnings", "--maxfail=1",
+        "--import-mode=importlib", f"--rootdir={run_dir}", RELEASE_TEST,
+    ]
+    report = run_dir / "validation-results.xml"
+    if validation:
+        command.extend([
+            f"--junitxml={report}", f"--basetemp={run_dir / 'pytest'}", *VALIDATION_TESTS,
+        ])
+    _run(command, cwd=run_dir, env=test_env)
+    if validation:
+        _require_complete_test_report(report)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -248,6 +283,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--reuse",
         action="store_true",
         help="Reuse release environments. The default is a clean rebuild and reinstall.",
+    )
+    parser.add_argument(
+        "--validation",
+        action="store_true",
+        help="Install the validation extra and require all validation regressions and wheel checks to pass without skips; needs xmllint.",
     )
     parser.add_argument(
         "--allow-missing",
@@ -285,7 +325,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             continue
         print(f"\n{'=' * 72}\nTesting CAMAT wheel on Python {version}: {interpreter}\n{'=' * 72}")
         try:
-            _test_version(version, interpreter, wheel, reuse=args.reuse)
+            _test_version(version, interpreter, wheel, reuse=args.reuse, validation=args.validation)
         except subprocess.CalledProcessError as exc:
             failures[version] = f"command exited with status {exc.returncode}"
         except Exception as exc:  # keep the matrix running to report all versions

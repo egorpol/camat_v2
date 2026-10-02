@@ -14,6 +14,11 @@ Test explicit files or a newline-separated source list::
 
     conda run -n py311 python scripts/test_verovio_parser_robustness.py \
         --source score.mei --source test_corpus/mei_test_copora_links.txt
+
+Test the fixed offline Bach, Hummel, and basic fixtures::
+
+    python scripts/test_verovio_parser_robustness.py \
+        --source test_corpus/parser_robustness/sources.txt
 """
 from __future__ import annotations
 
@@ -57,13 +62,28 @@ REQUIRED_PITCH_COLUMNS = {
 def _source_stats(path: Path) -> Dict[str, int]:
     root = ET.parse(path).getroot()
     measures = _mei_music_measures(root)
-    note_count = sum(
-        1
+    parents = {child: parent for parent in root.iter() for child in parent}
+    notes = [
+        element
         for measure in measures
         for element in measure.iter()
         if _mei_local_name(element.tag) == "note"
+    ]
+    # This runner keeps tie segments but filters zero metric-duration grace notes.
+    grace_count = sum(
+        bool(element.get("grace", "").strip())
+        or (
+            _mei_local_name(parents[element].tag) == "chord"
+            and bool(parents[element].get("grace", "").strip())
+        )
+        for element in notes
     )
-    return {"source_measures": len(measures), "source_notes": note_count}
+    return {
+        "source_measures": len(measures),
+        "source_notes": len(notes),
+        "source_grace_notes": grace_count,
+        "expected_pitch_rows": len(notes) - grace_count,
+    }
 
 
 def _finite_problem_count(series: pd.Series) -> int:
@@ -71,18 +91,19 @@ def _finite_problem_count(series: pd.Series) -> int:
     return int((~np.isfinite(numeric)).sum())
 
 
-def _validate_pitch_dataframe(df: pd.DataFrame, source_notes: int) -> List[str]:
+def _validate_pitch_dataframe(df: pd.DataFrame, expected_notes: Optional[int]) -> List[str]:
     issues: List[str] = []
     missing_columns = sorted(REQUIRED_PITCH_COLUMNS - set(df.columns))
     if missing_columns:
         issues.append(f"missing pitch columns: {missing_columns}")
         return issues
-    if source_notes > 0 and df.empty:
+    if expected_notes and df.empty:
         issues.append("source contains notes but df_pitch is empty")
         return issues
-    if source_notes > 0 and len(df) != source_notes:
+    if expected_notes is not None and len(df) != expected_notes:
         issues.append(
-            f"source contains {source_notes} notes but df_pitch contains {len(df)} rows"
+            f"expected {expected_notes} notes after grace-note filtering "
+            f"but df_pitch contains {len(df)} rows"
         )
 
     for column in ("Measure", "Local Onset", "Global Onset", "Duration", "MIDI"):
@@ -132,7 +153,7 @@ def _parse_one(source: str, *, probe_partitura: bool = False) -> Dict[str, Any]:
     entry = results[0]
     pitch = entry["df_pitch"]
     events = entry["df_events"]
-    issues = _validate_pitch_dataframe(pitch, int(source_stats.get("source_notes", 0)))
+    issues = _validate_pitch_dataframe(pitch, source_stats.get("expected_pitch_rows"))
     offsets = [float(value) for value in entry.get("measure_offsets", [])]
     if any(not np.isfinite(value) for value in offsets):
         issues.append("measure_offsets contains non-finite values")
@@ -209,6 +230,13 @@ def _worker(source: str, report_path: Path, *, probe_partitura: bool = False) ->
 
 def _resolve_sources(raw_sources: Sequence[str]) -> List[str]:
     if raw_sources:
+        for source in raw_sources:
+            source = str(source).strip()
+            if source.lower().endswith(".txt") and not source.startswith(("http://", "https://")):
+                path = Path(source)
+                path = path if path.is_absolute() else REPO_ROOT / path
+                if not path.is_file():
+                    raise FileNotFoundError(f"Source list does not exist: {path}")
         return expand_file_sources(raw_sources, base_dir=REPO_ROOT, verbose=False)
     return [str(path.resolve()) for path in sorted(REPO_ROOT.glob(DEFAULT_GLOB))]
 
@@ -255,10 +283,12 @@ def _run_isolated(
     return records
 
 
-def _print_summary(records: Sequence[Dict[str, Any]]) -> None:
+def _print_summary(records: Sequence[Dict[str, Any]], *, selected: int) -> None:
     print("\n=== Verovio parser robustness ===\n")
+    passed = sum(record.get("status") == "ok" for record in records)
+    print(f"Selected: {selected}; tested: {len(records)}; passed: {passed}; failed: {len(records) - passed}\n")
     print(
-        f"{'status':<8} {'part':<7} {'notes':>7} {'rows':>7} "
+        f"{'status':<8} {'part':<7} {'notes':>7} {'expect':>7} {'rows':>7} "
         f"{'events':>7} {'meas':>6}  source"
     )
     print("-" * 88)
@@ -267,6 +297,7 @@ def _print_summary(records: Sequence[Dict[str, Any]]) -> None:
             f"{record.get('status', ''):<8} "
             f"{record.get('partitura_status', '-'):<7} "
             f"{str(record.get('source_notes', '')):>7} "
+            f"{str(record.get('expected_pitch_rows', '')):>7} "
             f"{str(record.get('pitch_rows', '')):>7} "
             f"{str(record.get('event_rows', '')):>7} "
             f"{str(record.get('measure_offsets', '')):>6}  "
@@ -311,17 +342,29 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             probe_partitura=args.probe_partitura,
         )
 
-    sources = _resolve_sources(args.source or [])
-    records = _run_isolated(
-        sources,
-        args.timeout,
-        probe_partitura=args.probe_partitura,
+    selection_error = None
+    sources: List[str] = []
+    try:
+        sources = _resolve_sources(args.source or [])
+    except OSError as exc:
+        selection_error = str(exc)
+    if not sources and selection_error is None:
+        selection_error = "No scores selected; nothing was tested. Check the source list or converted MEI folder."
+    records = (
+        _run_isolated(sources, args.timeout, probe_partitura=args.probe_partitura)
+        if sources else []
     )
     args.json.parent.mkdir(parents=True, exist_ok=True)
     args.json.write_text(json.dumps(records, indent=2), encoding="utf-8")
-    _print_summary(records)
+    _print_summary(records, selected=len(sources))
     print(f"\nReport: {args.json.resolve()}")
-    return 0 if all(record.get("status") == "ok" for record in records) else 1
+    if selection_error:
+        print(f"Error: {selection_error}", file=sys.stderr)
+        return 2
+    if len(records) != len(sources):
+        print("Error: Not every selected score produced a result.", file=sys.stderr)
+        return 1
+    return 0 if records and all(record.get("status") == "ok" for record in records) else 1
 
 
 if __name__ == "__main__":
