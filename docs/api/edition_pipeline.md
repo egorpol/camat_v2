@@ -80,6 +80,23 @@ existing annotation XML file is local.
         - process_mei_file
         - main
 
+## PDF facsimiles
+
+Render and review local PDF pages, reuse detector or manual measure boxes,
+and link regions by movement, measure label and occurrence. Integration
+preserves notation; writing page and system breaks is a separate operation.
+
+::: camat.pdf_facsimile
+    options:
+      members:
+        - render_pdf_pages
+        - detect_measure_boxes
+        - build_measure_alignment
+        - draw_alignment_overlays
+        - integrate_pdf_facsimile
+        - write_page_breaks
+        - main
+
 ## IIIF validation and orchestration
 
 ::: camat.validate_iiif_vs_local

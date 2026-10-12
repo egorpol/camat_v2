@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased][Unreleased]
 
+### Added
+
+- `camat.pdf_facsimile` and the `camat-pdf-facsimile` command link MEI to a
+  PDF facsimile: rasterize the PDF with Poppler into hashed page images and a
+  page manifest, reuse or opt-in upload measure boxes from the Edirom
+  detector, align boxes to the reviewed system lists with a per-page count
+  gate, draw review overlays, integrate one surface per page with zones joined
+  on movement and measure number (split measures included), and write page
+  and system breaks from the manifest. See the new guide "Link MEI to a PDF
+  facsimile".
+
 ## [0.2.5][0.2.5] - 2026-10-02
 
 ### Added
