@@ -97,6 +97,32 @@ The direct Humdrum tutorial score comes from Craig Stuart Sapp's
 the MIDI route uses the quantized score in the
 [ASAP dataset](https://github.com/fosfrancesco/asap-dataset).
 
+## Targeting MEI 5.1
+
+Use `camat-convert --mei-version 5.1` or
+`convert_sources(..., mei_version="5.1")` when the result must validate against
+CAMAT's bundled MEI 5.1 CMN schema. The default keeps Verovio's output unchanged;
+`5.1` is the only accepted target. For `6.0-dev` output, CAMAT relabels the root,
+replaces hidden measure rests with `mSpace`, unwraps safe repeat-list choices
+into sibling expansions in source order without unrolling repeats, and removes
+`dynam/@enclose` inside `supplied`. Unsafe edits or remaining schema errors
+preserve Verovio's original file byte for byte. Missing `xmllint` also leaves
+the file unchanged.
+
+The report and `.camat.json` sidecar record `mei_version_target` and a
+`mei_version_rewrite` block with status, source version, rewrite counts,
+individual editorial dynamic drops, refused targets, and capped remaining
+errors with their total count. `mei_version`, size, and SHA-256 describe the
+file actually saved. Status is `rewritten` after successful validation,
+`not_needed` when Verovio already wrote `5.1`, or `incomplete` when the target
+was not reached. The CLI names incomplete files and returns exit code 1 if any
+occur, even when conversion itself succeeded. Existing `.mei` sources pass
+through untouched with `not_applicable` and do not fail the run.
+
+The target participates in resume signatures: resuming with the same target
+retains the stored rewrite block, while changing or removing the target
+reconverts. No-target signatures remain compatible with existing sidecars.
+
 ## Resuming safely
 
 Every successful generated MEI has a `.camat.json` sidecar. With

@@ -17,6 +17,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on movement and measure number (split measures included), and write page
   and system breaks from the manifest. See the new guide "Link MEI to a PDF
   facsimile".
+- `camat-convert --mei-version 5.1` (`convert_sources(..., mei_version="5.1")`)
+  turns Verovio's `meiversion="6.0-dev"` output into MEI 5.1 checked against
+  the bundled CMN schema. Besides relabelling the root, it rewrites the three
+  invalid constructs Verovio's Humdrum import writes: hidden `mRest` becomes
+  `mSpace`, the repeat-list `choice` becomes sibling `<expansion>` elements in
+  source order, and `dynam/@enclose` inside `<supplied>` is dropped (each drop
+  listed). Edits are anchored on `xml:id` in the original text, so embedded
+  namespaces and everything else keep their bytes. A file that would still be
+  invalid stays exactly as Verovio wrote it; the new `mei_version_rewrite`
+  record block lists what remains, and the command exits with 1. New module
+  `camat.mei_version`.
 
 ## [0.2.5][0.2.5] - 2026-10-02
 

@@ -192,11 +192,14 @@ and every `xml:id` must be unique. One MEI file can hold several movements as
 separate `<mdiv>` elements, or each movement can be its own file.
 
 **MEI version.** Verovio 6.3 writes `meiversion="6.0-dev"`, while CAMAT
-validates against the MEI 5.1 CMN schema. Changing the attribute alone is
-not a conversion. `camat-convert --mei-version 5.1` rewrites the Verovio 6
-constructs that CAMAT knows how to express in MEI 5.1, then checks the file
-against the 5.1 schema. If constructs remain that it cannot rewrite, it
-reports them and leaves the file at 6.0-dev.
+validates against the MEI 5.1 CMN schema. `camat-convert --mei-version 5.1`
+relabels the version, replaces hidden `mRest` elements with `mSpace`, keeps
+both safe repeat lists as sibling `<expansion>` elements in source order,
+without unrolling the repeats, and drops `dynam/@enclose` inside `supplied`,
+retaining the editorial meaning. It validates
+the result against 5.1 before saving. Any other invalid content, unsafe edit,
+or missing `xmllint` is reported as `incomplete`; Verovio's file stays unchanged
+at 6.0-dev. Changing the version attribute alone is not a conversion.
 
 ## 5. Find the measure regions
 
