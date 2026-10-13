@@ -15,8 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   detector, align boxes to the reviewed system lists with a per-page count
   gate, draw review overlays, integrate one surface per page with zones joined
   on movement and measure number (split measures included), and write page
-  and system breaks from the manifest. See the new guide "Link MEI to a PDF
-  facsimile".
+  and system breaks from the manifest. Both write steps copy XML in other
+  namespaces (such as the `humxml` and MADS blocks of Verovio's Humdrum
+  import) byte for byte. See the new guide "Link MEI to a PDF facsimile".
 - `camat-convert --mei-version 5.1` (`convert_sources(..., mei_version="5.1")`)
   turns Verovio's `meiversion="6.0-dev"` output into MEI 5.1 checked against
   the bundled CMN schema. Besides relabelling the root, it rewrites the three

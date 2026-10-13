@@ -556,6 +556,67 @@ def test_id_collisions_are_atomic(tmp_path, operation):
     assert source.read_bytes() == before
 
 
+HUMXML = ('<extMeta>\n'
+          '      <frames xmlns="http://www.humdrum.org/ns/humxml" note=\'a &gt; b\'>\n'
+          '        <frame n="1"><token>4c</token><empty/></frame>\n'
+          '      </frames>\n'
+          '    </extMeta>')
+
+
+def foreign_mei(tmp_path: Path, head: str, root_declarations: str = "") -> Path:
+    source = mei(tmp_path, [("1", [1, 2])])
+    text = source.read_text()
+    old_head, old_root = '<ptr xlink:href="source" />', 'xmlns:xlink="http://www.w3.org/1999/xlink">'
+    assert text.count(old_head) == text.count(old_root) == 1
+    source.write_text(text.replace(old_head, head).replace(old_root, old_root[:-1] + root_declarations + ">"))
+    return source
+
+
+def test_foreign_xml_is_kept_byte_for_byte_without_global_side_effects(tmp_path):
+    # Verovio's Humdrum import embeds humxml and MADS blocks with their own default namespace.
+    pages = fixture(tmp_path, [{"mdiv": 1, "systems": [[1, 2]]}])
+    alignment = pf.build_measure_alignment(pages)
+    source = foreign_mei(tmp_path, '<ptr xlink:href="source" />' + HUMXML.replace(
+        '    </extMeta>', '      <svg:svg width="1"><svg:g/></svg:svg>\n    </extMeta>'),
+        '\n     xmlns:svg="http://www.w3.org/2000/svg"')
+    registry = [ET.tostring(ET.Element(uri + "x")) for uri in (M, "{http://www.humdrum.org/ns/humxml}")]
+    out = tmp_path / "out.mei"
+    pf.integrate_pdf_facsimile(source, pages, alignment, out)
+    pf.write_page_breaks(out, pages, out)
+    heads = [(text := path.read_text())[:text.index("</meiHead>")] for path in (out, source)]
+    assert heads[0] == heads[1]
+    root = ET.parse(out).getroot()
+    assert root.tag == M + "mei" and root.find(f"{M}music/{M}facsimile") is not None
+    assert body_without_facs(source) != body_without_facs(out)  # breaks were rewritten
+    assert [ET.tostring(ET.Element(uri + "x")) for uri in (M, "{http://www.humdrum.org/ns/humxml}")] == registry
+
+
+def test_namespace_declared_below_the_root_moves_to_the_root(tmp_path):
+    pages = fixture(tmp_path, [{"mdiv": 1, "systems": [[1, 2]]}])
+    alignment = pf.build_measure_alignment(pages)
+    source = foreign_mei(tmp_path, '<ptr xmlns:ex="urn:example" ex:role="x" />' + HUMXML)
+    out = tmp_path / "out.mei"
+    pf.integrate_pdf_facsimile(source, pages, alignment, out)
+    text = out.read_text()
+    assert HUMXML in text
+    assert 'xmlns:xlink="http://www.w3.org/1999/xlink" xmlns:ex="urn:example">' in text
+    assert ET.parse(out).getroot().find(f".//{M}ptr").get("{urn:example}role") == "x"
+
+
+def test_unsplicable_namespaces_fall_back_to_generated_prefixes(tmp_path):
+    # ET names an unregistrable prefix ns2, which the root already binds to the island's namespace.
+    pages = fixture(tmp_path, [{"mdiv": 1, "systems": [[1, 2]]}])
+    alignment = pf.build_measure_alignment(pages)
+    source = foreign_mei(tmp_path, '<ptr xlink:href="source" xmlns:ns7="urn:other" ns7:a="1" />'
+                         '<extMeta><ns2:block/></extMeta>', ' xmlns:ns2="urn:island"')
+    out = tmp_path / "out.mei"
+    with pytest.warns(UserWarning, match="generated prefixes"):
+        pf.integrate_pdf_facsimile(source, pages, alignment, out)
+    root = ET.parse(out).getroot()
+    assert root.find(f".//{M}ptr").get("{urn:other}a") == "1"
+    assert root.find(f".//{M}extMeta/{{urn:island}}block") is not None
+
+
 def test_body_gate_prevents_write(tmp_path, monkeypatch):
     pages = fixture(tmp_path, [{"mdiv": 1, "systems": [[1]]}])
     alignment = pf.build_measure_alignment(pages)

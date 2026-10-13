@@ -304,6 +304,9 @@ first measure of each printed system, taken from `pages.json`, and links each
 `<pb>` to its surface. Run it when the encoding should follow the print's
 layout. Running it again on an unchanged file changes nothing.
 
+Both operations copy XML in other namespaces byte for byte, such as the
+`humxml` and MADS blocks that Verovio's Humdrum import embeds in the header.
+
 ## 8. Check and view
 
 Validate the result with [general MEI validation](mei-validation.md):

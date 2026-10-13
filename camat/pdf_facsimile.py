@@ -12,7 +12,7 @@ from collections import Counter, defaultdict
 from copy import deepcopy
 from datetime import datetime, timezone
 import hashlib
-import io
+import html
 import json
 import math
 import os
@@ -24,6 +24,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+from typing import NamedTuple
 import warnings
 import xml.etree.ElementTree as ET
 from xml.parsers import expat
@@ -33,6 +34,8 @@ from .upload_and_integrate_measure_annotations import DETECTOR_URL, upload_image
 MEI = "{http://www.music-encoding.org/ns/mei}"
 XML_ID = "{http://www.w3.org/XML/1998/namespace}id"
 _COORDS = ("ulx", "uly", "lrx", "lry")
+_TAG = re.compile(rb"""<[^>"']*(?:(?:"[^"]*"|'[^']*')[^>"']*)*>""")
+_XMLNS = re.compile(r'\sxmlns(?::([^\s=]+))?="([^"]*)"')
 _ID_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_.-]*\Z")
 _REVIEW_STATUSES = {"unreviewed", "approved", "rejected"}
 
@@ -436,43 +439,140 @@ def draw_alignment_overlays(
     return outputs
 
 
-def _read_mei(path: Path) -> tuple[ET.Element, bytes, bytes, str, bool]:
+class _MeiDocument(NamedTuple):
+    root: ET.Element
+    prolog: bytes
+    epilog: bytes
+    encoding: str
+    crlf: bool
+    root_tag: str
+    namespaces: list[tuple[str, str, bool]]  # prefix, URI, declared on the root
+    islands: dict[ET.Element, str]  # non-MEI subtrees inside MEI, as source text
+
+
+def _xml_parser() -> ET.XMLParser:
+    return ET.XMLParser(target=ET.TreeBuilder(insert_comments=True, insert_pis=True))
+
+
+def _read_mei(path: Path) -> _MeiDocument:
     data = path.read_bytes()
-    for _, (prefix, uri) in ET.iterparse(io.BytesIO(data), events=("start-ns",)):
-        ET.register_namespace(prefix, uri)
-    parser = ET.XMLParser(target=ET.TreeBuilder(insert_comments=True, insert_pis=True))
-    root = ET.fromstring(data, parser=parser)
-    # Expat byte offsets locate the root without mistaking prolog comments or
-    # a DOCTYPE's internal subset for its start tag.
-    boundaries, depth = {}, 0
-    probe = expat.ParserCreate()
-
-    def start(name: str, attrs: dict) -> None:
-        nonlocal depth
-        if depth == 0:
-            boundaries["start"] = probe.CurrentByteIndex
-        depth += 1
-
-    def end(name: str) -> None:
-        nonlocal depth
-        depth -= 1
-        if depth == 0:
-            index = probe.CurrentByteIndex
-            boundaries["end"] = data.index(b">", index) + 1 if data[index:index + 2] == b"</" else index
-
-    probe.StartElementHandler, probe.EndElementHandler = start, end
-    probe.Parse(data, True)
+    root = ET.fromstring(data, parser=_xml_parser())
     encoding_match = re.match(br'<\?xml\s[^?]*encoding=[\'"]([^\'"]+)', data)
     encoding = encoding_match[1].decode("ascii") if encoding_match else "utf-8"
-    return root, data[:boundaries["start"]], data[boundaries["end"]:], encoding, b"\r\n" in data
+    # Expat byte offsets locate the root and each foreign subtree (such as the
+    # humxml and MADS blocks of Verovio's Humdrum import) without mistaking
+    # prolog comments or a DOCTYPE's internal subset for a start tag.
+    namespaces, spans, open_elements, count = [], {}, [], 0
+    probe = expat.ParserCreate(namespace_separator=" ")
+
+    def declare(prefix: str | None, uri: str) -> None:
+        namespaces.append((prefix or "", uri, count == 0))
+
+    def start(name: str, attrs: dict) -> None:
+        nonlocal count
+        uri = name.rpartition(" ")[0]
+        state = None
+        if open_elements:
+            _, _, parent_uri, parent_state = open_elements[-1]
+            if parent_state:
+                state = "inside"
+            elif parent_uri == MEI[1:-1] and uri != parent_uri:
+                state = "island"
+        open_elements.append((count, probe.CurrentByteIndex, uri, state))
+        count += 1
+
+    def end(name: str) -> None:
+        index, begin, _, state = open_elements.pop()
+        if state == "island" or not open_elements:
+            head = _TAG.match(data, begin)
+            stop = head.end() if head[0].endswith(b"/>") else _TAG.match(data, probe.CurrentByteIndex).end()
+            spans[index] = begin, stop
+
+    probe.StartNamespaceDeclHandler = declare
+    probe.StartElementHandler, probe.EndElementHandler = start, end
+    probe.Parse(data, True)
+    elements = [e for e in root.iter() if isinstance(e.tag, str)]
+    if len(elements) != count:
+        raise ValueError(f"{path}: element offsets do not match the parsed tree")
+    begin, stop = spans.pop(0)
+
+    def source(a: int, b: int) -> str:
+        return data[a:b].decode(encoding).replace("\r\n", "\n")
+
+    return _MeiDocument(root, data[:begin], data[stop:], encoding, b"\r\n" in data,
+                        source(begin, _TAG.match(data, begin).end()), namespaces,
+                        {elements[i]: source(a, b) for i, (a, b) in spans.items()})
 
 
-def _write_mei(document: tuple, output: Path) -> None:
-    root, prolog, epilog, encoding, crlf = document
-    serialized = ET.tostring(root, encoding=encoding, xml_declaration=False)
-    if crlf:
-        serialized = serialized.replace(b"\n", b"\r\n")
-    _atomic_write(output, prolog + serialized + epilog)
+def _tostring(root: ET.Element, namespaces: list[tuple[str, str, bool]]) -> str:
+    """Serialize with the file's prefixes and MEI as default namespace, leaving ET's registry as it was."""
+    saved = dict(ET._namespace_map)
+    try:
+        # Root declarations go last, so they win a prefix that is bound twice.
+        for prefix, uri, _ in sorted(namespaces, key=lambda n: n[2]):
+            if prefix and prefix != "xml" and uri != MEI[1:-1] and not re.fullmatch(r"ns\d+", prefix):
+                ET.register_namespace(prefix, uri)
+        ET.register_namespace("", MEI[1:-1])
+        return ET.tostring(root, encoding="unicode")
+    finally:
+        ET._namespace_map.clear()
+        ET._namespace_map.update(saved)
+
+
+def _same_tree(a: ET.Element, b: ET.Element) -> bool:
+    return (a.tag == b.tag and a.attrib == b.attrib and (a.text or "") == (b.text or "")
+            and (a.tail or "") == (b.tail or "") and len(a) == len(b) and all(map(_same_tree, a, b)))
+
+
+def _serialize(document: _MeiDocument, verbatim: bool) -> bytes | None:
+    """Return the file bytes, or None if they would not parse back to the same tree."""
+    root, markers = document.root, {}
+    if verbatim:
+        parents = {child: parent for parent in root.iter() for child in parent}
+        for number, (element, source) in enumerate(document.islands.items()):
+            parent = parents.get(element)
+            if parent is not None:  # not inside a replaced facsimile
+                marker = ET.PI(f"camat-verbatim-{number}")
+                marker.tail = element.tail
+                index = list(parent).index(element)
+                parent[index] = marker
+                markers[f"<?{marker.text}?>"] = parent, index, element, source
+    try:
+        text = _tostring(root, document.namespaces)
+    finally:
+        for parent, index, element, _ in markers.values():
+            parent[index] = element
+    if verbatim:
+        # Keep the source's root start tag, so the islands' prefixes stay bound,
+        # and add what ET declared beyond it.
+        head = text.index(">") + 1
+        declared = {(prefix, uri) for prefix, uri, on_root in document.namespaces if on_root}
+        extra = "".join(m[0] for m in _XMLNS.finditer(text[:head]) if (m[1] or "", html.unescape(m[2])) not in declared)
+        tag = document.root_tag
+        cut = len(tag) - (2 if tag.endswith("/>") else 1)
+        text = tag[:cut] + extra + tag[cut:] + text[head:]
+        for token, (_, _, _, source) in markers.items():
+            if text.count(token) != 1:
+                return None
+            text = text.replace(token, source)
+    if document.crlf:
+        text = text.replace("\n", "\r\n")
+    data = document.prolog + text.encode(document.encoding, "xmlcharrefreplace") + document.epilog
+    try:
+        return data if _same_tree(ET.fromstring(data, parser=_xml_parser()), root) else None
+    except ET.ParseError:
+        return None
+
+
+def _write_mei(document: _MeiDocument, output: Path) -> None:
+    data = _serialize(document, verbatim=True)
+    if data is None:
+        warnings.warn(f"{output}: XML in other namespaces could not be kept byte for byte; "
+                      "it is written with generated prefixes", stacklevel=3)
+        data = _serialize(document, verbatim=False)
+    if data is None:
+        raise ValueError(f"{output}: the MEI namespaces cannot be serialized faithfully; output not written")
+    _atomic_write(output, data)
 
 
 def _body_digest(root: ET.Element) -> str:
