@@ -30,6 +30,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   record block lists what remains, and the command exits with 1. New module
   `camat.mei_version`.
 
+### Fixed
+
+- The interactive facsimile viewer now retains the rendered score page, both
+  zoom levels and pane scroll offsets, the facsimile surface, and the active
+  measure across reloads, including auto-watch saves. A fresh launch still uses
+  the configured initial page and zoom levels, even with a reused `viewer_id`.
+
 ## [0.2.5][0.2.5] - 2026-10-02
 
 ### Added

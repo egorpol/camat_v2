@@ -167,6 +167,8 @@ unavailable. HTTP(S) sources cannot be watched; use **Reload source** to
 download the MEI again. In score-only mode, **Check facsimile** looks for newly
 added records while retaining cached score SVG. In linked mode, **Reload zones**
 re-parses the records; **Reload score** also reruns Verovio.
+Reloads in the same viewer keep the page, zoom levels, and pane scroll positions.
+A fresh launch starts from `verovio_initial_page` and the initial zoom settings.
 
 ## Annotation rendering
 

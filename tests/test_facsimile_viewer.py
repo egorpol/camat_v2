@@ -5,6 +5,8 @@ import gc
 import json
 import os
 import re
+import shutil
+import subprocess
 import weakref
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -1321,6 +1323,346 @@ def test_interactive_refreshes_use_distinct_render_ids(
     assert render_ids[0].startswith("stable-viewer-render-1-")
     assert render_ids[1].startswith("stable-viewer-render-2-")
     assert render_ids[0] != render_ids[1]
+
+
+def test_interactive_position_keys_are_stable_and_per_instance(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mei_path = tmp_path / "page.mei"
+    _write_facsimile_mei(mei_path)
+    first = InteractiveFacsimileViewer(mei_path, viewer_id="reused-viewer")
+    second = InteractiveFacsimileViewer(mei_path, viewer_id="reused-viewer")
+    keys: list[str] = []
+
+    def fake_build(*_args: object, **kwargs: object) -> dict:
+        keys.append(str(kwargs["position_key"]))
+        return {"cache": kwargs["cache"]}
+
+    monkeypatch.setattr(facsimile_viewer, "build_facsimile_viewer", fake_build)
+    monkeypatch.setattr(InteractiveFacsimileViewer, "_show_viewer_result", lambda *_: None)
+
+    first._build_viewer(render_score=True)
+    first.refresh_viewer(render_score=False)
+    first.refresh_viewer(render_score=True, refresh_source=True)
+    second._build_viewer(render_score=True)
+
+    assert keys[:3] == [first._position_key] * 3
+    assert keys[3] == second._position_key
+    assert keys[0] != keys[3]
+    assert all(re.fullmatch(r"[0-9a-f]{32}", key) for key in keys)
+
+
+@pytest.mark.parametrize("key", [None, "test-position", "a</script><script>x=1//"])
+def test_build_viewer_forwards_and_safely_embeds_position_key(
+    tmp_path: Path, key: str | None,
+) -> None:
+    mei_path = tmp_path / "page.mei"
+    _write_facsimile_mei(mei_path)
+
+    html = build_facsimile_viewer(
+        mei_path, verovio_options={}, position_key=key,
+    )["html"]
+
+    payload = re.search(r"const positionKey = (.*);", html)
+    assert payload is not None
+    assert json.loads(payload.group(1)) == key
+    assert html.count("</script>") == 1
+    assert "camat.facsimileViewer.position." in html
+    assert "window.sessionStorage.getItem(positionStorageKey)" in html
+    assert "window.sessionStorage.setItem(positionStorageKey, value)" in html
+    assert "if (positionStorageKey === null) return null;" in html
+    assert "if (positionStorageKey === null || !positionReady) return;" in html
+    assert "restoreActiveMeasure(savedPosition)" in html
+    assert "pendingFacsimileScroll || paneOffsets(facsimilePane)" in html
+    if key is not None:
+        assert "<" not in payload.group(1)
+        assert ">" not in payload.group(1)
+
+
+_POSITION_SCRIPT_HARNESS = r"""
+const assert = require('node:assert/strict');
+const vm = require('node:vm');
+const storageKey = 'camat.facsimileViewer.position.test-position';
+const originalPosition = {
+  pageNumber: 2, scoreZoom: 175, facsimileZoom: 225,
+  surfaceId: 'surface-2', measureId: 'measure-2',
+  scoreScroll: {top: 350, left: 45}, facsimileScroll: {top: 700, left: 90},
+};
+function storage(position = originalPosition) {
+  return {value: JSON.stringify(position), reads: 0, writes: [], attempts: 0,
+    getItem(key) { this.reads++; return key === storageKey ? this.value : null; },
+    setItem(key, value) {
+      this.writes.push(JSON.parse(value));
+      if (key === storageKey) this.value = value;
+    },
+  };
+}
+function launch(script, store, options = {}) {
+  class Node {
+    constructor(classes = [], attributes = {}) {
+      const names = new Set(classes);
+      this.classList = {
+        contains: name => names.has(name), add: name => names.add(name),
+        remove: name => names.delete(name),
+        toggle: (name, on) => on ? names.add(name) : names.delete(name),
+      };
+      this.attributes = attributes;
+      this.id = attributes.id || '';
+      this.dataset = {};
+      this.listeners = new Map();
+      this.scrollTop = 0; this.scrollLeft = 0;
+      this.clientTop = 0; this.clientLeft = 0;
+      this.clientHeight = 200; this.clientWidth = 200; this.offsetHeight = 20;
+      this.textContent = ''; this.isConnected = true; this.scrollCalls = 0;
+      this.style = {values: {}, setProperty(name, value) { this.values[name] = value; }};
+    }
+    getAttribute(name) { return this.attributes[name] || null; }
+    setAttribute(name, value) { this.attributes[name] = value; }
+    addEventListener(name, fn, options = {}) {
+      if (!this.listeners.has(name)) this.listeners.set(name, []);
+      this.listeners.get(name).push({fn, once: options.once});
+    }
+    emit(name, event = {}) {
+      const listeners = [...(this.listeners.get(name) || [])];
+      this.listeners.set(name, listeners.filter(listener => !listener.once));
+      listeners.forEach(listener => listener.fn(event));
+    }
+    closest() { return this.pane; }
+    getBoundingClientRect() {
+      return this.pane ? {top: 900, bottom: 1000, left: 400, right: 500, width: 100, height: 100}
+        : {top: 0, left: 0, width: 200, height: 200};
+    }
+    scrollBy(offset) { this.scrollCalls++; this.scrollTop += offset.top; this.scrollLeft += offset.left; }
+  }
+  const payload = name => JSON.parse(script.match(new RegExp('const ' + name + ' = (.*);'))[1]);
+  const pageNumbers = payload('scorePages');
+  const pairs = payload('pairs');
+  const surfaceIds = payload('surfaceIds');
+  const initialPage = Number(script.match(/const initialPageIndex = (\d+);/)[1]);
+  const initialSurface = Number(script.match(/let activeSurfaceIndex = (\d+);/)[1]);
+  const root = new Node();
+  const scorePane = new Node();
+  const facsimilePane = surfaceIds.length ? new Node() : null;
+  const pages = pageNumbers.map((number, index) => {
+    const page = new Node(index === initialPage ? ['is-active'] : []);
+    const ids = options.measureIds ? options.measureIds[index]
+      : [...new Set(pairs.filter(item => item.pageIndex === index).map(item => item.measureId))];
+    page.measures = ids.map(id => new Node(['measure'], {id}));
+    page.querySelectorAll = () => page.measures;
+    page.querySelector = selector => page.measures.find(node => selector === '#' + node.id) || null;
+    return page;
+  });
+  const surfaces = surfaceIds.map((id, index) => {
+    const surface = new Node(index === initialSurface ? ['is-active'] : []);
+    surface.dataset.surfaceN = String(index + 1);
+    const image = new Node([], index === initialSurface ? {src: 'scan'} : {'data-src': 'scan'});
+    image.dataset.src = 'scan'; image.complete = !!options.complete;
+    surface.image = image;
+    surface.querySelector = () => image.getAttribute('data-src') ? image : null;
+    return surface;
+  });
+  const zones = pairs.map(item => {
+    const zone = new Node(['zone']); zone.dataset.zoneId = item.zoneId; zone.pane = facsimilePane;
+    return zone;
+  });
+  const controls = new Map();
+  for (const name of ['viewer-context', 'hover-label', 'hover-id', 'viewer-message',
+    'score-page-label', 'facsimile-page-label', 'score-prev', 'score-next',
+    'score-zoom-out', 'score-zoom-reset', 'score-zoom-in',
+    'viewer-status', 'score-toolbar', 'viewer-grid']) controls.set('.' + name, new Node());
+  if (facsimilePane) for (const name of ['out', 'reset', 'in']) controls.set('.facsimile-zoom-' + name, new Node());
+  root.querySelector = selector => {
+    if (selector === '.score-pane') return scorePane;
+    if (selector === '.facsimile-pane') return facsimilePane;
+    if (selector === '.score-page.is-active') return pages.find(page => page.classList.contains('is-active'));
+    if (selector === '.facsimile-page.is-active img') return surfaces.find(surface => surface.classList.contains('is-active')).image;
+    const surface = selector.match(/^\.facsimile-page\[data-surface-index="(\d+)"\]$/);
+    if (surface) return surfaces[Number(surface[1])];
+    const zone = selector.match(/^\.zone\[data-zone-id="(.*)"\]$/);
+    if (zone) return zones.find(node => node.dataset.zoneId === zone[1]);
+    return controls.get(selector) || null;
+  };
+  root.querySelectorAll = selector => {
+    if (selector === '.score-page') return pages;
+    if (selector === '.facsimile-page') return surfaces;
+    if (selector === '.facsimile-wrap img') return surfaces.map(surface => surface.image);
+    if (selector === '.zone') return zones;
+    if (selector === '.is-active.measure, .zone.is-active')
+      return [...pages.flatMap(page => page.measures), ...zones].filter(node => node.classList.contains('is-active'));
+    return [];
+  };
+  const frames = [];
+  const window = new Node();
+  window.top = window; window.innerHeight = 900;
+  window.setTimeout = fn => fn();
+  window.requestAnimationFrame = fn => { frames.push(fn); return frames.length; };
+  window.matchMedia = () => ({matches: false});
+  Object.defineProperty(window, 'sessionStorage', {get() {
+    store.attempts++;
+    if (options.storageFails) throw new Error('storage denied');
+    return store;
+  }});
+  vm.runInNewContext(script, {window, document: {querySelectorAll: () => [root]},
+    CSS: {escape: value => value}, Element: Node});
+  return {root, pages, surfaces, scorePane, facsimilePane, controls, window,
+    pageNumber: () => pageNumbers[pages.findIndex(page => page.classList.contains('is-active'))],
+    surfaceId: () => surfaceIds[surfaces.findIndex(surface => surface.classList.contains('is-active'))],
+    activeMeasures: () => pages.flatMap(page => page.measures).filter(node => node.classList.contains('is-active')).map(node => node.id),
+    flushFrames() { let remaining = 50; while (frames.length && remaining--) frames.shift()(); assert.ok(remaining > 0); },
+  };
+}
+"""
+
+
+@pytest.mark.parametrize("scenario", [
+    "rapid_reload", "deleted_measure", "continuation", "surface", "fresh_and_no_key",
+    "storage_failure", "score_only", "unlinked_initial_page", "surface_switch",
+])
+def test_position_script_event_order(tmp_path: Path, scenario: str) -> None:
+    """Run the generated script against mocked DOM events, without a browser."""
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is needed to exercise the generated viewer script")
+    mei_path = tmp_path / "page.mei"
+    _write_facsimile_mei(mei_path)
+    model = read_facsimile_model(mei_path)
+    model["surfaces"].append({**model["surfaces"][0], "id": "surface-2", "index": 1})
+    model["linked"].append({
+        **model["linked"][0], "measure_id": "measure-2", "measure_n": "2",
+        "zones": [{**model["linked"][0]["zones"][0], "id": "zone-2", "surface_index": 1}],
+    })
+    pages = [
+        {"number": number, "svg": f'<svg><g class="measure" id="measure-{number}"/></svg>'}
+        for number in (1, 2)
+    ]
+
+    def script(key: str | None, **kwargs: object) -> str:
+        html = make_viewer_html(
+            model, pages, total_score_pages=2, position_key=key,
+            viewer_id="position-script-test",
+            initial_score_zoom_percent=125, initial_facsimile_zoom_percent=150,
+            show_annotations=False, show_diagnostic_table=False, **kwargs,
+        )
+        return re.search(r"<script>(.*?)</script>", html, re.S).group(1)
+
+    scripts = {"keyed": script("test-position"), "fresh": script("other-position", initial_page_index=1),
+               "noKey": script(None, initial_page_index=1)}
+    model["surfaces"].reverse()
+    for surface in model["surfaces"]:
+        surface["index"] = 1 - surface["index"]
+    for row in model["linked"]:
+        for zone in row["zones"]:
+            zone["surface_index"] = 1 - zone["surface_index"]
+    scripts["reordered"] = script("test-position")
+    pages[1]["svg"] = '<svg><g class="measure" id="unlinked-measure"/></svg>'
+    scripts["unlinkedInitial"] = script(None, initial_page_index=1)
+    model["has_facsimile"] = False
+    model["surfaces"] = []
+    model["linked"] = []
+    scripts["scoreOnly"] = script("test-position")
+    cases = {
+        "rapid_reload": r"""
+const store = storage({...originalPosition, pageNumber: 3});
+const first = launch(scripts.keyed, store);
+assert.equal(first.pageNumber(), 2);
+assert.equal(first.root.style.values['--score-zoom'], '175%');
+assert.equal(first.root.style.values['--facsimile-zoom'], '225%');
+assert.deepEqual(first.activeMeasures(), ['measure-2']);
+assert.equal(first.facsimilePane.scrollCalls, 0);
+first.scorePane.emit('scroll'); first.facsimilePane.emit('scroll'); first.flushFrames();
+assert.equal(first.scorePane.scrollTop, 350); assert.equal(first.scorePane.scrollLeft, 45);
+assert.equal(first.facsimilePane.scrollTop, 0);
+first.controls.get('.score-zoom-in').emit('click');
+first.window.emit('pagehide');
+const second = launch(scripts.keyed, store); second.flushFrames();
+assert.equal(second.root.style.values['--score-zoom'], '200%');
+assert.ok(store.writes.every(value => value.facsimileScroll.top === 700 && value.facsimileScroll.left === 90));
+const image = second.surfaces[1].image;
+image.complete = true; image.emit('load'); second.flushFrames();
+assert.equal(second.facsimilePane.scrollTop, 700); assert.equal(second.facsimilePane.scrollLeft, 90);
+assert.equal(second.scorePane.scrollCalls, 0); assert.equal(second.facsimilePane.scrollCalls, 0);
+assert.ok(store.writes.every(value => value.pageNumber === 2 && value.facsimileZoom === 225 && value.scoreScroll.top === 350));
+const writes = store.writes.length;
+second.facsimilePane.scrollTop = 720;
+second.facsimilePane.emit('scroll'); second.facsimilePane.emit('scroll');
+assert.equal(store.writes.length, writes);
+second.flushFrames(); assert.equal(store.writes.length, writes + 1);
+assert.equal(JSON.parse(store.value).facsimileScroll.top, 720);
+""",
+        "deleted_measure": r"""
+const store = storage({...originalPosition, measureId: 'deleted'});
+const viewer = launch(scripts.keyed, store, {complete: true}); viewer.flushFrames();
+assert.deepEqual(viewer.activeMeasures(), []); assert.equal(viewer.pageNumber(), 2);
+assert.equal(viewer.scorePane.scrollTop, 350); assert.equal(viewer.facsimilePane.scrollTop, 700);
+assert.equal(viewer.facsimilePane.scrollCalls, 0);
+""",
+        "continuation": r"""
+const store = storage({...originalPosition, measureId: 'measure-1'});
+const viewer = launch(scripts.keyed, store, {complete: true, measureIds: [['measure-1'], ['measure-1']]});
+viewer.flushFrames(); assert.equal(viewer.pageNumber(), 2);
+assert.deepEqual(viewer.activeMeasures(), ['measure-1']); assert.equal(viewer.scorePane.scrollCalls, 0);
+""",
+        "surface": r"""
+const store = storage({...originalPosition, surfaceId: 'surface-1'});
+const viewer = launch(scripts.keyed, store, {complete: true}); viewer.flushFrames();
+assert.equal(viewer.surfaceId(), 'surface-1'); assert.deepEqual(viewer.activeMeasures(), ['measure-2']);
+assert.equal(viewer.facsimilePane.scrollTop, 700);
+const reordered = launch(scripts.reordered, storage(), {complete: true}); reordered.flushFrames();
+assert.equal(reordered.surfaceId(), 'surface-2'); assert.ok(reordered.surfaces[0].classList.contains('is-active'));
+""",
+        "fresh_and_no_key": r"""
+const store = storage();
+const fresh = launch(scripts.fresh, store, {complete: true});
+assert.equal(fresh.pageNumber(), 2); assert.equal(fresh.root.style.values['--score-zoom'], '125%');
+assert.equal(fresh.root.style.values['--facsimile-zoom'], '150%');
+assert.equal(fresh.facsimilePane.scrollCalls, 1);
+const untouched = storage();
+const viewer = launch(scripts.noKey, untouched, {storageFails: true, complete: true});
+viewer.controls.get('.score-zoom-in').emit('click'); viewer.controls.get('.score-prev').emit('click');
+viewer.scorePane.emit('scroll'); viewer.facsimilePane.emit('scroll'); viewer.window.emit('pagehide');
+viewer.flushFrames(); assert.equal(untouched.attempts, 0); assert.equal(untouched.writes.length, 0);
+assert.equal(viewer.pageNumber(), 1);
+""",
+        "storage_failure": r"""
+const store = storage();
+const viewer = launch(scripts.keyed, store, {storageFails: true, complete: true});
+assert.equal(viewer.pageNumber(), 1); assert.equal(viewer.root.style.values['--score-zoom'], '125%');
+viewer.controls.get('.score-zoom-in').emit('click'); viewer.scorePane.emit('scroll'); viewer.flushFrames();
+assert.equal(store.writes.length, 0);
+""",
+        "score_only": r"""
+const store = storage({...originalPosition, measureId: 'unlinked-measure'});
+const viewer = launch(scripts.scoreOnly, store, {measureIds: [[], ['unlinked-measure']]}); viewer.flushFrames();
+assert.equal(viewer.pageNumber(), 2); assert.deepEqual(viewer.activeMeasures(), ['unlinked-measure']);
+assert.equal(viewer.scorePane.scrollTop, 350); assert.equal(viewer.scorePane.scrollLeft, 45);
+""",
+        "surface_switch": r"""
+// Leaving the restored surface before its scan loads must not carry the
+// pending offset over to the next surface once that scan loads.
+const store = storage();
+const viewer = launch(scripts.keyed, store); viewer.flushFrames();
+assert.equal(viewer.surfaceId(), 'surface-2'); assert.equal(viewer.facsimilePane.scrollTop, 0);
+viewer.controls.get('.score-prev').emit('click'); viewer.flushFrames();
+assert.equal(viewer.surfaceId(), 'surface-1');
+for (const surface of viewer.surfaces) { surface.image.complete = true; surface.image.emit('load'); }
+viewer.flushFrames();
+assert.equal(viewer.facsimilePane.scrollTop, 0);
+assert.equal(JSON.parse(store.value).facsimileScroll.top, 0);
+""",
+        "unlinked_initial_page": r"""
+// Preserve the existing no-key fallback even if its first linked measure is
+// on another page than the requested initial page.
+const store = storage();
+const viewer = launch(scripts.unlinkedInitial, store, {complete: true});
+assert.equal(viewer.pageNumber(), 1); assert.equal(store.attempts, 0);
+""",
+    }
+    result = subprocess.run(
+        [node], input=_POSITION_SCRIPT_HARNESS + "\nconst scripts = " + json.dumps(scripts)
+        + ";\n" + cases[scenario], text=True, capture_output=True, timeout=10,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def test_embed_viewer_html_uses_iframe_srcdoc_and_escapes_markup() -> None:

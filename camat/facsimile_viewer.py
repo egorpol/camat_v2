@@ -1219,6 +1219,7 @@ def build_facsimile_viewer(
     cache: FacsimileViewerCache | None = None,
     repo_root: Path | None = None,
     viewer_id: str | None = None,
+    position_key: str | None = None,
     viewer_max_height: int = 820,
     facsimile_max_width: int = 600,
     embed_remote_graphics: bool = False,
@@ -1294,6 +1295,7 @@ def build_facsimile_viewer(
         total_score_pages=score_render["page_count"],
         initial_page_index=score_render["initial_page_index"],
         viewer_id=viewer_id,
+        position_key=position_key,
         viewer_max_height=viewer_max_height,
         facsimile_max_width=facsimile_max_width,
         embed_remote_graphics=embed_remote_graphics,
@@ -1678,6 +1680,7 @@ def make_viewer_html(
     total_score_pages: int,
     initial_page_index: int = 0,
     viewer_id: str | None = None,
+    position_key: str | None = None,
     viewer_max_height: int = 820,
     facsimile_max_width: int = 600,
     embed_remote_graphics: bool = False,
@@ -1806,6 +1809,7 @@ def make_viewer_html(
     pairs_json = json_for_script(pairs)
     score_pages_json = json_for_script([page["number"] for page in score_pages])
     score_page_surfaces_json = json_for_script(score_page_surface_indices)
+    surface_ids_json = json_for_script([surface.get("id") for surface in surfaces])
     page_number_to_index = {
         page["number"]: index for index, page in enumerate(score_pages)
     }
@@ -2319,6 +2323,9 @@ def make_viewer_html(
   const annotations = {annotations_json};
   const scorePages = {score_pages_json};
   const scorePageSurfaces = {score_page_surfaces_json};
+  const surfaceIds = {surface_ids_json};
+  const positionKey = {json_for_script(position_key)};
+  const positionStorageKey = positionKey === null ? null : 'camat.facsimileViewer.position.' + positionKey;
   const totalScorePages = {total_score_pages};
   const totalSurfaces = {len(surfaces)};
   const initialScoreZoom = {initial_score_zoom_percent};
@@ -2369,7 +2376,89 @@ def make_viewer_html(
   let scoreZoom = initialScoreZoom;
   let facsimileZoom = initialFacsimileZoom;
   let activeScoreMeasure = null;
+  let activeMeasureId = null;
   let hoveredId = null;
+  let positionReady = false;
+  let pendingScoreScroll = null;
+  let pendingFacsimileScroll = null;
+  let positionWriteFrame = null;
+  let scrollRestoreFrame = null;
+  let lastPositionJson = null;
+  const restoreWatchedImages = new WeakSet();
+
+  function readPosition() {{
+    if (positionStorageKey === null) return null;
+    try {{
+      const value = JSON.parse(window.sessionStorage.getItem(positionStorageKey));
+      return value && Number.isFinite(value.pageNumber) ? value : null;
+    }} catch (_) {{ return null; }}
+  }}
+
+  function scrollOffsets(value) {{
+    if (!value || !Number.isFinite(value.top) || !Number.isFinite(value.left)) return null;
+    return {{top: Math.max(0, value.top), left: Math.max(0, value.left)}};
+  }}
+
+  function paneOffsets(pane) {{
+    return pane ? {{top: pane.scrollTop, left: pane.scrollLeft}} : null;
+  }}
+
+  function savePosition() {{
+    if (positionStorageKey === null || !positionReady) return;
+    try {{
+      const value = JSON.stringify({{
+        pageNumber: scorePages[activePageIndex],
+        scoreZoom,
+        facsimileZoom,
+        surfaceId: surfaceIds[activeSurfaceIndex] || null,
+        measureId: activeMeasureId,
+        // A second reload can arrive before the scan loads. Keep its target,
+        // rather than replacing it with the pane's temporarily clamped zero.
+        scoreScroll: pendingScoreScroll || paneOffsets(scorePane),
+        facsimileScroll: pendingFacsimileScroll || paneOffsets(facsimilePane),
+      }});
+      if (value !== lastPositionJson) {{
+        window.sessionStorage.setItem(positionStorageKey, value);
+        lastPositionJson = value;
+      }}
+    }} catch (_) {{}}
+  }}
+
+  function schedulePositionSave() {{
+    if (!positionReady || positionStorageKey === null || positionWriteFrame !== null) return;
+    positionWriteFrame = window.requestAnimationFrame(() => {{
+      positionWriteFrame = null;
+      savePosition();
+    }});
+  }}
+
+  function restoreScrollOffsets() {{
+    if (scrollRestoreFrame !== null) return;
+    scrollRestoreFrame = window.requestAnimationFrame(() => {{
+      scrollRestoreFrame = null;
+      syncPaneHeight();
+      if (pendingScoreScroll) {{
+        scorePane.scrollTop = pendingScoreScroll.top;
+        scorePane.scrollLeft = pendingScoreScroll.left;
+        pendingScoreScroll = null;
+      }}
+      if (pendingFacsimileScroll && facsimilePane) {{
+        const image = root.querySelector('.facsimile-page.is-active img');
+        if (image && !image.complete) {{
+          if (!restoreWatchedImages.has(image)) {{
+            restoreWatchedImages.add(image);
+            image.addEventListener('load', restoreScrollOffsets, {{once: true}});
+            image.addEventListener('error', restoreScrollOffsets, {{once: true}});
+          }}
+        }} else {{
+          facsimilePane.scrollTop = pendingFacsimileScroll.top;
+          facsimilePane.scrollLeft = pendingFacsimileScroll.left;
+          pendingFacsimileScroll = null;
+        }}
+      }}
+      savePosition();
+    }});
+  }}
 
   function setContext(text) {{
     if (contextStatus.textContent !== text) contextStatus.textContent = text;
@@ -2426,6 +2515,7 @@ def make_viewer_html(
         clearActive();
         measure.classList.add('is-active');
         activeScoreMeasure = measure;
+        activeMeasureId = measureId;
         const info = measureSource ? measureSource.info : match.info;
         const idText = measureId ? ` | ${{measureId}}` : '';
         const linkText = totalSurfaces ? 'no facsimile link' : 'score-only';
@@ -2436,6 +2526,7 @@ def make_viewer_html(
       setContext(`score page ${{scorePages[activePageIndex]}}`);
     }}
     setHover(match);
+    savePosition();
   }}
 
   function annotationTargets(item) {{
@@ -2465,6 +2556,7 @@ def make_viewer_html(
     if (targets[0]) revealInPane(targets[0]);
     const anchor = item.anchor_mode === 'tstamp' ? `tstamp ${{item.tstamp}}` : item.anchor_mode;
     setContext(`Annotation ${{item.id}} | ${{anchor}} | ${{item.text || '(no text)'}}`);
+    savePosition();
   }}
 
   // Inside the notebook iframe, window.innerHeight and vh track the frame,
@@ -2512,21 +2604,26 @@ def make_viewer_html(
     scoreZoomReset.textContent = `${{Math.round(scoreZoom)}}%`;
     scoreZoomOut.disabled = scoreZoom <= minZoom;
     scoreZoomIn.disabled = scoreZoom >= maxZoom;
+    savePosition();
   }}
 
   function applyFacsimileZoom(value) {{
-    if (!facsimileZoomReset) return;
     facsimileZoom = clampZoom(value);
+    if (!facsimileZoomReset) return;
     root.style.setProperty('--facsimile-zoom', `${{facsimileZoom}}%`);
     facsimileZoomReset.textContent = `${{Math.round(facsimileZoom)}}%`;
     facsimileZoomOut.disabled = facsimileZoom <= minZoom;
     facsimileZoomIn.disabled = facsimileZoom >= maxZoom;
+    savePosition();
   }}
 
   function showFacsimileSurface(index) {{
     if (index === null || index === undefined || index < 0 || index >= totalSurfaces) return;
     const nextSurface = root.querySelector(`.facsimile-page[data-surface-index="${{index}}"]`);
     if (!nextSurface) return;
+    // A restored offset belongs to the restored surface; once the user moves
+    // to another one, applying it there when the scan loads would be wrong.
+    if (positionReady && index !== activeSurfaceIndex) pendingFacsimileScroll = null;
     if (!nextSurface.classList.contains('is-active')) {{
       root.querySelectorAll('.facsimile-page').forEach((surface) => {{
         surface.classList.toggle('is-active', surface === nextSurface);
@@ -2539,6 +2636,7 @@ def make_viewer_html(
       const surfaceN = nextSurface.dataset.surfaceN || String(activeSurfaceIndex + 1);
       surfaceLabel.textContent = `Facsimile surface ${{surfaceN}} (${{activeSurfaceIndex + 1}} of ${{totalSurfaces}})`;
     }}
+    savePosition();
   }}
 
   function showScorePage(index) {{
@@ -2557,11 +2655,13 @@ def make_viewer_html(
     nextButton.disabled = activePageIndex === scorePages.length - 1;
     pageLabel.textContent = `Rendered score page ${{scorePages[activePageIndex]}} of ${{totalScorePages}}`;
     showFacsimileSurface(scorePageSurfaces[activePageIndex]);
+    savePosition();
   }}
 
   function clearActive() {{
     root.querySelectorAll('.is-active.measure, .zone.is-active').forEach((node) => node.classList.remove('is-active'));
     activeScoreMeasure = null;
+    activeMeasureId = null;
   }}
 
   // scrollIntoView() would also scroll the notebook page around the iframe;
@@ -2698,6 +2798,7 @@ def make_viewer_html(
     showFacsimileSurface(item.surfaceIndex);
     clearActive();
     setHover(null);
+    activeMeasureId = item.measureId;
     const activePage = root.querySelector('.score-page.is-active');
     const measure = scoreMeasure || (activePage ? activePage.querySelector(`#${{CSS.escape(item.measureId)}}`) : null);
     const zone = root.querySelector(`.zone[data-zone-id="${{CSS.escape(item.zoneId)}}"]`);
@@ -2713,6 +2814,30 @@ def make_viewer_html(
     const scorePage = scoreMeasure ? scorePages[activePageIndex] : item.scorePage;
     const scorePageText = scorePage ? ` | score page ${{scorePage}}` : ' | not in rendered score output';
     setContext(`Measure ${{item.measureN || '(unnumbered)'}} | ${{item.measureId}} | ${{item.zoneId}}${{scorePageText}}`);
+    savePosition();
+  }}
+
+  function restoreActiveMeasure(position) {{
+    const page = root.querySelector('.score-page.is-active');
+    const measure = page && Array.from(page.querySelectorAll('.measure')).find((node) =>
+      (node.getAttribute('data-id') || node.id) === position.measureId
+    );
+    if (!measure) return;
+    const items = pairs.filter((item) => item.measureId === position.measureId);
+    const item = items.find((item) => surfaceIds[item.surfaceIndex] === position.surfaceId) || items[0];
+    if (item) {{
+      // Passing the visible measure avoids following a continuation to another
+      // score page; neither pane should reveal a zone during position restore.
+      activate(item, false, measure, false, 'auto');
+    }} else {{
+      measure.classList.add('is-active');
+      activeScoreMeasure = measure;
+      activeMeasureId = position.measureId;
+      const match = sourceElement(measure);
+      const measureN = match ? match.info.measure_n : '';
+      const linkText = totalSurfaces ? 'no facsimile link' : 'score-only';
+      setContext(`Measure ${{measureN || '(unnumbered)'}} | ${{position.measureId}} | ${{linkText}} | score page ${{scorePages[activePageIndex]}}`);
+    }}
   }}
 
   prevButton.addEventListener('click', () => showScorePage(activePageIndex - 1));
@@ -2749,12 +2874,26 @@ def make_viewer_html(
     applyAnnotationVisibility(annotationToggle.checked);
   }}
 
+  const savedPosition = readPosition();
+  if (savedPosition) {{
+    pendingScoreScroll = scrollOffsets(savedPosition.scoreScroll);
+    pendingFacsimileScroll = facsimilePane ? scrollOffsets(savedPosition.facsimileScroll) : null;
+  }}
   restorePaneLayout();
   syncPaneHeight();
   watchHostViewport();
-  applyScoreZoom(initialScoreZoom);
-  applyFacsimileZoom(initialFacsimileZoom);
-  showScorePage(initialPageIndex);
+  applyScoreZoom(savedPosition && Number.isFinite(savedPosition.scoreZoom) ? savedPosition.scoreZoom : initialScoreZoom);
+  applyFacsimileZoom(savedPosition && Number.isFinite(savedPosition.facsimileZoom) ? savedPosition.facsimileZoom : initialFacsimileZoom);
+  if (savedPosition) {{
+    // Match page numbers, not old array indices, and clamp when pages disappear.
+    const pageNumber = Math.max(scorePages[0], Math.min(scorePages[scorePages.length - 1], savedPosition.pageNumber));
+    const pageIndex = scorePages.findIndex((number) => number >= pageNumber);
+    showScorePage(pageIndex);
+    restoreActiveMeasure(savedPosition);
+    if (savedPosition.surfaceId) showFacsimileSurface(surfaceIds.indexOf(savedPosition.surfaceId));
+  }} else {{
+    showScorePage(initialPageIndex);
+  }}
   root.querySelectorAll('.facsimile-wrap img').forEach((image) => {{
     image.addEventListener('error', () => {{
       const label = image.getAttribute('title') || image.currentSrc || 'unknown graphic';
@@ -2765,8 +2904,17 @@ def make_viewer_html(
         : `Facsimile image failed to load: ${{label}}`;
     }});
   }});
-  const initialItem = pairs.find((item) => item.pageIndex === initialPageIndex) || pairs[0];
-  if (initialItem) activate(initialItem, false, null, true, 'auto');
+  if (!savedPosition) {{
+    const initialItem = pairs.find((item) => item.pageIndex === initialPageIndex) || pairs[0];
+    if (initialItem) activate(initialItem, false, null, true, 'auto');
+  }}
+  positionReady = true;
+  if (positionStorageKey !== null) {{
+    scorePane.addEventListener('scroll', schedulePositionSave, {{passive: true}});
+    if (facsimilePane) facsimilePane.addEventListener('scroll', schedulePositionSave, {{passive: true}});
+    if (savedPosition) restoreScrollOffsets();
+    savePosition();
+  }}
   }}
 
   function initializeAttachedViewers() {{
@@ -2944,6 +3092,7 @@ class InteractiveFacsimileViewer:
         self.source_info = resolve_mei_source_info(mei_path, repo_root=self.repo_root)
         self.mei_path = self.source_info.local_path
         self.viewer_id = viewer_id or f"mei-viewer-live-{uuid.uuid4().hex}"
+        self._position_key = uuid.uuid4().hex
         self._render_revision = 0
         self.verovio_initial_page = verovio_initial_page
         self.verovio_orientation = verovio_orientation
@@ -3044,6 +3193,7 @@ class InteractiveFacsimileViewer:
             cache=self.cache,
             repo_root=self.repo_root,
             viewer_id=render_id,
+            position_key=self._position_key,
             viewer_max_height=self.viewer_max_height,
             facsimile_max_width=self.facsimile_max_width,
             embed_remote_graphics=self.embed_remote_graphics,
