@@ -363,4 +363,6 @@ print ends mid-line.
 - A review records that someone looked; it is not a musical collation of the
   encoding against the print.
 
-<!-- TODO(Plan A step 3): link the tutorial notebook notebooks/mei_pdf_facsimile_integration.ipynb once it exists; the docs hook rejects links to missing files. -->
+Worked example: [`mei_pdf_facsimile_integration.ipynb`](../../notebooks/mei_pdf_facsimile_integration.ipynb)
+walks through this workflow on the Buxtehude Suite (DdT vol. 11, appendix
+no. 1) with a four-page BSB PDF.

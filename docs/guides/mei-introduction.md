@@ -536,7 +536,8 @@ When a clean MEI corresponds to a BSB source page, continue with
 [`mei_single_file_iiif_integration.ipynb`](../../notebooks/mei_single_file_iiif_integration.ipynb)
 for one file, or
 [`mei_batch_iiif_integration.ipynb`](../../notebooks/mei_batch_iiif_integration.ipynb)
-for several pages.
+for several pages. When the witness is a PDF instead of IIIF, use
+[`mei_pdf_facsimile_integration.ipynb`](../../notebooks/mei_pdf_facsimile_integration.ipynb).
 
 Rendering is a useful feedback loop, but a score that renders is not
 necessarily valid or editorially consistent. Continue with

@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Tutorial notebook `notebooks/mei_pdf_facsimile_integration.ipynb` walks
+  through `camat.pdf_facsimile` on the Buxtehude Suite (DdT vol. 11,
+  appendix no. 1): fixture `test_corpus/Buxtehude-DdT11-app01-suite.mei`
+  rebuilt by `scripts/strip_facsimile.py` from the public MIT encoding in
+  egorpol/DdT_1_vol_11 with its IIIF facsimile removed.
 - `camat.pdf_facsimile` and the `camat-pdf-facsimile` command link MEI to a
   PDF facsimile: rasterize the PDF with Poppler into hashed page images and a
   page manifest, reuse or opt-in upload measure boxes from the Edirom

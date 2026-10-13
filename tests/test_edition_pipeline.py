@@ -376,6 +376,7 @@ def test_copied_pipeline_notebooks_use_package_imports_and_safe_defaults() -> No
 
     single = code_for("CAMAT_old/single_mei_iiif_integration.ipynb")
     tutorial = code_for("notebooks/mei_single_file_iiif_integration.ipynb")
+    pdf_tutorial = code_for("notebooks/mei_pdf_facsimile_integration.ipynb")
     batch_tutorial = code_for("notebooks/mei_batch_iiif_integration.ipynb")
     batch = code_for("CAMAT_old/run_pipeline_workflow.ipynb")
 
@@ -394,6 +395,28 @@ def test_copied_pipeline_notebooks_use_package_imports_and_safe_defaults() -> No
     assert "raise RuntimeError(\"Review the paths" not in tutorial
     example = repo_root / "test_corpus" / "Buxtehude-Anhang-S._185_musicxml_verovio.mei"
     assert example.is_file()
+    assert "import setup_camat" in pdf_tutorial
+    assert "prepare_notebook" in pdf_tutorial
+    assert 'test_corpus/Buxtehude-DdT11-app01-suite.mei' in pdf_tutorial
+    assert (
+        repo_root / "test_corpus" / "Buxtehude-DdT11-app01-suite.mei"
+    ).is_file()
+    assert "RUN_PDF_INTEGRATION = False" in pdf_tutorial
+    assert "ACCEPT_BSB_TERMS = False" in pdf_tutorial
+    assert "ALLOW_DETECTOR_UPLOAD = False" in pdf_tutorial
+    assert "APPROVE_REVIEW = False" in pdf_tutorial
+    assert 'REVIEWER = ""' in pdf_tutorial
+    assert "/home/" not in pdf_tutorial and "/Users/" not in pdf_tutorial
+    pdf_nb = json.loads(
+        (repo_root / "notebooks" / "mei_pdf_facsimile_integration.ipynb").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert all(
+        cell.get("execution_count") is None and not cell.get("outputs")
+        for cell in pdf_nb["cells"]
+        if cell.get("cell_type") == "code"
+    )
     assert "import setup_camat" in batch_tutorial
     assert "plan_iiif_pages" in batch_tutorial
     assert "integrate_iiif_pages" in batch_tutorial

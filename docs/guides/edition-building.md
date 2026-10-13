@@ -34,7 +34,7 @@ general validation read-only; optional legacy rewrite helpers stay in
 | inspect notation together with linked facsimile zones                                | [`mei_facsimile_viewer.ipynb`](../../notebooks/mei_facsimile_viewer.ipynb)                         |
 | add a IIIF facsimile and detected measure zones to one clean MEI file                | [`mei_single_file_iiif_integration.ipynb`](../../notebooks/mei_single_file_iiif_integration.ipynb) |
 | add IIIF facsimiles and measure zones to several MEI files                           | [`mei_batch_iiif_integration.ipynb`](../../notebooks/mei_batch_iiif_integration.ipynb) |
-| link MEI to the pages of a PDF score, with local page images instead of IIIF         | [Link MEI to a PDF facsimile](pdf-facsimiles.md) |
+| link MEI to the pages of a PDF score, with local page images instead of IIIF         | [`mei_pdf_facsimile_integration.ipynb`](../../notebooks/mei_pdf_facsimile_integration.ipynb) ([guide](pdf-facsimiles.md)) |
 | join facsimile-linked page files into one score                                      | [`mei_combine_pages.ipynb`](../../notebooks/mei_combine_pages.ipynb) |
 | run general MEI checks and write findings plus execution records (read-only)         | [`mei_check_report.ipynb`](../../notebooks/mei_check_report.ipynb) |
 | understand schemas, checks, statuses, reports and validation installation             | [General MEI validation](mei-validation.md) |
@@ -60,11 +60,13 @@ rest.
 4. **[`mei_facsimile_viewer.ipynb`](../../notebooks/mei_facsimile_viewer.ipynb)** —
    open an existing MEI (with or without facsimile data) and inspect layout and
    links read-only.
-5. **IIIF integration** — add facsimile graphics and measure zones:
+5. **Facsimile integration** — add graphics and measure zones:
    [`mei_single_file_iiif_integration.ipynb`](../../notebooks/mei_single_file_iiif_integration.ipynb)
-   for one file, then
+   for one IIIF page,
    [`mei_batch_iiif_integration.ipynb`](../../notebooks/mei_batch_iiif_integration.ipynb)
-   for many pages.
+   for many IIIF pages, or
+   [`mei_pdf_facsimile_integration.ipynb`](../../notebooks/mei_pdf_facsimile_integration.ipynb)
+   for a multi-page PDF.
 6. **Combine pages, then check** — two short beginner notebooks, or one full toolkit:
    - [`mei_combine_pages.ipynb`](../../notebooks/mei_combine_pages.ipynb)
      joins facsimile-linked page files into one `*_full.mei`. The join keeps the
@@ -204,7 +206,9 @@ When the source is a PDF, such as an IMSLP scan or a publisher's file, CAMAT
 rasterizes its pages to local images and links measures to regions on them.
 Several pages, movements with restarting measure numbers and measures split
 across systems are supported, and every step records the hashes of its
-inputs. See [Link MEI to a PDF facsimile](pdf-facsimiles.md).
+inputs. Follow
+[`mei_pdf_facsimile_integration.ipynb`](../../notebooks/mei_pdf_facsimile_integration.ipynb)
+for a worked example, or see [Link MEI to a PDF facsimile](pdf-facsimiles.md).
 
 ## Check, combine, and review reports
 
