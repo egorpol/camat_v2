@@ -80,6 +80,49 @@ existing annotation XML file is local.
         - process_mei_file
         - main
 
+## PDF facsimiles
+
+Render and review local PDF pages, reuse detector or manual measure boxes,
+and link regions by movement, measure label and occurrence. Integration
+preserves notation; writing page and system breaks is a separate operation.
+
+::: camat.pdf_facsimile
+    options:
+      members:
+        - POPPLER_INSTALL_HINTS
+        - NON_MUSIC_PAGE_ROLES
+        - check_poppler
+        - render_pdf_pages
+        - parse_page_layout
+        - check_page_layout
+        - apply_page_layout
+        - detect_measure_boxes
+        - edit_measure_boxes
+        - group_measure_boxes_into_systems
+        - build_measure_alignment
+        - approve_alignment_review
+        - draw_alignment_overlays
+        - number_single_mdiv
+        - integrate_pdf_facsimile
+        - write_page_breaks
+        - main
+
+The guided notebook uses a separate presentation module with plain-language
+step messages and pictures. Scripts should use `camat.pdf_facsimile` above.
+The BSB example downloader is shared by both notebooks.
+
+::: camat.pdf_facsimile_guided
+    options:
+      members:
+        - NotDone
+        - download_example_pdf
+        - make_page_images
+        - describe_pages
+        - find_bars
+        - check_bars
+        - merge_with_mei
+        - open_result
+
 ## IIIF validation and orchestration
 
 ::: camat.validate_iiif_vs_local

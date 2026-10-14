@@ -26,7 +26,23 @@ CAMAT's own code remains MIT licensed.
 
 ## Score fixtures and generated exports
 
-The source and reuse terms for the retained Buxtehude fixtures in
+### DdT_1_vol_11 Buxtehude Suite fixture
+
+- Fixture: [`test_corpus/Buxtehude-DdT11-app01-suite.mei`](test_corpus/Buxtehude-DdT11-app01-suite.mei)
+- Upstream: [egorpol/DdT_1_vol_11](https://github.com/egorpol/DdT_1_vol_11),
+  file `11_buxtehude_sonatas_final/buxtehude_app_01_suite_to_op1_04_corr.mei`
+  at commit `63bdb24379c8c8def62696b6be862868ebc9e5bb`
+- Modification: CAMAT's `scripts/strip_facsimile.py` removed the IIIF
+  `<facsimile>` block and the `@facs` tokens that pointed into it; every
+  other byte is unchanged
+- License: MIT, Copyright (c) 2026 contributors to DdT_1_vol_11; verbatim
+  text in [`LICENSES/DdT_1_vol_11-MIT.txt`](LICENSES/DdT_1_vol_11-MIT.txt)
+- Distribution: excluded from the wheel and source distribution with the
+  rest of `test_corpus/`
+
+### Other local fixtures
+
+The source and reuse terms for the remaining Buxtehude fixtures in
 [`test_corpus/`](test_corpus/README.md) and the timeline exports in
 [`exports/timeline/`](exports/timeline/README.md) have not yet been
 recorded. They are excluded from the wheel and source distribution. Their

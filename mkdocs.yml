@@ -60,6 +60,7 @@ nav:
           - General MEI validation: guides/mei-validation.md
           - Convert to MEI: guides/formats.md
           - Batch conversion: guides/batch-conversion.md
+          - PDF facsimiles: guides/pdf-facsimiles.md
           - Test sources: guides/sources.md
       - 2. Parse music into CAMAT representations: guides/parsing-representations.md
       - "3. Analyse music: statistics and pattern search":

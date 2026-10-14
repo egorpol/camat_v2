@@ -14,3 +14,8 @@ title: Conversion
         - set_validation_stage
         - main
 
+::: camat.mei_version
+    options:
+      members:
+        - MeiVersionRewriteResult
+        - rewrite_mei_version

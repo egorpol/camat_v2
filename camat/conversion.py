@@ -39,6 +39,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 from urllib.parse import urlparse
 
+from .mei_version import MeiVersionRewriteResult, rewrite_mei_version
 from .parser_utils import expand_file_sources
 from .verovio_guard import python_executable
 from .verovio_render import vrv_guess_input_from
@@ -352,13 +353,57 @@ def _conversion_options_payload(
     download_options: DownloadOptions,
     verovio_options: Mapping[str, Any],
     render_first_page: bool,
+    mei_version: Optional[str] = None,
 ) -> Dict[str, Any]:
-    return {
+    payload = {
         "midi": midi_options.to_dict(),
         "download": download_options.to_dict(),
         "verovio": dict(verovio_options),
         "render_first_page": bool(render_first_page),
     }
+    if mei_version is not None:
+        payload["mei_version"] = mei_version
+    return payload
+
+
+def _rewrite_output_mei_version(path: Path, target: str) -> Dict[str, Any]:
+    """Validate a text candidate before atomically replacing Verovio's output."""
+    from .mei_consistency_workflow import run_relaxng_validation
+
+    path = path.resolve()
+    result = rewrite_mei_version(path.read_bytes().decode("utf-8"), target)
+    if result.status == "not_needed":
+        return result.to_dict()
+    errors = list(result.remaining_errors)
+    errors.extend(
+        {"element": row["element"], "xml_id": row["xml_id"], "message": row["reason"]}
+        for row in result.unrewritable
+    )
+    if result.text is None:
+        result.remaining_errors = errors[:50]
+        result.remaining_errors_total = len(errors)
+        return result.to_dict()
+    temporary: Optional[Path] = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="wb", dir=path.parent, prefix=f".{path.name}.", suffix=".mei", delete=False,
+        ) as handle:
+            temporary = Path(handle.name)
+            handle.write(result.text.encode("utf-8"))
+        validation = run_relaxng_validation([temporary], root=path.parent)
+        for row in validation.rows:
+            errors.append({**row, "file": str(path)})
+        if not errors and temporary is not None:
+            temporary.replace(path)
+            result.status = "rewritten"
+    except (OSError, RuntimeError) as exc:
+        errors.append({"element": "mei", "message": str(exc)})
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+    result.remaining_errors = errors[:50]
+    result.remaining_errors_total = len(errors)
+    return result.to_dict()
 
 
 def _conversion_signature(payload: Mapping[str, Any]) -> str:
@@ -1217,6 +1262,7 @@ def _convert_one(
     download_options: Optional[DownloadOptions] = None,
     verovio_options: Optional[Mapping[str, Any]] = None,
     resume_policy: str = "never",
+    mei_version: Optional[str] = None,
 ) -> Dict[str, Any]:
     midi_options = midi_options or MidiImportOptions()
     download_options = download_options or DownloadOptions()
@@ -1227,6 +1273,7 @@ def _convert_one(
         download_options=download_options,
         verovio_options=normalized_verovio_options,
         render_first_page=render_first_page,
+        mei_version=mei_version,
     )
     started_total = time.perf_counter()
     stage_durations: Dict[str, float] = {}
@@ -1264,6 +1311,8 @@ def _convert_one(
         "conversion_options": conversion_options,
         "options_fingerprint": _conversion_signature(conversion_options),
         "conversion_signature": None,
+        "mei_version_target": mei_version,
+        "mei_version_rewrite": None,
         "stage_durations_seconds": stage_durations,
         "conversion_duration_seconds": None,
         "validation_stages": _new_validation_stages(
@@ -1329,6 +1378,10 @@ def _convert_one(
 
         if input_from == "mei" and _source_extension(source_path) == ".mei":
             stats = timed("mei_validation", lambda: _mei_stats(source_path))
+            if mei_version is not None:
+                record["mei_version_rewrite"] = MeiVersionRewriteResult(
+                    status="not_applicable", source_mei_version=stats["mei_version"],
+                ).to_dict()
             record.update(
                 {
                     "status": "ok",
@@ -1432,6 +1485,8 @@ def _convert_one(
                             "resume_policy": resume_policy,
                             "resume_reason": "source, route, options, tool versions, and output hash are unchanged",
                             "message": "Skipped unchanged conversion.",
+                            "mei_version_target": mei_version,
+                            "mei_version_rewrite": previous_record.get("mei_version_rewrite"),
                             "download": download_metadata,
                             "resolved_url": download_metadata.get("resolved_url"),
                             "stage_durations_seconds": stage_durations,
@@ -1503,6 +1558,10 @@ def _convert_one(
                 "invalid_verovio_report",
                 "Verovio subprocess did not return a valid JSON report.",
             ) from exc
+        if mei_version is not None:
+            record["mei_version_rewrite"] = timed(
+                "mei_version_rewrite", lambda: _rewrite_output_mei_version(mei_path, mei_version),
+            )
         stats = timed("mei_validation", lambda: _mei_stats(mei_path))
         output_fingerprint = timed("output_fingerprint", lambda: _file_fingerprint(mei_path))
         record.update(
@@ -1533,6 +1592,10 @@ def _convert_one(
         )
         set_validation_stage(record, "converted", "passed", conversion_route)
         set_validation_stage(record, "valid_mei", "passed", "MEI XML parsed successfully.")
+        if mei_version is not None:
+            rewrite = record["mei_version_rewrite"]
+            if rewrite["status"] == "rewritten":
+                set_validation_stage(record, "valid_mei", "passed", "Validated against the bundled MEI 5.1 CMN schema.")
         if render_first_page:
             set_validation_stage(
                 record,
@@ -1595,6 +1658,7 @@ def convert_sources(
     download_options: Optional[DownloadOptions] = None,
     verovio_options: Optional[Mapping[str, Any]] = None,
     resume_policy: str = "never",
+    mei_version: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """Convert local paths or URLs to MEI and return one report per source.
 
@@ -1636,6 +1700,10 @@ def convert_sources(
         ``"never"`` converts again using cached downloads, ``"if-unchanged"``
         reuses an output only when its source, route, options, tool versions,
         schema, and output hash match, and ``"force"`` redownloads and converts.
+    mei_version
+        ``"5.1"`` requests conservative text rewrites and pinned schema
+        validation. An incomplete target keeps Verovio's original output.
+        ``None`` keeps the output unchanged; ``.mei`` sources always pass through.
 
     Returns
     -------
@@ -1645,6 +1713,8 @@ def convert_sources(
     """
     if resume_policy not in {"never", "if-unchanged", "force"}:
         raise ValueError("resume_policy must be 'never', 'if-unchanged', or 'force'.")
+    if mei_version is not None and mei_version != "5.1":
+        raise ValueError("mei_version must be None or '5.1'.")
     effective_midi_options = midi_options or MidiImportOptions()
     effective_download_options = download_options or DownloadOptions()
     effective_verovio_options = _normalized_verovio_options(verovio_options)
@@ -1695,6 +1765,7 @@ def convert_sources(
             download_options=effective_download_options,
             verovio_options=effective_verovio_options,
             resume_policy=resume_policy,
+            mei_version=mei_version,
         )
 
     if effective_n_jobs == 1:
@@ -1750,6 +1821,18 @@ def print_conversion_summary(records: Iterable[Dict[str, Any]]) -> None:
             print(f"        error [{stage}/{code}]: {row['error']}")
     print()
 
+    targeted = [row for row in rows if row.get("mei_version_target") is not None]
+    if targeted:
+        rewritten = sum((row.get("mei_version_rewrite") or {}).get("status") == "rewritten" for row in targeted)
+        print(f"MEI version target: {rewritten} rewritten file(s).")
+        for row in targeted:
+            rewrite = row.get("mei_version_rewrite") or {}
+            if rewrite.get("status") == "incomplete":
+                errors = rewrite.get("remaining_errors") or []
+                first_error = errors[0].get("message", "") if errors else "Target was not reached."
+                print(f"  incomplete: {row['source']} — {first_error}")
+        print()
+
     print("Output paths:")
     for row in rows:
         path = row.get("output_mei") or row.get("local_source") or ""
@@ -1804,6 +1887,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         "--no-render",
         action="store_true",
         help="Skip first-page SVG render smoke test after conversion.",
+    )
+    parser.add_argument(
+        "--mei-version", choices=["5.1"], default=None,
+        help="Request MEI 5.1 text rewrites validated against the bundled CMN schema.",
     )
     parser.add_argument(
         "--n-jobs",
@@ -1928,6 +2015,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         download_options=download_options,
         verovio_options=cli_verovio_options,
         resume_policy=resume_policy,
+        mei_version=args.mei_version,
     )
 
     report_path = output_dir / "conversion_report.json"
@@ -1935,7 +2023,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     print_conversion_summary(records)
     print(f"Report: {report_path}")
 
-    return 0 if all(row.get("status") == "ok" for row in records) else 1
+    return 0 if all(
+        row.get("status") == "ok"
+        and (row.get("mei_version_rewrite") or {}).get("status") != "incomplete"
+        for row in records
+    ) else 1
 
 
 if __name__ == "__main__":

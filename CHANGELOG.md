@@ -7,6 +7,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased][Unreleased]
 
+## [0.2.6][0.2.6] - 2026-10-14
+
+### Added
+
+- Reusable PDF facsimile building blocks for Poppler checks, layout text and
+  MEI checks, repeatable box corrections, review approval and single-movement
+  numbering; both PDF notebooks share these and the BSB example downloader.
+  The beginner notebook's helper code now lives in `camat.pdf_facsimile_guided`.
+- Guided notebook `notebooks/mei_pdf_facsimile_guided.ipynb` for readers new
+  to Python and Jupyter: the same Buxtehude example in five steps (PDF to page
+  images, page description as plain text lines, measure boxes, merge into the
+  MEI, viewer), one movement only, with plain-language messages and an
+  exercise in which the reader adds the box the detector misses.
+- Tutorial notebook `notebooks/mei_pdf_facsimile_integration.ipynb` walks
+  through `camat.pdf_facsimile` on the Buxtehude Suite (DdT vol. 11,
+  appendix no. 1): fixture `test_corpus/Buxtehude-DdT11-app01-suite.mei`
+  rebuilt by `scripts/strip_facsimile.py` from the public MIT encoding in
+  egorpol/DdT_1_vol_11 with its IIIF facsimile removed.
+- `camat.pdf_facsimile` and the `camat-pdf-facsimile` command link MEI to a
+  PDF facsimile: rasterize the PDF with Poppler into hashed page images and a
+  page manifest, reuse or opt-in upload measure boxes from the Edirom
+  detector, align boxes to the reviewed system lists with a per-page count
+  gate, draw review overlays, integrate one surface per page with zones joined
+  on movement and measure number (split measures included), and write page
+  and system breaks from the manifest. Both write steps copy XML in other
+  namespaces (such as the `humxml` and MADS blocks of Verovio's Humdrum
+  import) byte for byte. See the new guide "Link MEI to a PDF facsimile".
+- `camat-convert --mei-version 5.1` (`convert_sources(..., mei_version="5.1")`)
+  turns Verovio's `meiversion="6.0-dev"` output into MEI 5.1 checked against
+  the bundled CMN schema. Besides relabelling the root, it rewrites the three
+  invalid constructs Verovio's Humdrum import writes: hidden `mRest` becomes
+  `mSpace`, the repeat-list `choice` becomes sibling `<expansion>` elements in
+  source order, and the `enclose` attribute of `dynam` inside `<supplied>` is
+  dropped (each drop listed). Edits are anchored on `xml:id` in the original
+  text, so embedded namespaces and everything else keep their bytes. A file
+  that would still be invalid stays exactly as Verovio wrote it; the new
+  `mei_version_rewrite` record block lists what remains, and the command exits
+  with 1. New module `camat.mei_version`.
+
+### Changed
+
+- `pillow>=10.1` is now a declared runtime dependency. The PDF facsimile
+  modules draw overlays and page sheets with Pillow, and their font fallback
+  `ImageFont.load_default(size=...)` needs Pillow 10.1. Pillow was previously
+  installed only through matplotlib, which allows Pillow 9.
+
+### Fixed
+
+- The interactive facsimile viewer now retains the rendered score page, both
+  zoom levels and pane scroll offsets, the facsimile surface, and the active
+  measure across reloads, including auto-watch saves. A fresh launch still uses
+  the configured initial page and zoom levels, even with a reused `viewer_id`.
+- The documentation build works again with pymdown-extensions 12.2, which
+  broke every API page under mkdocstrings 1.0.3. `docs/requirements.txt` now
+  pins mkdocstrings 1.0.7 and pymdown-extensions 12.2.
+
 ## [0.2.5][0.2.5] - 2026-10-02
 
 ### Added
@@ -1005,7 +1061,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-[Unreleased]: https://github.com/egorpol/camat_v2/compare/v0.2.5...HEAD
+[Unreleased]: https://github.com/egorpol/camat_v2/compare/v0.2.6...HEAD
+[0.2.6]: https://github.com/egorpol/camat_v2/compare/v0.2.5...v0.2.6
 [0.2.5]: https://github.com/egorpol/camat_v2/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/egorpol/camat_v2/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/egorpol/camat_v2/compare/v0.2.2...v0.2.3
