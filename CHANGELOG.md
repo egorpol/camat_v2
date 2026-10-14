@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Reusable PDF facsimile building blocks for Poppler checks, layout text and
+  MEI checks, repeatable box corrections, review approval and single-movement
+  numbering; both PDF notebooks share these and the BSB example downloader.
+  The beginner notebook's helper code now lives in `camat.pdf_facsimile_guided`.
 - Guided notebook `notebooks/mei_pdf_facsimile_guided.ipynb` for readers new
   to Python and Jupyter: the same Buxtehude example in five steps (PDF to page
   images, page description as plain text lines, measure boxes, merge into the

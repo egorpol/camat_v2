@@ -101,6 +101,18 @@ PDF's page rotation. A second run verifies the existing images against their
 hashes and reuses them. It stops, instead of overwriting, when the PDF, the
 resolution or the renderer version has changed.
 
+Use `check_poppler()` to check both programs before rendering:
+
+```python
+from camat.pdf_facsimile import check_poppler, render_pdf_pages
+
+check_poppler()
+render_pdf_pages("example-print-1900.pdf", "facsimiles/example-print-1900", dpi=300)
+```
+
+If either program is missing, it raises `RuntimeError` with installation
+commands for common systems (also available as `POPPLER_INSTALL_HINTS`).
+
 The renderer writes `pages.json` with the review fields left empty:
 
 ```json
@@ -171,6 +183,32 @@ write that system as an object with its own `mdiv`. Record the systems from
 the image, not from the encoding: this list is what the measure boxes are
 checked against in step 6.
 
+For one movement, the same review can be written as layout text:
+
+```python
+from camat.pdf_facsimile import parse_page_layout, check_page_layout, apply_page_layout
+
+layout = parse_page_layout("""
+1 | cover
+2 | title
+3 | 1 | 1-4, 5-8
+4 | 2 | 9-12, 13-15, 16-18
+""", page_count=12)
+check_page_layout(layout, "mei/work.mei")
+apply_page_layout("facsimiles/example-print-1900/pages.json", layout, mdiv="1")
+```
+
+Each line names a PDF page, its printed page and the labels on each system.
+Commas separate systems; spaces separate ranges or single labels. En and em
+dashes are accepted, and `#` starts a comment. A printed page of `-`, `?` or
+empty means no printed number. Repeat a bar at the end of one system and the
+start of the next to describe a split bar. `check_page_layout` checks that the
+MEI has exactly one movement and the same labels in the same order, counting
+split bars once. `apply_page_layout` marks unlisted pages unreviewed and
+writes only when the bytes change; an empty layout resets every page.
+These helpers handle one movement only. For several movements, keep editing
+`pages.json` with the movement fields shown above.
+
 ## 4. Get the notation
 
 The MEI can come from three kinds of source:
@@ -190,6 +228,19 @@ Before linking, make the encoding match the print's numbering. Each
 `measure/@n` must equal the label used in `pages.json`, including pickups,
 and every `xml:id` must be unique. One MEI file can hold several movements as
 separate `<mdiv>` elements, or each movement can be its own file.
+
+For a file with exactly one movement that lacks `mdiv/@n`,
+`number_single_mdiv` adds `n="1"` without changing the other text. It returns
+an already numbered movement unchanged:
+
+```python
+from pathlib import Path
+from camat.pdf_facsimile import number_single_mdiv
+
+mei = Path("mei/work.mei")
+text = mei.read_bytes().decode("utf-8")
+mei.write_bytes(number_single_mdiv(text).encode("utf-8"))
+```
 
 **MEI version.** Verovio 6.3 writes `meiversion="6.0-dev"`, while CAMAT
 validates against the MEI 5.1 CMN schema. `camat-convert --mei-version 5.1`
@@ -229,6 +280,26 @@ and format: `boxes/<page_id>.json` with a `measures` list of
 boxes, so neighbouring boxes can overlap slightly; the original geometry is
 kept.
 
+Use `edit_measure_boxes` for repeatable corrections. Removal indices refer
+to the detector's original list; added rectangles are `(left, top, right,
+bottom)` in image pixels, rounded to integers:
+
+```python
+from camat.pdf_facsimile import edit_measure_boxes
+
+edit_measure_boxes(
+    "facsimiles/example-print-1900/pages.json", "example-print-1900-p0003",
+    add=[(180, 2540, 530, 3560)], remove=[7],
+)
+```
+
+The first edit keeps a byte copy in `boxes/<page_id>.original.json` and
+rebuilds the current boxes from that original on every call. Repeating the
+same correction writes nothing. Calling it with no additions or removals
+restores the original bytes and removes the backup. The `.run.json` record
+is kept. Invalid rectangles, removal indices and additions covering most
+of a kept original box are rejected.
+
 ## 6. Align measures to regions and review them
 
 ```python
@@ -263,6 +334,18 @@ result in the `review` section of `alignment.json`, one entry per page with
 status (`unreviewed`, `approved` or `rejected`), reviewer, date and notes.
 The entry stores the image and box hashes; if either changes,
 `build_measure_alignment` marks that page unreviewed again.
+
+After checking the overlays, approve the pages with a reviewer name:
+
+```python
+from camat.pdf_facsimile import approve_alignment_review
+
+approve_alignment_review("facsimiles/example-print-1900/alignment.json", "A. Reviewer")
+```
+
+`approve_alignment_review` records today's local ISO date by default, or an
+explicit `date`. It preserves approvals by the same reviewer and writes
+only when a page changes; a different reviewer records a new approval.
 
 ## 7. Integrate the facsimile into the MEI
 

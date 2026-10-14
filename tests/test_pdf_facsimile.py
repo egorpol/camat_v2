@@ -281,12 +281,12 @@ def test_page_review_validation_shared_by_all_operations(tmp_path, bad):
             operation(pages)
 
 
-def test_unreviewed_manifest_requires_step_three(tmp_path):
+def test_unreviewed_manifest_requires_page_review(tmp_path):
     pages = fixture(tmp_path, [{"role": "blank"}], boxes=False)
     data = read_json(pages)
     del data["pages"][0]["role"]
     write_json(pages, data)
-    with pytest.raises(ValueError, match=r"print-p0001.*review pages.json \(step 3\)"):
+    with pytest.raises(ValueError, match=r"print-p0001.*review pages.json"):
         pf.detect_measure_boxes(pages)
 
 
@@ -765,3 +765,314 @@ def test_cli_workflow_and_error_summary(tmp_path, capsys):
     capsys.readouterr()
     assert pf.main(["detect", str(tmp_path / "missing.json")]) == 1
     assert capsys.readouterr().err.startswith("ERROR: ")
+
+
+@pytest.mark.parametrize("missing", [None, "pdftoppm", "pdfinfo"])
+def test_check_poppler_and_install_hints(monkeypatch, missing):
+    monkeypatch.setattr(pf.shutil, "which", lambda program: None if program == missing else program)
+    if missing:
+        with pytest.raises(RuntimeError) as caught:
+            pf.check_poppler()
+        assert str(caught.value) == (f"Poppler's {missing} is missing; install it and put it on PATH:\n"
+                                     + pf.POPPLER_INSTALL_HINTS.rstrip("\n"))
+    else:
+        assert pf.check_poppler() is None
+    assert pf.POPPLER_INSTALL_HINTS == (
+        "  Windows / any system with conda:  conda install -c conda-forge poppler\n"
+        "  macOS with Homebrew:              brew install poppler\n"
+        "  Debian / Ubuntu:                  sudo apt install poppler-utils\n"
+        "  Google Colab:                     run  !apt-get install -y poppler-utils  in a new cell\n"
+    )
+
+
+def test_render_calls_shared_poppler_check(tmp_path, monkeypatch):
+    def unavailable():
+        raise RuntimeError("shared check")
+    monkeypatch.setattr(pf, "check_poppler", unavailable)
+    with pytest.raises(RuntimeError, match="^shared check$"):
+        pf.render_pdf_pages(tmp_path / "source.pdf", tmp_path / "pages")
+
+
+def test_public_system_grouping_and_alias():
+    page = {"page_id": "print-p0003", "width": 320, "height": 480}
+    payload = {"measures": [dict(zip(pf._COORDS, box)) for box in
+                            [(110.6, 100.2, 150.6, 200.2), (10.2, 40.2, 50.2, 140.2),
+                             (60.2, 80.2, 100.2, 180.2), (10, 300, 50, 400)]]}
+    assert pf._ordered_systems is pf.group_measure_boxes_into_systems
+    assert pf.group_measure_boxes_into_systems(payload, page) == [
+        [{"box_index": 1, "bbox": [10, 40, 50, 140], "center_y": 90.0},
+         {"box_index": 2, "bbox": [60, 80, 100, 180], "center_y": 130.0},
+         {"box_index": 0, "bbox": [111, 100, 151, 200], "center_y": 150.0}],
+        [{"box_index": 3, "bbox": [10, 300, 50, 400], "center_y": 350.0}],
+    ]
+    assert pf.group_measure_boxes_into_systems({"measures": []}, page) == []
+
+
+def test_parse_layout_roles_labels_comments_and_sorted_pages():
+    text = """# First line is a comment
+9 | ? | 6, 6 7—8 # split bar, no printed page
+2 | iv | 1 – 3 4, 5-6
+1 | COVER
+3 | title
+4 | preface
+5 | blank
+6 | advertisement
+7 | duplicate
+"""
+    layout = pf.parse_page_layout(text, page_count=9)
+    assert list(layout) == [1, 2, 3, 4, 5, 6, 7, 9]
+    assert tuple(layout[p]["role"] for p in [1, 3, 4, 5, 6, 7]) == pf.NON_MUSIC_PAGE_ROLES
+    assert layout[2] == {"role": "music", "printed_page": "iv", "systems": [["1", "2", "3", "4"], ["5", "6"]]}
+    assert layout[9] == {"role": "music", "printed_page": None, "systems": [["6"], ["6", "7", "8"]]}
+    for printed in ("-", "?", ""):
+        assert pf.parse_page_layout(f"999 | {printed} | 0 1a")[999]["printed_page"] is None
+
+
+@pytest.mark.parametrize("text,page_count,message", [
+    ("a | cover", None, "Line 1 (a | cover) must start with a PDF page number, for example: 2 | 160 | 1-4, 5-9, 10-14"),
+    ("0 | cover", None, "Line 1 (0 | cover): PDF page numbers must start at 1."),
+    ("0 | cover", 5, "Line 1 (0 | cover): the PDF only has pages 1 to 5."),
+    ("6 | cover", 5, "Line 1 (6 | cover): the PDF only has pages 1 to 5."),
+    ("1 | cover\n1 | cover", 5, "Line 2 (1 | cover): PDF page 1 is described twice."),
+    ("1 | music", 5, "Line 1 (1 | music): a page with music needs three parts, PDF page | printed page | bars. For a page without music, use one of: cover, title, preface, blank, advertisement, duplicate."),
+    ("1", 5, "Line 1 (1): expected 2 or 3 parts separated by |, found 1."),
+    ("1 | ? | 1 | 2", 5, "Line 1 (1 | ? | 1 | 2): expected 2 or 3 parts separated by |, found 4."),
+    ("1 | ? | 1,,2", 5, "Line 1 (1 | ? | 1,,2): one system is empty. Are there two commas in a row?"),
+    ("1 | ? | 4–2", 5, "Line 1 (1 | ? | 4–2): 4-2 counts backwards. Write the smaller number first."),
+    ("1 | ? | 1-x", 5, "Line 1 (1 | ? | 1-x): I cannot read '1-x'. Write a range like 5-9."),
+    ("1 | cover", 5, "Your description has no page with music. Write one line per music page, for example: 2 | 160 | 1-4, 5-9, 10-14"),
+])
+def test_parse_layout_errors(text, page_count, message):
+    with pytest.raises(ValueError) as caught:
+        pf.parse_page_layout(text, page_count=page_count)
+    assert str(caught.value) == message
+
+
+def test_layout_mei_check_and_split_bars(tmp_path):
+    source = mei(tmp_path, [("1", list(range(1, 9)))])
+    layout = pf.parse_page_layout("1 | 3 | 1-4, 4-6\n2 | 4 | 6-8")
+    assert pf.check_page_layout(layout, source) == {"mdiv": "1", "bars": list(map(str, range(1, 9))), "split_bars": ["4", "6"]}
+    source.write_bytes(source.read_bytes().replace(b'<mdiv n="1">', b'<mdiv>'))
+    assert pf.check_page_layout(layout, source)["mdiv"] is None
+    with pytest.raises(ValueError) as caught:
+        pf.check_page_layout(pf.parse_page_layout("1 | - | 1 5 9-10"), source)
+    assert str(caught.value) == (
+        "Your description and the MEI do not have the same bars.\n"
+        "  In the MEI but not in your description: 2–4, 6–8\n"
+        "  In your description but not in the MEI: 9–10\n"
+        "The MEI has 8 bars: 1–8."
+    )
+    for text, before, expected, actual in [
+        ("2 1 3-8", "at the start", "1", "2"),
+        ("1-8 1", "after bar 8", "(end)", "1"),
+    ]:
+        with pytest.raises(ValueError) as caught:
+            pf.check_page_layout(pf.parse_page_layout(f"1 | - | {text}"), source)
+        assert str(caught.value) == (
+            f"Your bars are not in the same order as in the MEI: {before}, the MEI continues with "
+            f"bar {expected}, your description with bar {actual}. Is a bar listed twice or in the wrong place?"
+        )
+
+
+def test_layout_mei_file_errors(tmp_path):
+    layout = pf.parse_page_layout("1 | ? | 1")
+    path = tmp_path / "missing.mei"
+    with pytest.raises(FileNotFoundError) as caught:
+        pf.check_page_layout(layout, path)
+    assert str(caught.value) == f"The MEI file is missing: {path}"
+    path.write_text("<mei")
+    with pytest.raises(ValueError, match="is not a readable XML file"):
+        pf.check_page_layout(layout, path)
+    for body, message in [
+        ("", f"{path} has no <mdiv> (movement). Is it an MEI file?"),
+        ("<mdiv/><mdiv/>", f"{path} has 2 movements (<mdiv> elements); expected one."),
+        ("<mdiv/>", f"{path} has no <measure> elements."),
+        ('<mdiv><measure xml:id="missing"/></mdiv>', "The MEI has a <measure> without a bar number (@n), xml:id missing. Every bar needs a number."),
+    ]:
+        path.write_text(f'<mei xmlns="{M[1:-1]}">{body}</mei>')
+        with pytest.raises(ValueError) as caught:
+            pf.check_page_layout(layout, path)
+        assert str(caught.value) == message
+
+
+def test_apply_layout_reset_serialization_key_order_and_no_write(tmp_path, monkeypatch):
+    pages = fixture(tmp_path, [{"mdiv": "old", "systems": [[1]], "notes": "Préface"},
+                               {"mdiv": "old", "systems": [[2]]}, {"role": "blank"}])
+    old = read_json(pages)
+    layout = pf.parse_page_layout("1 | cover\n2 | iv | 1-2")
+    result = pf.apply_page_layout(pages, layout, mdiv="7")
+    expected = deepcopy(old)
+    for page in expected["pages"]:
+        page.pop("mdiv", None)
+        page.pop("systems", None)
+        page.update(role="unreviewed", printed_page=None)
+    expected["pages"][0]["role"] = "cover"
+    expected["pages"][1].update(role="music", printed_page="iv", mdiv="7", systems=[["1", "2"]])
+    assert result == expected
+    assert pages.read_bytes() == (json.dumps(expected, indent=2, ensure_ascii=False) + "\n").encode()
+    assert list(result["pages"][1])[-2:] == ["mdiv", "systems"]
+    mtime = pages.stat().st_mtime_ns
+    with monkeypatch.context() as patch:
+        patch.setattr(pf, "_write_json", lambda *_: pytest.fail("rerun wrote JSON"))
+        pf.apply_page_layout(pages, layout, mdiv="7")
+    assert pages.stat().st_mtime_ns == mtime
+    before = pages.read_bytes()
+    with pytest.raises(ValueError) as caught:
+        pf.apply_page_layout(pages, {4: {"role": "cover"}})
+    assert str(caught.value) == f"PDF page 4 is not in {pages}"
+    assert pages.read_bytes() == before
+    reset = pf.apply_page_layout(pages, {})
+    assert all(p["role"] == "unreviewed" and p["printed_page"] is None
+               and "mdiv" not in p and "systems" not in p for p in reset["pages"])
+    with monkeypatch.context() as patch:
+        patch.setattr(pf, "_write_json", lambda *_: pytest.fail("second reset wrote JSON"))
+        pf.apply_page_layout(pages, {})
+
+
+def test_box_edits_declarative_backup_restore_bytes_and_no_write(tmp_path, monkeypatch):
+    pages = fixture(tmp_path, [{"mdiv": 1, "systems": [[1, 2]]}])
+    path = pages.parent / "boxes/print-p0001.json"
+    payload = read_json(path)
+    payload.update(notes="Überprüfung", detector={"keep": [1, 2]})
+    original_bytes = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode() + b" \n\n"
+    path.write_bytes(original_bytes)
+    run = path.with_suffix(".run.json")
+    run.write_bytes(b'{"response_sha256":"original", "untouched":true}\n')
+    run_bytes, run_mtime = run.read_bytes(), run.stat().st_mtime_ns
+    backup = path.with_name("print-p0001.original.json")
+    record = pf.edit_measure_boxes(pages, "print-p0001", add=[(180.2, 250.4, 230.8, 350.6)], remove=[0])
+    added = dict(zip(pf._COORDS, [180, 250, 231, 351]))
+    expected = {**payload, "measures": [payload["measures"][1], added]}
+    assert read_json(path) == expected
+    assert path.read_bytes() == (json.dumps(expected, indent=2, ensure_ascii=False) + "\n").encode()
+    assert record == {"page_id": "print-p0001", "boxes": str(path), "measures": 2, "changed": True}
+    assert backup.read_bytes() == original_bytes
+    before, mtime, backup_mtime = path.read_bytes(), path.stat().st_mtime_ns, backup.stat().st_mtime_ns
+    with monkeypatch.context() as patch:
+        patch.setattr(pf, "_atomic_write", lambda *_: pytest.fail("repeat edit wrote a file"))
+        assert not pf.edit_measure_boxes(pages, "print-p0001", add=[(180.2, 250.4, 230.8, 350.6)], remove=[0])["changed"]
+    assert path.read_bytes() == before and path.stat().st_mtime_ns == mtime
+    assert backup.stat().st_mtime_ns == backup_mtime
+    # Index 1 still means detector index 1, even after an earlier removal.
+    pf.edit_measure_boxes(pages, "print-p0001", remove=[1])
+    assert read_json(path)["measures"] == payload["measures"][:1]
+    assert pf.edit_measure_boxes(pages, "print-p0001")["changed"]
+    assert path.read_bytes() == original_bytes and not backup.exists()
+    with monkeypatch.context() as patch:
+        patch.setattr(pf, "_atomic_write", lambda *_: pytest.fail("empty edit wrote a file"))
+        assert not pf.edit_measure_boxes(pages, "print-p0001")["changed"]
+    assert run.read_bytes() == run_bytes and run.stat().st_mtime_ns == run_mtime
+
+
+@pytest.mark.parametrize("entry,code,message", [
+    ((True, 1, 2, 3), "malformed", "(True, 1, 2, 3) is not a box. Use four numbers: (left, top, right, bottom)."),
+    ((1, 2, 3), "malformed", "(1, 2, 3) is not a box. Use four numbers: (left, top, right, bottom)."),
+    (("1", 2, 3, 4), "malformed", "('1', 2, 3, 4) is not a box. Use four numbers: (left, top, right, bottom)."),
+    ((2, 1, 1, 3), "edges", "in (2, 1, 1, 3), left must be smaller than right and top smaller than bottom. The order is (left, top, right, bottom)."),
+    ((1, 3, 2, 1), "edges", "in (1, 3, 2, 1), left must be smaller than right and top smaller than bottom. The order is (left, top, right, bottom)."),
+    ((0.1, 1, 0.4, 3), "edges", "in (0.1, 1, 0.4, 3), left must be smaller than right and top smaller than bottom. The order is (left, top, right, bottom)."),
+    ((-1, 0, 3, 5), "bounds", "(-1, 0, 3, 5) reaches outside the page (the picture is 320 × 480 pixels)."),
+    ((1, 0, 321, 480), "bounds", "(1, 0, 321, 480) reaches outside the page (the picture is 320 × 480 pixels)."),
+    ((0, 1, 320, 481), "bounds", "(0, 1, 320, 481) reaches outside the page (the picture is 320 × 480 pixels)."),
+])
+def test_box_edit_geometry_errors_without_writes(tmp_path, entry, code, message):
+    pages = fixture(tmp_path, [{"mdiv": 1, "systems": [[1]]}])
+    path = pages.parent / "boxes/print-p0001.json"
+    before = path.read_bytes()
+    with pytest.raises(ValueError) as caught:
+        pf.edit_measure_boxes(pages, "print-p0001", add=[entry])
+    assert caught.value.code == code
+    assert str(caught.value) == "print-p0001: " + message
+    assert path.read_bytes() == before
+    assert not path.with_name("print-p0001.original.json").exists()
+
+
+@pytest.mark.parametrize("index", [True, False, "0", 0.0, -1, 1])
+def test_box_edit_removal_index_errors(tmp_path, index):
+    pages = fixture(tmp_path, [{"mdiv": 1, "systems": [[1]]}])
+    with pytest.raises(ValueError) as caught:
+        pf.edit_measure_boxes(pages, "print-p0001", remove=[index])
+    assert str(caught.value) == f"print-p0001: {index!r} is not a box number (this page has boxes 0 to 0)."
+
+
+def test_box_edit_page_missing_and_iou_errors(tmp_path):
+    pages = fixture(tmp_path, [{"mdiv": 1, "systems": [[1]]}, {"role": "cover"}])
+    for page_id in ("unknown", "print-p0002"):
+        with pytest.raises(ValueError) as caught:
+            pf.edit_measure_boxes(pages, page_id)
+        assert str(caught.value) == f"{page_id}: expected a music page in {pages}"
+    box = (10, 20, 55, 80)
+    with pytest.raises(ValueError) as caught:
+        pf.edit_measure_boxes(pages, "print-p0001", add=[box])
+    assert str(caught.value) == f"print-p0001: {box} covers most of box 0."
+    # IoU exactly 0.5 is allowed, and a removed detector box does not block its replacement.
+    pf.edit_measure_boxes(pages, "print-p0001", add=[(10, 20, 55, 50)])
+    pf.edit_measure_boxes(pages, "print-p0001", add=[box], remove=[0])
+    path = pages.parent / "boxes/print-p0001.json"
+    path.unlink()
+    with pytest.raises(ValueError) as caught:
+        pf.edit_measure_boxes(pages, "print-p0001")
+    assert str(caught.value) == f"print-p0001: missing boxes file {path}"
+
+
+@pytest.mark.parametrize("entry", [(1, 2, float("nan"), 4), (1, 2, float("inf"), 4), None])
+def test_nonfinite_or_missing_added_box(tmp_path, entry):
+    pages = fixture(tmp_path, [{"mdiv": 1, "systems": [[1]]}])
+    with pytest.raises(ValueError, match="is not a box"):
+        pf.edit_measure_boxes(pages, "print-p0001", add=[entry])
+
+
+def test_approval_reviewer_change_key_order_dates_and_no_write(tmp_path, monkeypatch):
+    from datetime import date
+    path = tmp_path / "alignment.json"
+    review = {"p1": {"notes": "Épreuve", "date": None, "status": "unreviewed", "reviewer": None},
+              "p2": {"status": "approved", "reviewer": "Clara", "date": "2000-01-01", "extra": True}}
+    write_json(path, {"regions": [], "review": review, "pages": []})
+    assert pf.approve_alignment_review(path, " Clara ", date=date(2026, 1, 2)) == 1
+    data = read_json(path)
+    assert list(data) == ["regions", "review", "pages"]
+    assert list(data["review"]["p1"]) == list(review["p1"])
+    assert data["review"]["p1"] == {"notes": "Épreuve", "date": "2026-01-02", "status": "approved", "reviewer": "Clara"}
+    assert data["review"]["p2"] == review["p2"]
+    assert path.read_bytes() == (json.dumps(data, indent=2, ensure_ascii=False) + "\n").encode()
+    before, mtime = path.read_bytes(), path.stat().st_mtime_ns
+    with monkeypatch.context() as patch:
+        patch.setattr(pf, "_write_json", lambda *_: pytest.fail("repeat approval wrote JSON"))
+        assert pf.approve_alignment_review(path, "Clara", date="2026-12-31") == 0
+    assert path.read_bytes() == before and path.stat().st_mtime_ns == mtime
+    assert pf.approve_alignment_review(path, "Robert", date="2026-02-03") == 2
+    assert all(r["date"] == "2026-02-03" and r["reviewer"] == "Robert" for r in read_json(path)["review"].values())
+    assert pf.approve_alignment_review(path, "Johann") == 2
+    assert all(r["date"] == date.today().isoformat() for r in read_json(path)["review"].values())
+    for reviewer in ("", " \t", None, 1):
+        with pytest.raises(ValueError, match="^reviewer must be non-empty text$"):
+            pf.approve_alignment_review(path, reviewer)
+    with pytest.raises(ValueError, match="^date must be ISO date text or a datetime.date$"):
+        pf.approve_alignment_review(path, "Clara", date=1)
+
+
+@pytest.mark.parametrize("before,after", [
+    ('<mdiv xml:id="a>b"><score/></mdiv>', '<mdiv xml:id="a>b" n="1"><score/></mdiv>'),
+    ('<mdiv/>', '<mdiv n="1"/>'),
+    ('<mdiv />', '<mdiv  n="1"/>'),
+    ('<mdivFoo/><mdiv></mdiv>', '<mdivFoo/><mdiv n="1"></mdiv>'),
+    ('<!-- <mdiv><mdiv/> --><mdiv/>', '<!-- <mdiv><mdiv/> --><mdiv n="1"/>'),
+    ('<![CDATA[<mdiv/>]]><mdiv/>', '<![CDATA[<mdiv/>]]><mdiv n="1"/>'),
+    ('<?example <mdiv/> ?><mdiv/>', '<?example <mdiv/> ?><mdiv n="1"/>'),
+    ("\ufeff<?xml version='1.0'?>\r\n<mdiv xml:id='a>b' />\r\n", "\ufeff<?xml version='1.0'?>\r\n<mdiv xml:id='a>b'  n=\"1\"/>\r\n"),
+    ("<mdiv n = '7'/>", "<mdiv n = '7'/>"),
+    ('<mdiv n="1"/>', '<mdiv n="1"/>'),
+    ('<mdiv label=\' n="7"\'/>', '<mdiv label=\' n="7"\' n="1"/>'),
+    ('<mdiv xml:n="7"/>', '<mdiv xml:n="7" n="1"/>'),
+])
+def test_number_single_mdiv_preserves_all_other_text(before, after):
+    assert pf.number_single_mdiv(before) == after
+    assert pf.number_single_mdiv(after) == after
+
+
+@pytest.mark.parametrize("text,count", [("<mdivFoo/>", 0), ("<!-- <mdiv/> -->", 0),
+                                       ("<mdiv/><mdiv/>", 2), ('<mdiv n="1"/><mdiv/>', 2)])
+def test_number_single_mdiv_requires_exactly_one(text, count):
+    with pytest.raises(ValueError) as caught:
+        pf.number_single_mdiv(text)
+    assert str(caught.value) == f"expected exactly one <mdiv> start tag, found {count}"

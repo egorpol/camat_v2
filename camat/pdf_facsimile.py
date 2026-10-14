@@ -10,7 +10,7 @@ from __future__ import annotations
 import argparse
 from collections import Counter, defaultdict
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import date as local_date, datetime, timezone
 import hashlib
 import html
 import json
@@ -38,6 +38,49 @@ _TAG = re.compile(rb"""<[^>"']*(?:(?:"[^"]*"|'[^']*')[^>"']*)*>""")
 _XMLNS = re.compile(r'\sxmlns(?::([^\s=]+))?="([^"]*)"')
 _ID_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_.-]*\Z")
 _REVIEW_STATUSES = {"unreviewed", "approved", "rejected"}
+
+
+NON_MUSIC_PAGE_ROLES = ("cover", "title", "preface", "blank", "advertisement", "duplicate")
+POPPLER_INSTALL_HINTS = (
+    "  Windows / any system with conda:  conda install -c conda-forge poppler\n"
+    "  macOS with Homebrew:              brew install poppler\n"
+    "  Debian / Ubuntu:                  sudo apt install poppler-utils\n"
+    "  Google Colab:                     run  !apt-get install -y poppler-utils  in a new cell\n"
+)
+
+
+class _LayoutError(ValueError):
+    """Layout failure with details for clients that supply their own wording."""
+
+    def __init__(self, message: str, code: str, **details: object) -> None:
+        super().__init__(message)
+        self.code = code
+        self.details = details
+
+
+class _BoxEditError(ValueError):
+    """Box correction failure with details for presentation clients."""
+
+    def __init__(self, message: str, code: str, **details: object) -> None:
+        super().__init__(message)
+        self.code = code
+        self.details = details
+
+
+class _SystemCountError(ValueError):
+    """The detected system counts differ from the reviewed layout."""
+
+
+class _PageReviewError(ValueError):
+    """Page review fields need correction."""
+
+
+class _DetectorResponseError(ValueError):
+    """The detector returned invalid boxes."""
+
+
+class _IntegrationGateError(ValueError):
+    """The MEI and alignment failed a correspondence or preservation gate."""
 
 
 def _sha256(path: Path) -> str:
@@ -119,9 +162,7 @@ def render_pdf_pages(
     source_id = _source_id(pdf.stem if source_id is None else source_id)
     if isinstance(dpi, bool) or not isinstance(dpi, int) or dpi <= 0:
         raise ValueError("dpi must be a positive integer")
-    for program in ("pdftoppm", "pdfinfo"):
-        if shutil.which(program) is None:
-            raise RuntimeError(f"Poppler's {program} is missing; install it and put it on PATH")
+    check_poppler()
     version = _poppler(["pdftoppm", "-v"])
     renderer = (version.stderr or version.stdout).splitlines()[0]
     pdf_hash = _sha256(pdf)
@@ -169,6 +210,320 @@ def render_pdf_pages(
     return manifest
 
 
+def _ranges(labels: list[str]) -> str:
+    """['1', '2', '3', '7'] -> '1–3, 7'"""
+    parts, run = [], []
+    for label in labels:
+        if run and label.isdigit() and run[-1].isdigit() and int(label) == int(run[-1]) + 1:
+            run.append(label)
+            continue
+        if run:
+            parts.append(run[0] if len(run) == 1 else f"{run[0]}–{run[-1]}")
+        run = [label]
+    if run:
+        parts.append(run[0] if len(run) == 1 else f"{run[0]}–{run[-1]}")
+    return ", ".join(parts)
+
+
+def _labels(text: str, line_no: int, shown: str) -> list[str]:
+    """'1-4 6' -> ['1', '2', '3', '4', '6']"""
+    text = re.sub(r"\s*[-–—]\s*", "-", text.strip())
+    if not text:
+        raise ValueError(f"Line {line_no} ({shown}): one system is empty. Are there two commas in a row?")
+    labels = []
+    for token in text.split():
+        match = re.fullmatch(r"(\d+)-(\d+)", token)
+        if match:
+            first, last = int(match[1]), int(match[2])
+            if first > last:
+                raise ValueError(f"Line {line_no} ({shown}): {token} counts backwards. Write the smaller number first.")
+            labels.extend(str(n) for n in range(first, last + 1))
+        elif "-" in token:
+            raise ValueError(f"Line {line_no} ({shown}): I cannot read {token!r}. Write a range like 5-9.")
+        else:
+            labels.append(token)
+    return labels
+
+
+def parse_page_layout(text: str, *, page_count: int | None = None) -> dict[int, dict]:
+    """Parse one movement's page roles, printed pages and system bar labels.
+
+    Use ``PDF page | printed page | 1-4, 5-9`` for music, or
+    ``PDF page | cover`` (or another ``NON_MUSIC_PAGE_ROLES`` role).
+    Commas separate systems; spaces separate labels and numeric ranges.
+    Comments start with ``#``. A repeated boundary label denotes a split bar.
+    """
+    pages = {}
+    for line_no, raw in enumerate(text.splitlines(), 1):
+        line, shown = raw.split("#", 1)[0].strip(), raw.strip()
+        if not line:
+            continue
+        parts = [part.strip() for part in line.split("|")]
+        if not parts[0].isdigit():
+            raise ValueError(f"Line {line_no} ({shown}) must start with a PDF page number, "
+                             "for example: 2 | 160 | 1-4, 5-9, 10-14")
+        number = int(parts[0])
+        if number < 1 or (page_count is not None and number > page_count):
+            if page_count is None:
+                raise ValueError(f"Line {line_no} ({shown}): PDF page numbers must start at 1.")
+            raise ValueError(f"Line {line_no} ({shown}): the PDF only has pages 1 to {page_count}.")
+        if number in pages:
+            raise ValueError(f"Line {line_no} ({shown}): PDF page {number} is described twice.")
+        if len(parts) == 2:
+            kind = parts[1].lower()
+            if kind not in NON_MUSIC_PAGE_ROLES:
+                raise ValueError(f"Line {line_no} ({shown}): a page with music needs three parts, "
+                                 "PDF page | printed page | bars. For a page without music, use one of: "
+                                 + ", ".join(NON_MUSIC_PAGE_ROLES) + ".")
+            pages[number] = {"role": kind}
+        elif len(parts) == 3:
+            printed = None if parts[1] in ("", "-", "?") else parts[1]
+            systems = [_labels(system, line_no, shown) for system in parts[2].split(",")]
+            pages[number] = {"role": "music", "printed_page": printed, "systems": systems}
+        else:
+            raise ValueError(f"Line {line_no} ({shown}): expected 2 or 3 parts separated by |, found {len(parts)}.")
+    if not any(page["role"] == "music" for page in pages.values()):
+        raise ValueError("Your description has no page with music. "
+                         "Write one line per music page, for example: 2 | 160 | 1-4, 5-9, 10-14")
+    return dict(sorted(pages.items()))
+
+
+def _split_bars(pages: dict[int, dict]) -> list[str]:
+    """Bar numbers written at the end of one system and again at the start of the next."""
+    previous, split = None, []
+    for number in sorted(pages):
+        for system in pages[number].get("systems", []):
+            if previous is not None and system[0] == previous:
+                split.append(system[0])
+            previous = system[-1]
+    return split
+
+
+def check_poppler() -> None:
+    """Require pdftoppm and pdfinfo on PATH; the error lists ``POPPLER_INSTALL_HINTS``."""
+    for program in ("pdftoppm", "pdfinfo"):
+        if shutil.which(program) is None:
+            raise RuntimeError(f"Poppler's {program} is missing; install it and put it on PATH:\n"
+                               + POPPLER_INSTALL_HINTS.rstrip("\n"))
+
+
+def _mei_movement(mei: Path) -> tuple[str | None, list[str]]:
+    if not mei.is_file():
+        raise FileNotFoundError(f"The MEI file is missing: {mei}")
+    try:
+        root = ET.parse(mei).getroot()
+    except ET.ParseError as exc:
+        raise _LayoutError(f"{mei} is not a readable XML file: {exc}", "xml", problem=exc) from exc
+    mdivs = list(root.iter(MEI + "mdiv"))
+    if not mdivs:
+        raise _LayoutError(f"{mei} has no <mdiv> (movement). Is it an MEI file?", "no_mdiv")
+    if len(mdivs) > 1:
+        raise _LayoutError(f"{mei} has {len(mdivs)} movements (<mdiv> elements); expected one.",
+                           "multiple_mdivs", count=len(mdivs))
+    bars = []
+    for measure in mdivs[0].iter(MEI + "measure"):
+        if measure.get("n") is None:
+            raise _LayoutError(
+                f"The MEI has a <measure> without a bar number (@n), xml:id {measure.get(XML_ID)}. "
+                "Every bar needs a number.", "measure_n", xml_id=measure.get(XML_ID))
+        bars.append(measure.get("n"))
+    if not bars:
+        raise _LayoutError(f"{mei} has no <measure> elements.", "no_measures")
+    return mdivs[0].get("n"), bars
+
+
+def check_page_layout(layout: dict[int, dict], mei: str | Path) -> dict:
+    """Check one movement's layout against MEI labels, counting split bars once.
+
+    Return ``mdiv`` (its @n or None), ``bars`` in MEI order and ``split_bars``.
+    Missing/extra bars are reported as ranges before the first order mismatch.
+    """
+    mdiv_n, bars = _mei_movement(Path(mei))
+    sequence = []
+    for number in sorted(layout):
+        for system in layout[number].get("systems", []):
+            sequence.extend(system[1:] if sequence and system[0] == sequence[-1] else system)
+    missing = [bar for bar in bars if bar not in set(sequence)]
+    extra = [label for label in sequence if label not in set(bars)]
+    if missing or extra:
+        lines = ["Your description and the MEI do not have the same bars."]
+        if missing:
+            lines.append(f"  In the MEI but not in your description: {_ranges(missing)}")
+        if extra:
+            lines.append(f"  In your description but not in the MEI: {_ranges(extra)}")
+        lines.append(f"The MEI has {len(bars)} bars: {_ranges(bars)}.")
+        raise _LayoutError("\n".join(lines), "bars", missing=missing, extra=extra, bars=bars)
+    if sequence != bars:
+        index = next((i for i, (a, b) in enumerate(zip(sequence, bars)) if a != b), min(len(sequence), len(bars)))
+        before = f"after bar {bars[index - 1]}" if index else "at the start"
+        raise _LayoutError(
+            f"Your bars are not in the same order as in the MEI: {before}, the MEI continues with "
+            f"bar {bars[index] if index < len(bars) else '(end)'}, your description with "
+            f"bar {sequence[index] if index < len(sequence) else '(end)'}. "
+            "Is a bar listed twice or in the wrong place?", "order", index=index, bars=bars, sequence=sequence)
+    return {"mdiv": mdiv_n, "bars": bars, "split_bars": _split_bars(layout)}
+
+
+def _write_json_if_changed(path: Path, data: dict) -> bool:
+    encoded = (json.dumps(data, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
+    if path.read_bytes() == encoded:
+        return False
+    _write_json(path, data)
+    return True
+
+
+def apply_page_layout(pages_json: str | Path, layout: dict[int, dict], *, mdiv: str = "1") -> dict:
+    """Save reviewed page roles and one movement's system labels when changed.
+
+    Unlisted pages become unreviewed. An empty layout resets every page.
+    """
+    pages_json = Path(pages_json)
+    manifest = _read_json(pages_json)
+    numbers = {page["pdf_page_number"] for page in manifest["pages"]}
+    for number in layout:
+        if number not in numbers:
+            raise ValueError(f"PDF page {number} is not in {pages_json}")
+    for page in manifest["pages"]:
+        entry = layout.get(page["pdf_page_number"], {"role": "unreviewed"})
+        page.pop("mdiv", None)
+        page.pop("systems", None)
+        page["role"] = entry["role"]
+        page["printed_page"] = entry.get("printed_page")
+        if entry["role"] == "music":
+            page["mdiv"] = mdiv
+            page["systems"] = entry["systems"]
+    _write_json_if_changed(pages_json, manifest)
+    return manifest
+
+
+def _new_box(page: dict, entry: object) -> dict:
+    if (not isinstance(entry, (list, tuple)) or len(entry) != 4
+            or not all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in entry)):
+        raise _BoxEditError(f"{page['page_id']}: {entry!r} is not a box. "
+                            "Use four numbers: (left, top, right, bottom).", "malformed", entry=entry)
+    try:
+        left, top, right, bottom = (round(v) for v in entry)
+    except (ValueError, OverflowError) as problem:
+        raise _BoxEditError(f"{page['page_id']}: {entry!r} is not a box. "
+                            "Use four numbers: (left, top, right, bottom).",
+                            "malformed", entry=entry, problem=problem) from problem
+    if left >= right or top >= bottom:
+        raise _BoxEditError(f"{page['page_id']}: in {entry!r}, left must be smaller than right "
+                            "and top smaller than bottom. The order is (left, top, right, bottom).",
+                            "edges", entry=entry)
+    if left < 0 or top < 0 or right > page["width"] or bottom > page["height"]:
+        raise _BoxEditError(f"{page['page_id']}: {entry!r} reaches outside the page "
+                            f"(the picture is {page['width']} × {page['height']} pixels).", "bounds", entry=entry)
+    return dict(zip(_COORDS, (left, top, right, bottom)))
+
+
+def _overlap(a: dict, b: dict) -> float:
+    width = min(a["lrx"], b["lrx"]) - max(a["ulx"], b["ulx"])
+    height = min(a["lry"], b["lry"]) - max(a["uly"], b["uly"])
+    if width <= 0 or height <= 0:
+        return 0.0
+    area_a = (a["lrx"] - a["ulx"]) * (a["lry"] - a["uly"])
+    area_b = (b["lrx"] - b["ulx"]) * (b["lry"] - b["uly"])
+    return width * height / (area_a + area_b - width * height)
+
+
+def edit_measure_boxes(
+    pages_json: str | Path, page_id: str, *, add: tuple | list = (), remove: tuple | list = (),
+) -> dict:
+    """Rebuild boxes from detector indices and added pixel rectangles.
+
+    Preserve the first response in ``boxes/<page_id>.original.json``.
+    Empty corrections restore those bytes and remove the backup. Detector
+    run metadata is never changed. Added boxes may not cover a kept box
+    with intersection-over-union greater than 0.5.
+    """
+    pages_json = Path(pages_json)
+    manifest = _read_json(pages_json)
+    page = next((p for p in manifest["pages"] if p["page_id"] == page_id), None)
+    if page is None or page.get("role") != "music":
+        raise ValueError(f"{page_id}: expected a music page in {pages_json}")
+    path = pages_json.parent / "boxes" / f"{page_id}.json"
+    backup = path.with_name(f"{page_id}.original.json")
+    if not path.is_file():
+        raise ValueError(f"{page_id}: missing boxes file {path}")
+    added = [_new_box(page, entry) for entry in add]
+    removed = list(remove)
+    original = _read_json(backup if backup.is_file() else path)
+    boxes = _validate_boxes(original, page_id)
+    count = len(boxes)
+    for index in removed:
+        if not isinstance(index, int) or isinstance(index, bool) or not 0 <= index < count:
+            raise _BoxEditError(f"{page_id}: {index!r} is not a box number "
+                                f"(this page has boxes 0 to {count - 1}).", "index", index=index, count=count)
+    kept = [box for index, box in enumerate(boxes) if index not in removed]
+    for box in added:
+        for index, other in enumerate(boxes):
+            if index not in removed and _overlap(box, other) > 0.5:
+                raise _BoxEditError(f"{page_id}: {tuple(box.values())} covers most of box {index}.",
+                                    "overlap", box=box, index=index)
+    changed = False
+    if not added and not removed:
+        if backup.is_file():
+            data = backup.read_bytes()
+            if path.read_bytes() != data:
+                _atomic_write(path, data)
+                changed = True
+            backup.unlink()
+        edited = original
+    else:
+        edited = deepcopy(original)
+        edited["measures"] = kept + added
+        if not backup.is_file():
+            _atomic_write(backup, path.read_bytes())
+        changed = _write_json_if_changed(path, edited)
+    return {"page_id": page_id, "boxes": str(path), "measures": len(edited["measures"]), "changed": changed}
+
+
+def approve_alignment_review(
+    alignment_json: str | Path, reviewer: str, *, date: str | local_date | None = None,
+) -> int:
+    """Approve pages for a stripped reviewer name; return the changed count.
+
+    An approval for the same reviewer is preserved, including its date.
+    """
+    if not isinstance(reviewer, str) or not reviewer.strip():
+        raise ValueError("reviewer must be non-empty text")
+    reviewer = reviewer.strip()
+    if date is None:
+        date = local_date.today().isoformat()
+    elif isinstance(date, local_date):
+        date = date.isoformat()
+    elif not isinstance(date, str):
+        raise ValueError("date must be ISO date text or a datetime.date")
+    alignment_json = Path(alignment_json)
+    data = _read_json(alignment_json)
+    changed = 0
+    for entry in data.get("review", {}).values():
+        if entry.get("status") != "approved" or entry.get("reviewer") != reviewer:
+            entry.update(status="approved", reviewer=reviewer, date=date)
+            changed += 1
+    if changed:
+        _write_json(alignment_json, data)
+    return changed
+
+
+def number_single_mdiv(text: str) -> str:
+    """Add n="1" to the sole unnumbered mdiv start tag, preserving other text."""
+    # Match whole XML tokens, including quoted > characters, and skip content
+    # that can mention tags without introducing elements.
+    tokens = re.compile(r'''<!--.*?-->|<!\[CDATA\[.*?\]\]>|<\?.*?\?>|<[^>"']*(?:(?:"[^"]*"|'[^']*')[^>"']*)*>''', re.S)
+    matches = [m for m in tokens.finditer(text) if re.match(r"<mdiv(?=\s|/?>)", m[0])]
+    if len(matches) != 1:
+        raise ValueError(f"expected exactly one <mdiv> start tag, found {len(matches)}")
+    match = matches[0]
+    tag = match[0]
+    attributes = re.compile(r'''([^\s=<>/]+)\s*=\s*(?:"([^"]*)"|'([^']*)')''')
+    if any(attr[1] == "n" for attr in attributes.finditer(tag)):
+        return text
+    cut = len(tag) - (2 if tag.endswith("/>") else 1)
+    return text[:match.start()] + tag[:cut] + ' n="1"' + tag[cut:] + text[match.end():]
+
+
 def _label(value: object, page_id: str, field: str) -> str:
     if isinstance(value, bool) or not isinstance(value, (str, int)) or str(value) == "":
         raise ValueError(f"{page_id}: {field} must be a non-empty string or integer")
@@ -181,7 +536,7 @@ def _load_pages(path: Path) -> dict:
         raise ValueError(f"{path}: expected pages.json schema_version 1")
     _source_id(manifest.get("source_id"))
     if not isinstance(manifest.get("pages"), list):
-        raise ValueError(f"{path}: pages must be a list; review pages.json (step 3)")
+        raise _PageReviewError(f"{path}: pages must be a list; review pages.json")
     ids, numbers = set(), set()
     for page in manifest["pages"]:
         page_id = page.get("page_id", "<missing page_id>")
@@ -205,11 +560,11 @@ def _load_pages(path: Path) -> dict:
             raise ValueError(f"{page_id}: role must be text")
         if page["role"] != "music":
             if "systems" in page:
-                raise ValueError(f"{page_id}: non-music page has systems; check role and review pages.json (step 3)")
+                raise _PageReviewError(f"{page_id}: non-music page has systems; check role and review pages.json")
             continue
         systems = page.get("systems")
         if not isinstance(systems, list) or not systems:
-            raise ValueError(f"{page_id}: music page needs non-empty systems; review pages.json (step 3)")
+            raise _PageReviewError(f"{page_id}: music page needs non-empty systems; review pages.json")
         if "mdiv" in page:
             page["mdiv"] = _label(page["mdiv"], page_id, "mdiv")
         normalized = []
@@ -226,7 +581,7 @@ def _load_pages(path: Path) -> dict:
     manifest["pages"].sort(key=lambda p: p["pdf_page_number"])
     if not any(p["role"] == "music" for p in manifest["pages"]):
         names = ", ".join(p["page_id"] for p in manifest["pages"])
-        raise ValueError(f"No music pages ({names}); review pages.json (step 3)")
+        raise _PageReviewError(f"No music pages ({names}); review pages.json")
     return manifest
 
 
@@ -294,7 +649,10 @@ def detect_measure_boxes(
         uploaded = boxes is None
         if boxes is None:
             image = _verify_image(page, pages_json.parent)
-            payload = upload_image(image, detector_url, timeout, retries=retries, retry_delay=2)
+            try:
+                payload = upload_image(image, detector_url, timeout, retries=retries, retry_delay=2)
+            except ValueError as exc:
+                raise _DetectorResponseError(str(exc)) from exc
             _validate_boxes(payload, page["page_id"])
             path = pages_json.parent / "boxes" / f"{page['page_id']}.json"
             _write_json(path, payload)
@@ -321,7 +679,11 @@ def _check_bbox(box: list[int], page: dict) -> None:
                          f"for {page['width']}x{page['height']} image")
 
 
-def _ordered_systems(payload: dict, page: dict) -> list[list[dict]]:
+def group_measure_boxes_into_systems(payload: dict, page: dict) -> list[list[dict]]:
+    """Group boxes top to bottom, with each system ordered left to right.
+
+    Each item contains ``box_index``, rounded pixel ``bbox`` and ``center_y``.
+    """
     rows = []
     for index, box in enumerate(_validate_boxes(payload, page["page_id"])):
         bbox = [round(box[k]) for k in _COORDS]
@@ -338,6 +700,9 @@ def _ordered_systems(payload: dict, page: dict) -> list[list[dict]]:
     for system in systems:
         system.sort(key=lambda r: r["bbox"][0])
     return systems
+
+
+_ordered_systems = group_measure_boxes_into_systems
 
 
 def build_measure_alignment(pages_json: str | Path, *, output: str | Path | None = None) -> Path:
@@ -365,7 +730,7 @@ def build_measure_alignment(pages_json: str | Path, *, output: str | Path | None
                             f"printed page {page['printed_page']}): actual {actual}, expected {expected}")
         prepared.append((page, image, boxes, systems, _sha256(boxes)))
     if failures:
-        raise ValueError("System count gate failed; review boxes and pages.json:\n" + "\n".join(failures))
+        raise _SystemCountError("System count gate failed; review boxes and pages.json:\n" + "\n".join(failures))
     previous = _read_json(output).get("review", {}) if output.exists() else {}
     pages, regions, review = [], [], {}
     occurrences: Counter = Counter()
@@ -629,7 +994,7 @@ def _pair_measures(root: ET.Element, regions: list[dict]) -> tuple:
     for key in by_region.keys() - by_key.keys():
         misses.append(f"region {key[0]}/{key[1]} has no MEI measure")
     if misses:
-        raise ValueError("Measure/region gate failed: " + "; ".join(sorted(misses)))
+        raise _IntegrationGateError("Measure/region gate failed: " + "; ".join(sorted(misses)))
     assignments, region_measures = {}, {}
     for key, group in by_key.items():
         indices = sorted(by_region[key], key=lambda i: regions[i]["occurrence"])
@@ -826,7 +1191,7 @@ def integrate_pdf_facsimile(
         facsimile.tail = _leading_space(music, index)
     music.insert(index, facsimile)
     if _body_digest(root) != before:
-        raise ValueError("Body gate failed: facsimile integration changed the score; output not written")
+        raise _IntegrationGateError("Body gate failed: facsimile integration changed the score; output not written")
     reviews = alignment.get("review", {})
     aligned_pages = {p["page_id"]: p for p in alignment["pages"]}
     unreviewed = []
