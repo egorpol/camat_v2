@@ -8,6 +8,7 @@ music21
 numpy
 pandas
 partitura
+pillow>=10.1
 requests
 tqdm
 verovio

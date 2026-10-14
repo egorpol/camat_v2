@@ -44,6 +44,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   record block lists what remains, and the command exits with 1. New module
   `camat.mei_version`.
 
+### Changed
+
+- `pillow>=10.1` is now a declared runtime dependency. The PDF facsimile
+  modules draw overlays and page sheets with Pillow, and their font fallback
+  `ImageFont.load_default(size=...)` needs Pillow 10.1. Pillow was previously
+  installed only through matplotlib, which allows Pillow 9.
+
 ### Fixed
 
 - The interactive facsimile viewer now retains the rendered score page, both
