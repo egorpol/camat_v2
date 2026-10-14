@@ -70,7 +70,8 @@ Use this sequence when working from page files and source images:
 
 1. [Link one page to IIIF](../notebooks/mei_single_file_iiif_integration.ipynb),
    [Link a batch to IIIF](../notebooks/mei_batch_iiif_integration.ipynb),
-   or [Link a PDF facsimile](../notebooks/mei_pdf_facsimile_integration.ipynb),
+   or [Link a PDF facsimile](../notebooks/mei_pdf_facsimile_integration.ipynb)
+   (beginners: [guided version](../notebooks/mei_pdf_facsimile_guided.ipynb)),
    to add facsimile links and measure zones.
 2. [Combine MEI pages](../notebooks/mei_combine_pages.ipynb) to join page files
    into one `*_full.mei` score when needed.

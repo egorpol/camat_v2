@@ -366,3 +366,7 @@ print ends mid-line.
 Worked example: [`mei_pdf_facsimile_integration.ipynb`](../../notebooks/mei_pdf_facsimile_integration.ipynb)
 walks through this workflow on the Buxtehude Suite (DdT vol. 11, appendix
 no. 1) with a four-page BSB PDF.
+For readers new to Python and Jupyter,
+[`mei_pdf_facsimile_guided.ipynb`](../../notebooks/mei_pdf_facsimile_guided.ipynb)
+runs the same example in five steps for one movement: the pages are described
+in plain text lines, and the reader adds the box the detector misses.

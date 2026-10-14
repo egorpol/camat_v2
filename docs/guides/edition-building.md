@@ -35,6 +35,7 @@ general validation read-only; optional legacy rewrite helpers stay in
 | add a IIIF facsimile and detected measure zones to one clean MEI file                | [`mei_single_file_iiif_integration.ipynb`](../../notebooks/mei_single_file_iiif_integration.ipynb) |
 | add IIIF facsimiles and measure zones to several MEI files                           | [`mei_batch_iiif_integration.ipynb`](../../notebooks/mei_batch_iiif_integration.ipynb) |
 | link MEI to the pages of a PDF score, with local page images instead of IIIF         | [`mei_pdf_facsimile_integration.ipynb`](../../notebooks/mei_pdf_facsimile_integration.ipynb) ([guide](pdf-facsimiles.md)) |
+| do the same step by step, new to Python and Jupyter (one movement)                  | [`mei_pdf_facsimile_guided.ipynb`](../../notebooks/mei_pdf_facsimile_guided.ipynb) |
 | join facsimile-linked page files into one score                                      | [`mei_combine_pages.ipynb`](../../notebooks/mei_combine_pages.ipynb) |
 | run general MEI checks and write findings plus execution records (read-only)         | [`mei_check_report.ipynb`](../../notebooks/mei_check_report.ipynb) |
 | understand schemas, checks, statuses, reports and validation installation             | [General MEI validation](mei-validation.md) |

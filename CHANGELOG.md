@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Guided notebook `notebooks/mei_pdf_facsimile_guided.ipynb` for readers new
+  to Python and Jupyter: the same Buxtehude example in five steps (PDF to page
+  images, page description as plain text lines, measure boxes, merge into the
+  MEI, viewer), one movement only, with plain-language messages and an
+  exercise in which the reader adds the box the detector misses.
 - Tutorial notebook `notebooks/mei_pdf_facsimile_integration.ipynb` walks
   through `camat.pdf_facsimile` on the Buxtehude Suite (DdT vol. 11,
   appendix no. 1): fixture `test_corpus/Buxtehude-DdT11-app01-suite.mei`
