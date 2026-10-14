@@ -50,6 +50,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   zoom levels and pane scroll offsets, the facsimile surface, and the active
   measure across reloads, including auto-watch saves. A fresh launch still uses
   the configured initial page and zoom levels, even with a reused `viewer_id`.
+- The documentation build works again with pymdown-extensions 12.2, which
+  broke every API page under mkdocstrings 1.0.3. `docs/requirements.txt` now
+  pins mkdocstrings 1.0.7 and pymdown-extensions 12.2.
 
 ## [0.2.5][0.2.5] - 2026-10-02
 
