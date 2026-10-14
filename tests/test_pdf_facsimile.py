@@ -694,9 +694,8 @@ def test_render_input_ids_and_missing_poppler(tmp_path, monkeypatch):
     with pytest.raises(ValueError, match="source_id="):
         pf.render_pdf_pages(source, tmp_path / "pages")
     for program in ("pdftoppm", "pdfinfo"):
-        original = shutil.which
         with monkeypatch.context() as patch:
-            patch.setattr(pf.shutil, "which", lambda name: None if name == program else original(name))
+            patch.setattr(pf.shutil, "which", lambda name: None if name == program else f"/usr/bin/{name}")
             with pytest.raises(RuntimeError, match=program + " is missing"):
                 pf.render_pdf_pages(source, tmp_path / "pages", source_id="good")
 
