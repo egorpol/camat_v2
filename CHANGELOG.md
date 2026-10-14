@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased][Unreleased]
 
+## [0.2.6][0.2.6] - 2026-10-14
+
 ### Added
 
 - Reusable PDF facsimile building blocks for Poppler checks, layout text and
@@ -37,12 +39,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the bundled CMN schema. Besides relabelling the root, it rewrites the three
   invalid constructs Verovio's Humdrum import writes: hidden `mRest` becomes
   `mSpace`, the repeat-list `choice` becomes sibling `<expansion>` elements in
-  source order, and `dynam/@enclose` inside `<supplied>` is dropped (each drop
-  listed). Edits are anchored on `xml:id` in the original text, so embedded
-  namespaces and everything else keep their bytes. A file that would still be
-  invalid stays exactly as Verovio wrote it; the new `mei_version_rewrite`
-  record block lists what remains, and the command exits with 1. New module
-  `camat.mei_version`.
+  source order, and the `enclose` attribute of `dynam` inside `<supplied>` is
+  dropped (each drop listed). Edits are anchored on `xml:id` in the original
+  text, so embedded namespaces and everything else keep their bytes. A file
+  that would still be invalid stays exactly as Verovio wrote it; the new
+  `mei_version_rewrite` record block lists what remains, and the command exits
+  with 1. New module `camat.mei_version`.
 
 ### Changed
 
@@ -1059,7 +1061,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-[Unreleased]: https://github.com/egorpol/camat_v2/compare/v0.2.5...HEAD
+[Unreleased]: https://github.com/egorpol/camat_v2/compare/v0.2.6...HEAD
+[0.2.6]: https://github.com/egorpol/camat_v2/compare/v0.2.5...v0.2.6
 [0.2.5]: https://github.com/egorpol/camat_v2/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/egorpol/camat_v2/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/egorpol/camat_v2/compare/v0.2.2...v0.2.3

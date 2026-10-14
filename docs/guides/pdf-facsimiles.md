@@ -16,6 +16,8 @@ The workflow was developed on a digital edition of Webern's *Variations for
 Piano*, Op. 27, from the Universal Edition print of 1937: nine pages and 143
 measure regions linked to three movements.
 
+The PDF workflow described here requires CAMAT 0.2.6 or newer.
+
 ```mermaid
 flowchart TD
     pdf[PDF, frozen by SHA-256] --> pages[Page images + pages.json]

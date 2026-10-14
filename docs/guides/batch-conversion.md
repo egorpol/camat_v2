@@ -101,7 +101,7 @@ the MIDI route uses the quantized score in the
 
 Use `camat-convert --mei-version 5.1` or
 `convert_sources(..., mei_version="5.1")` when the result must validate against
-CAMAT's bundled MEI 5.1 CMN schema. The default keeps Verovio's output unchanged;
+CAMAT's bundled MEI 5.1 CMN schema (CAMAT 0.2.6 or newer). The default keeps Verovio's output unchanged;
 `5.1` is the only accepted target. For `6.0-dev` output, CAMAT relabels the root,
 replaces hidden measure rests with `mSpace`, unwraps safe repeat-list choices
 into sibling expansions in source order without unrolling repeats, and removes
