@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased][Unreleased]
 
+## [0.2.7][0.2.7] - 2026-10-21
+
+### Fixed
+
+- Regular MEI consistency reports now retain underfull and overfull layer
+  warnings when a measure carries `metcon="false"`. The finding context records
+  the marker and explains that pickups or partial voices may be intentional;
+  the marker no longer silently suppresses duration findings. Checks remain
+  read-only, and the existing warning severity and expected/actual values are
+  preserved. Layer duration findings now also record `layer_n`, which was
+  previously empty.
+
 ## [0.2.6][0.2.6] - 2026-10-14
 
 ### Added
@@ -1061,7 +1073,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-[Unreleased]: https://github.com/egorpol/camat_v2/compare/v0.2.6...HEAD
+[Unreleased]: https://github.com/egorpol/camat_v2/compare/v0.2.7...HEAD
+[0.2.7]: https://github.com/egorpol/camat_v2/compare/v0.2.6...v0.2.7
 [0.2.6]: https://github.com/egorpol/camat_v2/compare/v0.2.5...v0.2.6
 [0.2.5]: https://github.com/egorpol/camat_v2/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/egorpol/camat_v2/compare/v0.2.3...v0.2.4
