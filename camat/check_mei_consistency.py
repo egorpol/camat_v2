@@ -1238,11 +1238,17 @@ class MeiChecker:
             )
             return
 
-        if total != expected and measure.get("metcon") != "false":
+        if total != expected:
             direction = "underfull" if total < expected else "overfull"
             check = "layer_duration_underfull" if total < expected else "layer_duration_overfull"
             context = ""
-            if total < expected and space_count == 0:
+            if measure.get("metcon") == "false":
+                context = (
+                    'Measure carries @metcon="false"; the duration mismatch is '
+                    "reported for review and may be intentional, for example "
+                    "an anacrusis or a partial voice."
+                )
+            elif total < expected and space_count == 0:
                 context = "No <space> found in this layer; a missing space/rest is a likely cause."
             self.add(
                 "warning",
@@ -1253,6 +1259,8 @@ class MeiChecker:
                 expected=format_fraction(expected),
                 actual=format_fraction(total),
                 context=context,
+                staff_n=staff.get("n", ""),
+                layer_n=layer.get("n", ""),
             )
 
     def _check_pitch(self, note: ET.Element) -> None:

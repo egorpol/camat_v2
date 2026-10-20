@@ -101,6 +101,14 @@ between deliberately related inputs. A warning about an underfull layer is not
 by itself proof of invalid MEI. See [the scope limits](../known-limitations.md#general-mei-validation-scope)
 before interpreting editorial alternatives or unusual timing.
 
+Regular duration reports retain underfull and overfull findings for measures
+marked `metcon="false"`. The finding context records the marker and explains
+that the mismatch may be intentional, for example an anacrusis or a partial
+voice. This declaration no longer silently suppresses timing findings. The
+warnings include expected/actual durations and measure/staff/layer locations;
+they do not authorize automatic musical changes. Checks leave both the marker
+and the input MEI unchanged.
+
 **Consumer checks** optionally ask whether Verovio can load/render the score and
 CAMAT can produce event tables. **Image-network checks** optionally test HTTP
 image reachability/content type. These can expose practical problems despite
