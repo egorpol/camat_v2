@@ -57,8 +57,17 @@ jobs:
           cache-dependency-path: |
             requirements.txt
             pyproject.toml
-      - run: python -m pip install ".[test]"
-      - run: python -m pytest tests --ignore=tests/release -q
+      - name: Install Poppler and RELAX NG processor
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends poppler-utils libxml2-utils
+      - run: python -m pip install ".[test,validation]"
+      - run: python -m pytest tests --ignore=tests/release -q -rs --junitxml=unit-results.xml
+      - name: Require every test to run without skips
+        run: >-
+          python -c "import sys, xml.etree.ElementTree as ET;
+          skipped = sum(int(suite.get('skipped', 0)) for suite in ET.parse('unit-results.xml').getroot().iter('testsuite'));
+          sys.exit(f'{skipped} tests skipped; the pytest step lists why.' if skipped else None)"
 
   docs:
     name: Strict documentation build
