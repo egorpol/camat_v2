@@ -6,7 +6,10 @@ the editorial notes (``<annot>``), and optionally a facsimile beside it with a
 zone for every bar. The facsimile adapter ``pdf`` reads the ``pages.json`` of
 :mod:`camat.pdf_facsimile` and the zones that ``integrate_pdf_facsimile``
 wrote: visitors open their own copy of the PDF, or see hosted page images,
-shown at once or after a confirmation.
+shown at once or after a confirmation. The adapter ``iiif`` loads each page
+from the IIIF Image API request in its ``<graphic>``, as camat's IIIF
+integration writes it, at the width the browser needs. Works are offered as
+tabs, or in a select when there are more than eight.
 
 Everything is checked before anything is written. The output folder is
 replaced as a whole, so it must be empty, missing, or an earlier build; inside
@@ -37,8 +40,11 @@ from . import __version__
 MEI = "{http://www.music-encoding.org/ns/mei}"
 XML_ID = "{http://www.w3.org/XML/1998/namespace}id"
 MARKER = ".camat-site"
-TEMPLATE_FILES = ("index.html", "viewer.css", "viewer.js", "facsimile-pdf.js")
-FACSIMILE_TYPES = ("pdf",)
+TEMPLATE_FILES = ("index.html", "viewer.css", "viewer.js", "facsimile-pdf.js", "facsimile-iiif.js")
+FACSIMILE_TYPES = ("pdf", "iiif")
+WORK_MENUS = ("tabs", "select")
+# Without "work_menu" in the config, more works than this come in a select.
+WORK_TABS_MAX = 8
 
 LABELS = {
     "work": "Movement",
@@ -57,9 +63,13 @@ VEROVIO_OPTIONS = {
 }
 
 _KEYS = {"title", "description", "heading", "subtitle", "lang", "storage_prefix", "links", "footer",
-         "labels", "works", "verovio", "ref_base", "facsimile"}
+         "labels", "works", "work_menu", "verovio", "ref_base", "facsimile"}
 _WORK_KEYS = {"id", "label", "title", "mei"}
 _PDF_KEYS = {"type", "pages", "pdf", "images"}
+_IIIF_KEYS = {"type", "confirm", "button"}
+# An Image API request: {base}/{region}/{size}/{rotation}/{quality}.{format}, region "full".
+_IIIF_REQUEST = re.compile(r"/full/[^/]+/[^/]+/[^/.]+\.[A-Za-z0-9]+\Z")
+_PIXELS = re.compile(r"[1-9][0-9]*\Z")
 _PREFIX = re.compile(r"[a-z0-9][a-z0-9-]{0,63}\Z")
 _WORK_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*\Z")
 _LANG = re.compile(r"[A-Za-z]{2,3}(-[A-Za-z0-9]{1,8})*\Z")
@@ -131,6 +141,7 @@ def _read_mei(path: Path, where: str, problems: list[str]) -> dict | None:
         if graphic is None:
             continue
         surfaces[surface.get(XML_ID)] = {
+            "target": graphic.get("target") or "",
             "file": (graphic.get("target") or "").rsplit("/", 1)[-1],
             "width": graphic.get("width"), "height": graphic.get("height"),
         }
@@ -208,6 +219,13 @@ def _check_works(config: dict, base: Path, problems: list[str]) -> list[dict]:
     return checked
 
 
+def _check_links(works: list[dict], problems: list[str]) -> None:
+    for work in works:
+        dangling = work["info"]["dangling"]
+        if dangling:
+            problems.append(f"{work['path'].name}: @facs points at no zone or surface: {', '.join(sorted(set(dangling))[:5])}")
+
+
 def _check_pdf_facsimile(facsimile: dict, base: Path, works: list[dict], problems: list[str]) -> dict | None:
     _unknown(facsimile, _PDF_KEYS, "facsimile.", problems)
     pages_value = facsimile.get("pages")
@@ -255,9 +273,6 @@ def _check_pdf_facsimile(facsimile: dict, base: Path, works: list[dict], problem
     used = {}
     for work in works:
         info = work["info"]
-        if info["dangling"]:
-            shown = ", ".join(sorted(set(info["dangling"]))[:5])
-            problems.append(f"{work['path'].name}: @facs points at no zone or surface: {shown}")
         for surface_id in sorted(info["used_surfaces"]):
             surface = info["surfaces"][surface_id]
             page = pages.get(surface["file"])
@@ -277,11 +292,36 @@ def _check_pdf_facsimile(facsimile: dict, base: Path, works: list[dict], problem
                 problems.append(f"facsimile.images: {image} differs from its sha256 in {pages_path.name}")
     keep = ("page_id", "image", "width", "height", "sha256", "pdf_page_number", "printed_page")
     return {
-        "pages_path": pages_path, "pdf": pdf, "source": source, "images": images, "used": used,
+        "type": "pdf", "pages_path": pages_path, "pdf": pdf, "source": source, "images": images, "used": used,
         "manifest": {"schema_version": 1, "source_id": manifest.get("source_id"), "pdf_sha256": manifest.get("pdf_sha256"),
                      "page_count": manifest.get("page_count", len(manifest["pages"])),
                      "pages": [{key: p.get(key) for key in keep} for p in manifest["pages"] if isinstance(p, dict)]},
     }
+
+
+def _check_iiif_facsimile(facsimile: dict, works: list[dict], problems: list[str]) -> dict:
+    """Each page's graphic must be an https Image API request with its size in pixels."""
+    _unknown(facsimile, _IIIF_KEYS, "facsimile.", problems)
+    confirm = _text(facsimile, "confirm", problems, where="facsimile.")
+    button = _text(facsimile, "button", problems, where="facsimile.")
+    hosts = set()
+    for work in works:
+        info = work["info"]
+        for surface_id in sorted(info["used_surfaces"]):
+            surface = info["surfaces"][surface_id]
+            parts = urlsplit(surface["target"])
+            if parts.scheme != "https" or not parts.netloc or not _IIIF_REQUEST.search(parts.path) or parts.query:
+                problems.append(f"{work['path'].name}: surface {surface_id} shows {surface['target']!r}, not an https "
+                                "IIIF Image API request such as https://host/iiif/id/full/1000,/0/default.jpg")
+                continue
+            if not all(_PIXELS.match(surface[key] or "") for key in ("width", "height")):
+                problems.append(f"{work['path'].name}: surface {surface_id} needs the graphic's width and height in "
+                                f"pixels (the zones' coordinates), got {surface['width']!r}×{surface['height']!r}")
+                continue
+            hosts.add(parts.netloc)
+    if not hosts:
+        problems.append("facsimile: no page break (<pb facs>) points at a surface with a IIIF image")
+    return {"type": "iiif", "confirm": confirm, "button": button, "hosts": sorted(hosts)}
 
 
 def _git_root(path: Path) -> Path | None:
@@ -318,7 +358,7 @@ def _facsimile_pane(label: str, intro: str) -> str:
             '          <canvas id="facs-canvas"></canvas>\n'
             '          <svg id="zones" class="zones" preserveAspectRatio="none" aria-hidden="true"></svg>\n'
             '        </div>\n'
-            f'        <p class="facs-meta"><span id="facs-label"></span> <button type="button" id="facs-close" class="link">Hide the {_escape(label.lower())}</button></p>\n'
+            f'        <p class="facs-meta"><span id="facs-label"></span> · <button type="button" id="facs-close" class="link">Hide the {_escape(label.lower())}</button></p>\n'
             '        <p id="facs-warning" class="warning" hidden></p>\n'
             '      </div>\n'
             '      <p id="facs-error" class="error" hidden></p>\n'
@@ -339,6 +379,24 @@ def _pdf_intro(facsimile: dict) -> str:
                   '        <label class="button">Open the PDF… <input type="file" id="pdf-input" accept="application/pdf,.pdf"></label>',
                   '        <p class="hint">Or drop the file on this panel.</p>']
     return "".join(line + "\n" for line in lines)
+
+
+def _iiif_intro(facsimile: dict) -> str:
+    lines = []
+    if facsimile["confirm"]:
+        lines.append(f'        <p class="warning">{_escape(facsimile["confirm"])}</p>')
+    lines += [f'        <button type="button" id="scan-show" class="button">{_escape(facsimile["button"] or "Show the facsimile")}</button>',
+              f'        <p class="hint">The page images load from {_escape(", ".join(facsimile["hosts"]))}.</p>']
+    return "".join(line + "\n" for line in lines)
+
+
+def _work_menu(config: dict, works: list[dict], label: str, problems: list[str]) -> str:
+    menu = config.get("work_menu", "select" if len(works) > WORK_TABS_MAX else "tabs")
+    if menu not in WORK_MENUS:
+        problems.append(f"work_menu: expected one of {', '.join(WORK_MENUS)}, got {menu!r}")
+    if menu == "select":
+        return f'<label class="work-select" hidden>{_escape(label)} <select id="works"></select></label>'
+    return f'<div class="tabs" id="works" role="tablist" aria-label="{_escape(label)}" hidden></div>'
 
 
 def _template(name: str) -> bytes:
@@ -374,15 +432,17 @@ def _render_index(config: dict, works: list[dict], labels: dict, runtime: dict, 
         heading=_escape(heading),
         subtitle=f"    <p>{_escape(subtitle)}</p>\n" if subtitle else "",
         links=f"    <p>{' · '.join(rendered_links)}</p>\n" if rendered_links else "",
-        work_label=_escape(labels["work"]),
+        work_menu=_work_menu(config, works, labels["work"], problems),
         mark_notes_label=_escape(labels["mark_notes"]),
         bar_boxes_label=_escape(labels["bar_boxes"]),
         hint=_escape(labels["hint"]),
         notes_label=_escape(labels["notes"]),
         panes_class="" if facsimile else " single",
-        facsimile=_facsimile_pane(labels["facsimile"], _pdf_intro(facsimile)) if facsimile else "",
+        facsimile=_facsimile_pane(labels["facsimile"], (_pdf_intro if facsimile["type"] == "pdf" else _iiif_intro)(facsimile))
+        if facsimile else "",
         footer=f"    <p>{_escape(footer)}</p>\n" if footer else "",
-        credits=", PDFs with <a href=\"https://mozilla.github.io/pdf.js/\">pdf.js</a> 6.3.289" if facsimile and facsimile["pdf"] else "",
+        credits=", PDFs with <a href=\"https://mozilla.github.io/pdf.js/\">pdf.js</a> 6.3.289"
+        if facsimile and facsimile.get("pdf") else "",
         link_example=_escape(example),
     )
 
@@ -428,13 +488,19 @@ def _plan(config: dict, base: Path, config_path: Path | None, out: Path) -> tupl
         if not isinstance(raw, dict) or raw.get("type") not in FACSIMILE_TYPES:
             problems.append(f"facsimile.type: expected one of {', '.join(FACSIMILE_TYPES)}")
         else:
-            facsimile = _check_pdf_facsimile(raw, base, works, problems)
+            _check_links(works, problems)
+            if raw["type"] == "pdf":
+                facsimile = _check_pdf_facsimile(raw, base, works, problems)
+            else:
+                facsimile = _check_iiif_facsimile(raw, works, problems)
 
     runtime = {"prefix": prefix, "labels": labels, "verovio": verovio, "ref_base": ref_base, "facsimile": None}
     plan: dict[str, bytes | Path] = {}
     for work in works:
         plan[f"mei/{work['path'].name}"] = work["path"]
-    if facsimile is not None:
+    if facsimile is not None and facsimile["type"] == "iiif":
+        runtime["facsimile"] = {"type": "iiif", "confirm": bool(facsimile["confirm"])}
+    elif facsimile is not None:
         images = facsimile["images"]
         if images is not None and images.get("copy"):
             for name, page in sorted(facsimile["used"].items()):
@@ -451,7 +517,7 @@ def _plan(config: dict, base: Path, config_path: Path | None, out: Path) -> tupl
     index = _render_index(config, works, labels, runtime, facsimile, problems)
     plan["index.html"] = index.encode("utf-8")
     for name in TEMPLATE_FILES[1:]:
-        if name != "facsimile-pdf.js" or facsimile is not None:
+        if not name.startswith("facsimile-") or (facsimile is not None and name == f"facsimile-{facsimile['type']}.js"):
             plan[name] = _template(name)
     plan[".nojekyll"] = b""
     plan[MARKER] = b"Built by camat-build-site (camat.web_edition). This folder is replaced on every build.\n"
@@ -459,7 +525,7 @@ def _plan(config: dict, base: Path, config_path: Path | None, out: Path) -> tupl
     inputs = [base, *(w["path"] for w in works)]
     if config_path is not None:
         inputs.append(config_path)
-    if facsimile is not None:
+    if facsimile is not None and facsimile["type"] == "pdf":
         inputs.append(facsimile["pages_path"])
     _check_out(out, inputs, problems)
     if problems:

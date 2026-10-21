@@ -19,10 +19,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `integrate_pdf_facsimile` writes: visitors open their own copy of the PDF
   (pdf.js 6.3.289; a different PDF gets a warning) or see page images, copied
   into the site or hosted elsewhere and checked against their hashes, shown at
-  once or after a confirmation. Every input is checked before anything is
-  written; the output folder is replaced only if it is empty or an earlier
-  build, and inside a git repository only if it is named `_site`. The builder
-  uses only the standard library.
+  once or after a confirmation. The `iiif` adapter loads each page from the
+  IIIF Image API request in its `<graphic>`, as camat's IIIF integration writes
+  it, at the width the pane needs (in 500-pixel steps, never wider than the
+  graphic), shown at once or after a confirmation. Works come as tabs, or as a
+  select when there are more than eight (`work_menu` overrides). Every input is
+  checked before anything is written; the output folder is replaced only if it
+  is empty or an earlier build, and inside a git repository only if it is named
+  `_site`. The builder uses only the standard library.
 
 ### Changed
 

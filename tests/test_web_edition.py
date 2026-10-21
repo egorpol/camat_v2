@@ -1,7 +1,8 @@
 """Checks of the web-edition template and its builder on camat's own small example.
 
 The example runs the PDF facsimile chain of :mod:`camat.pdf_facsimile` on
-generated page images (no Poppler) and builds a site from its output.
+generated page images (no Poppler) and builds a site from its output; the IIIF
+variant points the same surfaces at an image server.
 """
 from __future__ import annotations
 
@@ -84,6 +85,25 @@ def chain(root: Path) -> tuple[Path, Path]:
     pf.integrate_pdf_facsimile(str(score(root / "input" / "example.mei")), str(manifest), str(alignment), str(linked))
     pf.write_page_breaks(str(linked), str(manifest), str(linked))
     return linked, manifest
+
+
+def iiif_mei(root: Path, host: str = "iiif.example.org") -> Path:
+    """The example MEI with each graphic an IIIF Image API request, as camat's IIIF integration writes it."""
+    text = (root / "mei/example.mei").read_text(encoding="utf-8")
+    text, count = re.subn(r'target="[^"]*/page-(\d{4})\.png"',
+                          lambda m: f'target="https://{host}/iiif/print-{m[1]}/full/320,/0/default.jpg"', text)
+    assert count == 2
+    path = root / "iiif/example.mei"
+    path.parent.mkdir(exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def iiif_config(root: Path, **changes) -> Path:
+    iiif_mei(root)
+    changes = {"works": [{"id": "I", "label": "I", "title": "Piece I", "mei": "iiif/example.mei"}],
+               "facsimile": {"type": "iiif"}, **changes}
+    return site_config(root, **changes)
 
 
 def site_config(root: Path, **changes) -> Path:
@@ -183,7 +203,8 @@ MUTATIONS = {
     "label": (lambda c, e: c["labels"].update(bars=3), "labels.bars: expected text"),
     "unknown label": (lambda c, e: c["labels"].update(movement="x"), "labels.movement: unknown key"),
     "ref_base": (lambda c, e: c.update(ref_base="https://example.org/mei"), "ref_base: expected a URL ending"),
-    "type": (lambda c, e: c["facsimile"].update(type="iiif"), "facsimile.type: expected one of pdf"),
+    "type": (lambda c, e: c["facsimile"].update(type="tiff"), "facsimile.type: expected one of pdf, iiif"),
+    "work_menu": (lambda c, e: c.update(work_menu="menu"), "work_menu: expected one of tabs, select, got 'menu'"),
     "url and copy": (lambda c, e: c["facsimile"]["images"].update(url="https://example.org/"), "give either url"),
     "http images": (lambda c, e: c["facsimile"]["images"].update(copy=False, url="http://example.org/"), "expected an https URL"),
     "no source": (lambda c, e: c["facsimile"].update(pdf=False, images=None), "give pdf, images or both"),
@@ -287,6 +308,85 @@ def test_hosted_images_pdf_only_and_score_only_sites(example):
     assert report["works"][0]["facsimile_pages"] == 2
 
 
+def test_iiif_site(example):
+    out = example / "public"
+    report = we.build_site(iiif_config(example), out)
+    assert report["files"] == [".camat-site", ".nojekyll", "facsimile-iiif.js", "index.html", "mei/example.mei",
+                               "viewer.css", "viewer.js", "works.json"]
+    assert report["works"][0]["facsimile_pages"] == 2 and report["works"][0]["measures_with_zone"] == 5
+    assert (out / "facsimile-iiif.js").read_bytes() == (TEMPLATE / "facsimile-iiif.js").read_bytes()
+    index = (out / "index.html").read_text(encoding="utf-8")
+    assert runtime_config(index)["facsimile"] == {"type": "iiif", "confirm": False}
+    assert 'id="scan-show" class="button">Show the facsimile</button>' in index
+    assert "The page images load from iiif.example.org." in index
+    assert 'class="warning">' not in index and "pdf.js" not in index and 'id="pdf-input"' not in index
+
+    gated = {"type": "iiif", "confirm": "Images © the library.", "button": "Show the scans"}
+    we.build_site(iiif_config(example, facsimile=gated), out)
+    index = (out / "index.html").read_text(encoding="utf-8")
+    assert runtime_config(index)["facsimile"] == {"type": "iiif", "confirm": True}
+    assert '<p class="warning">Images © the library.</p>' in index and ">Show the scans</button>" in index
+
+
+def _iiif_target(example: Path, old: str, new: str) -> None:
+    path = example / "iiif/example.mei"
+    text = path.read_text(encoding="utf-8")
+    assert old in text
+    path.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+
+IIIF_MUTATIONS = {
+    "local image": (lambda e: _iiif_target(e, "https://iiif.example.org/iiif/print-0001/full/320,/0/default.jpg",
+                                           "../facsimiles/print/page-0001.png"),
+                    "shows '../facsimiles/print/page-0001.png', not an https IIIF Image API request"),
+    "http": (lambda e: _iiif_target(e, "https://iiif.example.org/iiif/print-0002", "http://iiif.example.org/iiif/print-0002"),
+             "not an https IIIF Image API request"),
+    "info.json": (lambda e: _iiif_target(e, "print-0001/full/320,/0/default.jpg", "print-0001/info.json"),
+                  "not an https IIIF Image API request"),
+    "no size": (lambda e: _iiif_target(e, 'width="320" height="480"', 'height="480"'),
+                "needs the graphic's width and height in pixels"),
+    "no page images": (lambda e: _iiif_target(e, 'facs="#surface-print-p0001"', "") or
+                       _iiif_target(e, 'facs="#surface-print-p0002"', ""),
+                       "no page break (<pb facs>) points at a surface with a IIIF image"),
+}
+
+
+@pytest.mark.parametrize("name", IIIF_MUTATIONS)
+def test_iiif_problems(example, name):
+    config = iiif_config(example)
+    mutate, message = IIIF_MUTATIONS[name]
+    mutate(example)
+    with pytest.raises(we.SiteConfigError) as error:
+        we.build_site(config, example / "public")
+    assert any(message in problem for problem in error.value.problems), error.value.problems
+    assert not (example / "public").exists()
+
+
+def test_iiif_config_keys(example):
+    config = read_json(iiif_config(example))
+    config["facsimile"].update(pages="facsimiles/print/pages.json", confirm=1)
+    with pytest.raises(we.SiteConfigError) as error:
+        we.build_site(config, example / "public", base_dir=example)
+    assert [p.split(" (")[0] for p in error.value.problems] == ["facsimile.pages: unknown key", "facsimile.confirm: expected text, got int"]
+
+
+def test_work_menu(example):
+    works = []
+    for number in range(1, we.WORK_TABS_MAX + 2):
+        shutil.copyfile(example / "mei/example.mei", example / f"mei/work-{number}.mei")
+        works.append({"id": f"w{number}", "label": str(number), "title": f"Work {number}", "mei": f"mei/work-{number}.mei"})
+    cases = [(works[:we.WORK_TABS_MAX], {}, "tabs"), (works, {}, "select"),
+             (works, {"work_menu": "tabs"}, "tabs"), (works[:2], {"work_menu": "select"}, "select")]
+    for chosen, extra, menu in cases:
+        we.build_site(site_config(example, works=chosen, facsimile=None, **extra), example / "public")
+        index = (example / "public/index.html").read_text(encoding="utf-8")
+        if menu == "tabs":
+            assert '<div class="tabs" id="works" role="tablist" aria-label="Piece" hidden></div>' in index
+        else:
+            assert '<label class="work-select" hidden>Piece <select id="works"></select></label>' in index
+        assert len(read_json(example / "public/works.json")["works"]) == len(chosen)
+
+
 def test_dict_config_uses_base_dir(example):
     config = read_json(site_config(example))
     with pytest.raises(we.SiteConfigError, match="does not exist"):
@@ -316,7 +416,7 @@ def test_template_files_are_package_data_and_the_cli_is_declared():
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="Node.js required")
-@pytest.mark.parametrize("name", ["viewer.js", "facsimile-pdf.js"])
+@pytest.mark.parametrize("name", ["viewer.js", "facsimile-pdf.js", "facsimile-iiif.js"])
 def test_viewer_modules_parse(name, tmp_path):
     # node --check reads .mjs as an ES module, as the browser does.
     module = tmp_path / (Path(name).stem + ".mjs")

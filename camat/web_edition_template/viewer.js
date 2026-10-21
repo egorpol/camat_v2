@@ -82,6 +82,7 @@ function readModel(work, text, url) {
     if (!graphic) continue;
     model.surfaces.set(xmlId(surface), {
       id: xmlId(surface),
+      target: graphic.getAttribute('target') || '',
       file: (graphic.getAttribute('target') || '').split('/').pop(),
       width: Number(graphic.getAttribute('width')),
       height: Number(graphic.getAttribute('height')),
@@ -140,9 +141,15 @@ function setStatus(text, id = '') {
   $('status').replaceChildren(id ? `${text} · ` : text, code);
 }
 
-function fillWorkTabs() {
-  const tabs = $('works');
-  tabs.replaceChildren(...works.map((work) => {
+// Tabs, or a select when the site has many works (the builder chose the element).
+function fillWorkMenu() {
+  const menu = $('works');
+  if (menu.localName === 'select') {
+    menu.replaceChildren(...works.map((work) => new Option(work.title ? `${work.label}: ${work.title}` : work.label, work.id)));
+    menu.parentElement.hidden = works.length < 2;
+    return;
+  }
+  menu.replaceChildren(...works.map((work) => {
     const button = document.createElement('button');
     button.type = 'button';
     button.setAttribute('role', 'tab');
@@ -152,7 +159,7 @@ function fillWorkTabs() {
     if (work.title) button.title = work.title;
     return button;
   }));
-  tabs.hidden = works.length < 2;
+  menu.hidden = works.length < 2;
 }
 
 async function showWork(id) {
@@ -165,7 +172,8 @@ async function showWork(id) {
   toolkit.loadData(model.text);
   model.pageCount = toolkit.getPageCount();
   Object.assign(state, { work: id, model, pinned: null, annot: null });
-  document.querySelectorAll('#works button').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.work === id)));
+  if ($('works').localName === 'select') $('works').value = id;
+  else document.querySelectorAll('#works button').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.work === id)));
   $('edition').textContent = model.edition;
   $('edition').hidden = !model.edition;
   renderAnnots(model);
@@ -361,19 +369,31 @@ async function renderFacsimile() {
   const canvas = $('facs-canvas');
   const zones = $('zones');
   const surface = model.surfaces.get(model.pages[state.page - 1]?.surface);
-  if (!surface) {
+  const clear = () => {
     canvas.width = 0;
     zones.replaceChildren();
+  };
+  if (!surface) {
+    clear();
     $('facs-label').textContent = 'No facsimile page is linked to this page.';
     return;
   }
   const pixels = (canvas.parentElement.clientWidth || 600) * (window.devicePixelRatio || 1);
+  // A page that takes a while (a remote image server) dims the one still shown.
+  const slow = setTimeout(() => canvas.parentElement.classList.add('is-loading'), 200);
   let image;
   try {
     image = await facs.draw(surface, pixels, () => token !== facsToken);
   } catch (error) {
-    if (token === facsToken) showFacsError(error.message);
+    if (token === facsToken) {
+      clear();
+      $('facs-label').replaceChildren(facs.label(surface));
+      showFacsError(error.message);
+    }
     return;
+  } finally {
+    clearTimeout(slow);
+    if (token === facsToken) canvas.parentElement.classList.remove('is-loading');
   }
   if (!image || token !== facsToken) return;
   showFacsError('');
@@ -391,8 +411,9 @@ async function renderFacsimile() {
       if (model.noted.has(z.measure)) rect.classList.add('has-note');
       return rect;
     }));
-  $('facs-label').textContent = facs.label(surface);
+  $('facs-label').replaceChildren(facs.label(surface));
   applyHighlights();
+  facs.prefetch?.(model.surfaces.get(model.pages[state.page]?.surface), pixels);
 }
 
 async function loadFacsimile() {
@@ -445,6 +466,7 @@ function bindUi() {
     const button = e.target.closest('button[data-work]');
     if (button) location.hash = `#${encodeURIComponent(button.dataset.work)}`;
   });
+  $('works').addEventListener('change', (e) => { location.hash = `#${encodeURIComponent(e.target.value)}`; });
   $('prev').addEventListener('click', () => showPage(state.page - 1));
   $('next').addEventListener('click', () => showPage(state.page + 1));
   $('mark-notes').addEventListener('change', (e) => changeSetting('markNotes', e.target.checked));
@@ -497,7 +519,7 @@ async function main() {
   applySettings();
   try {
     works = (await fetchJson('works.json')).works;
-    fillWorkTabs();
+    fillWorkMenu();
     if (CONFIG.facsimile) facs = await loadFacsimile();
     toolkit = await loadVerovio();
     toolkit.setOptions(CONFIG.verovio);
