@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased][Unreleased]
 
+### Changed
+
+- CI runs the checkout test suite with the `validation` extra, Poppler and
+  `xmllint`, and fails if any test skips. Fifteen tests that needed them had
+  never run on CI: MEI version and conversion checks against RELAX NG, PDF
+  page rendering, and the end-to-end validation of the PDF tutorial.
+
 ### Fixed
 
 - `camat.pdf_facsimile.render_pdf_pages` renders each page's crop box, the

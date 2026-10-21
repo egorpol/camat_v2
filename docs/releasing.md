@@ -146,7 +146,8 @@ requests, and manual dispatches. It includes:
   SHA-256 checksums;
 - the installed-wheel release runner on Python 3.11–3.14;
 - the full checkout unit/regression suite on Python 3.11 (the oldest supported
-  version), excluding the installed-wheel suite that runs separately;
+  version) with the `validation` extra, Poppler and `xmllint`, requiring zero
+  skipped tests, excluding the installed-wheel suite that runs separately;
 - the required installed-wheel validation gate on Python 3.11 and 3.14,
   with SaxonC and `xmllint`, requiring zero skipped tests;
 - a strict MkDocs build on Python 3.11, matching Read the Docs.
@@ -188,8 +189,10 @@ python -m pytest tests --ignore=tests/release -q
 python -m mkdocs build --strict
 ```
 
-Also provide libxml2's `xmllint` on `PATH` for RELAX NG integration tests.
-The basic checkout/wheel jobs install the `test` extra; validation-dependent
+Also provide libxml2's `xmllint` and Poppler's `pdftoppm` and `pdfinfo` on
+`PATH`; pytest skips the RELAX NG and PDF rendering tests without them. The CI
+checkout job installs all of them and fails on any skipped test. The
+installed-wheel smoke jobs install only the `test` extra; validation-dependent
 tests may skip there. The separate validation jobs install all processors and
 run the focused tests without skips before publishing is allowed. GitHub
 Actions retains their JUnit results, installed dependency versions and wheel

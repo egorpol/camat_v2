@@ -25,10 +25,12 @@ Open the local documentation at <http://127.0.0.1:8000/>. Run MkDocs through
 the same Python environment that imports CAMAT, so its dependencies and the
 Material theme are available.
 
-Install libxml2's `xmllint` on `PATH` to exercise RELAX NG integration tests.
+Install libxml2's `xmllint` on `PATH` to exercise RELAX NG integration tests,
+and Poppler's `pdftoppm` and `pdfinfo` for the PDF rendering tests.
 The `validation` extra enables the real SaxonC/Schematron tests. Dependency
 skips are reported by pytest and do not establish a complete validation pass;
 see the [validation baseline](../test_corpus/validation_baseline/README.md).
+CI installs all of these and fails on any skipped test.
 
 Tests run from a Git checkout: they use fixtures and archived notebook probes
 that are deliberately excluded from the PyPI source distribution. The
