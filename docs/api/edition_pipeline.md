@@ -123,6 +123,20 @@ The BSB example downloader is shared by both notebooks.
         - merge_with_mei
         - open_result
 
+## Web edition
+
+Build a static site from finished MEI files and a JSON site config; see
+[From MEI to a web edition](../guides/web-edition.md) for the config keys.
+
+::: camat.web_edition
+    options:
+      members:
+        - SiteConfigError
+        - LABELS
+        - VEROVIO_OPTIONS
+        - build_site
+        - main
+
 ## IIIF validation and orchestration
 
 ::: camat.validate_iiif_vs_local
