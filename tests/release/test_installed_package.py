@@ -189,3 +189,22 @@ def test_mensural_text_normalization_helpers() -> None:
     assert count == 1 and replacements == {"semibrevis": 1}
     assert meter_count == 1
     assert 'meter.count="4"' in with_meter and 'meter.unit="4"' in with_meter
+
+
+def test_web_edition_template_is_installed_and_builds(tmp_path: Path) -> None:
+    from camat import web_edition
+
+    template = files("camat").joinpath("web_edition_template")
+    shipped = sorted(item.name for item in template.iterdir())
+    assert shipped == sorted(web_edition.TEMPLATE_FILES)
+    for name in shipped:
+        assert template.joinpath(name).read_bytes() == (REPO_ROOT / "camat/web_edition_template" / name).read_bytes()
+    schema = files("camat").joinpath("schemas", "site.schema.json")
+    assert schema.read_bytes() == (REPO_ROOT / "camat/schemas/site.schema.json").read_bytes()
+    config = {"title": "Release smoke test", "storage_prefix": "release-smoke",
+              "works": [{"id": "basic", "mei": str(MEI_FIXTURE)}]}
+    # The release matrix keeps pytest's temp folder inside the checkout, where
+    # the builder only replaces a folder named _site.
+    report = web_edition.build_site(config, tmp_path / "_site", base_dir=tmp_path)
+    assert "viewer.js" in report["files"] and "facsimile-pdf.js" not in report["files"]
+    assert (tmp_path / "_site/mei/basic.mei").read_bytes() == MEI_FIXTURE.read_bytes()

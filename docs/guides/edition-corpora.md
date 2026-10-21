@@ -4,10 +4,11 @@ title: Edition corpora
 # Edition corpora
 
 CAMAT's MEI and editorial workflows were developed while encoding volumes of
-*Denkmäler deutscher Tonkunst* and dealing with the problems that work raised:
-page-level OMR, IIIF facsimiles and measure zones, assembly into work-level
-scores, publication headers, correction in
-[mei-friend](https://mei-friend.mdw.ac.at/), and automated consistency checks.
+*Denkmäler deutscher Tonkunst* and a Webern edition from a PDF scan, and
+dealing with the problems that work raised: page-level OMR, IIIF and PDF
+facsimiles with measure zones, assembly into work-level scores, publication
+headers, correction in [mei-friend](https://mei-friend.mdw.ac.at/), automated
+consistency checks, and web viewers.
 
 The reusable tooling lives in this package (Workflow 1:
 [Editing music with the MEI data format](edition-building.md)). The MEI files themselves live in
@@ -18,7 +19,7 @@ Tutorial notebooks in this checkout use small portable examples under
 `test_corpus/`. Point the same notebooks at a clone of an edition repository
 when you are working on a volume.
 
-## Volumes in progress
+## Editions in progress
 
 ### DdT 1, vol. 11 — Buxtehude instrumental works
 
@@ -34,13 +35,15 @@ zones.
 |                       |                                                                                                                                                                                                      |
 | --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Digital facsimile     | [BSB `bsb00023199`](https://digitale-sammlungen.de/en/view/bsb00023199)                                                                                                                             |
+| Web viewer            | <https://egorpol.github.io/DdT_1_vol_11/>                                                                                                                                                            |
+| Release               | [0.9.0](https://github.com/egorpol/DdT_1_vol_11/releases/tag/v0.9.0) (pre-release, 2026-10-21)                                                                                                        |
 | Work-level MEI        | `11_buxtehude_sonatas_final/`                                                                                                                                                                      |
 | Page-level OMR source | `11_buxtehude_dietrich_buxtehudes_instrumentalwerke_bsb00023199/`                                                                                                                                  |
 | Editorial notes       | [editorial workflow](https://github.com/egorpol/DdT_1_vol_11/blob/main/docs/editorial-workflow.md), [encoding profile](https://github.com/egorpol/DdT_1_vol_11/blob/main/docs/mei-encoding-profile.md) |
 
-Several sonatas are already **corrected**; others are **combined** and still
-under review; a few remain **pending**. The repository README keeps the
-work-by-work table current.
+In the 0.9.0 pre-release, 16 of the 17 works are **corrected**; Op. II/1 is
+still **pending**, and none is **finalized** yet. The repository README keeps
+the work-by-work table current.
 
 ### DdT 1, vol. 29/30 — Instrumentalkonzerte deutscher Meister
 
@@ -58,6 +61,32 @@ files have not yet been assembled.
 | Digital facsimile        | [BSB `bsb00023250`](https://www.digitale-sammlungen.de/en/view/bsb00023250)                         |
 | Page-level MEI           | `29_30_instrumentalkonzerte_deutscher_meister_bsb00023250/`                                        |
 | Planned work-level files | listed in the[repository README](https://github.com/egorpol/DdT_1_vol_29_30#planned-work-level-files) |
+
+### Webern, *Variations for Piano*, Op. 27
+
+Repository: [`egorpol/webern_op27`](https://github.com/egorpol/webern_op27)
+
+An MEI 5.1 CMN encoding of Anton Webern's *Variations for Piano*, Op. 27,
+after the Universal Edition print, plate U.E. 10881 (Vienna, 1937), in the
+copy scanned as IMSLP file 28271. It aims to encode all printed detail and
+links every bar to its region on the printed page, one MEI file per
+movement. The facsimile is a PDF, linked with the
+[PDF facsimile workflow](pdf-facsimiles.md), which was developed on this
+edition.
+
+|                   |                                                                                                    |
+| ----------------- | -------------------------------------------------------------------------------------------------- |
+| Facsimile source  | [IMSLP 28271](https://imslp.org/wiki/Special:ImagefromIndex/28271)                                 |
+| MEI               | `mei/`, one file per movement                                                                      |
+| Web viewer        | <https://egorpol.github.io/webern_op27/>                                                           |
+| Release           | [0.9.0](https://github.com/egorpol/webern_op27/releases/tag/v0.9.0) (pre-release, 2026-10-18)      |
+
+All three movements have been proofread against the print, system by
+system; corrections are welcome before 1.0.
+
+Both web viewers have their own code. CAMAT's
+[web-edition template](web-edition.md) builds a basic viewer of the same kind
+for other editions.
 
 ## Other MEI corpora
 
@@ -78,7 +107,7 @@ notation support.
 
 ## Status terms
 
-Both repositories use the same work-level vocabulary:
+The two DdT repositories use the same work-level vocabulary:
 
 | Status        | Meaning                                                                          |
 | ------------- | -------------------------------------------------------------------------------- |

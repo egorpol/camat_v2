@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="$lang">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>$title</title>
+  <meta name="description" content="$description">
+  <meta name="generator" content="camat $camat_version">
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="viewer.css">
+  <script type="application/json" id="site-config">$config_json</script>
+  <script type="module" src="viewer.js"></script>
+</head>
+<body>
+  <header class="masthead">
+    <h1>$heading</h1>
+$subtitle    <p id="edition" hidden></p>
+$links  </header>
+
+  <nav class="toolbar" aria-label="Score navigation">
+    $work_menu
+    <div class="pager">
+      <button type="button" id="prev" aria-label="Previous page">‹</button>
+      <span id="page-label">–</span>
+      <button type="button" id="next" aria-label="Next page">›</button>
+    </div>
+    <fieldset class="settings">
+      <legend class="visually-hidden">Display</legend>
+      <label><input type="checkbox" id="mark-notes"> $mark_notes_label</label>
+      <label><input type="checkbox" id="measure-boxes"> $bar_boxes_label</label>
+    </fieldset>
+    <output id="status" aria-live="polite">$hint</output>
+  </nav>
+
+  <main class="panes$panes_class">
+    <section class="pane" aria-label="Score">
+      <div id="score" class="paper score"><p class="message">Loading Verovio…</p></div>
+      <section class="notes" id="notes" aria-labelledby="notes-heading" hidden>
+        <h2 id="notes-heading">$notes_label</h2>
+        <ol id="annots"></ol>
+      </section>
+    </section>
+$facsimile  </main>
+
+  <footer>
+$footer    <p>Rendered in your browser with <a href="https://www.verovio.org/">Verovio</a> <span id="verovio-version"></span>$credits. Built with <a href="https://github.com/egorpol/camat_v2">camat</a> $camat_version. Links: <code>#$link_example</code> opens a bar; arrow keys turn pages.</p>
+  </footer>
+</body>
+</html>

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "camat"
-version = "0.2.7"
+version = "0.2.8"
 description = "CAMAT: tools for symbolic music parsing, analysis, and rendering."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -32,7 +32,7 @@ classifiers = [
 dynamic = ["dependencies"]
 
 [project.optional-dependencies]
-test = ["pytest>=8", "packaging>=24"]
+test = ["pytest>=8", "packaging>=24", "jsonschema>=4.18"]
 notebooks = ["jupyterlab>=4"]
 validation = ["lxml>=5", "saxonche>=12,<14", "Pillow>=10"]
 
@@ -52,6 +52,7 @@ camat-integrate-annotations = "camat.upload_and_integrate_measure_annotations:ma
 camat-pdf-facsimile = "camat.pdf_facsimile:main"
 camat-run-pipeline = "camat.run_pipeline:main"
 camat-validate-iiif = "camat.validate_iiif_vs_local:main"
+camat-build-site = "camat.web_edition:main"
 camat-fetch-tutorials = "camat.notebook_workspace:main"
 
 [project.urls]
@@ -68,7 +69,7 @@ include-package-data = false
 include = ["camat*"]
 
 [tool.setuptools.package-data]
-camat = ["examples/*.mei", "examples/*.svg", "schemas/*.rng", "schemas/schxslt/*.xsl", "schemas/schxslt/compile/*.xsl", "schemas/schxslt/util/*.xsl", "schemas/schxslt/README.md"]
+camat = ["examples/*.mei", "examples/*.svg", "schemas/*.rng", "schemas/*.json", "schemas/schxslt/*.xsl", "schemas/schxslt/compile/*.xsl", "schemas/schxslt/util/*.xsl", "schemas/schxslt/README.md", "web_edition_template/*.html", "web_edition_template/*.css", "web_edition_template/*.js"]
 
 [tool.setuptools.dynamic]
 dependencies = { file = ["requirements.txt"] }

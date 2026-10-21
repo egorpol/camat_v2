@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased][Unreleased]
 
+## [0.2.8][0.2.8] - 2026-10-21
+
+### Added
+
+- A web-edition template: `camat.web_edition.build_site(config, out)` and
+  `camat-build-site CONFIG OUT` build a static site from MEI files and a JSON
+  site config. Visitors' browsers render each work with Verovio 6.3.0 (from
+  jsDelivr, with SRI) at its encoded page and system breaks, with editorial
+  notes, bar boxes, deep links `#<work>/<bar>`, and settings stored under the
+  config's `storage_prefix`. The `pdf` facsimile adapter reads the
+  `pages.json` of `camat.pdf_facsimile` and the zones that
+  `integrate_pdf_facsimile` writes: visitors open their own copy of the PDF
+  (pdf.js 6.3.289; a different PDF gets a warning) or see page images, copied
+  into the site or hosted elsewhere and checked against their hashes, shown at
+  once or after a confirmation. The `iiif` adapter loads each page from the
+  IIIF Image API request in its `<graphic>`, as camat's IIIF integration writes
+  it, at the width the pane needs (in 500-pixel steps, never wider than the
+  graphic), shown at once or after a confirmation; MEI from the IIIF route
+  needs `camat-link-pb-surface --apply FILE.mei` first, because that route
+  leaves the `facs` attribute of `pb` unset. Works come as tabs, or as a
+  select when there are more than eight (`work_menu` overrides). Every input is
+  checked before anything is written; the output folder is replaced only if it
+  is empty or an earlier build, and inside a git repository only if it is named
+  `_site`. The builder uses only the standard library. The config may give
+  `"version": 1` (the only version so far) and a footer with links; camat
+  ships its JSON Schema as `camat/schemas/site.schema.json` for editors.
+  Guide: "From MEI to a web edition".
+- Notebook `mei_web_edition.ipynb`: builds a web edition from the result of
+  the PDF tutorial (default), the IIIF tutorial or the guided PDF notebook,
+  adding missing page-break links to the MEI, and serves a local preview with
+  a stop cell. Without a result it builds a site of the score alone from
+  `test_corpus/`.
+- Docs: "Edition corpora" adds the Webern Op. 27 edition, both editions' web
+  viewers and their 0.9.0 pre-releases.
+
 ### Changed
 
 - `import camat` no longer imports every submodule up front. A public name such
@@ -1084,7 +1119,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-[Unreleased]: https://github.com/egorpol/camat_v2/compare/v0.2.7...HEAD
+[Unreleased]: https://github.com/egorpol/camat_v2/compare/v0.2.8...HEAD
+[0.2.8]: https://github.com/egorpol/camat_v2/compare/v0.2.7...v0.2.8
 [0.2.7]: https://github.com/egorpol/camat_v2/compare/v0.2.6...v0.2.7
 [0.2.6]: https://github.com/egorpol/camat_v2/compare/v0.2.5...v0.2.6
 [0.2.5]: https://github.com/egorpol/camat_v2/compare/v0.2.4...v0.2.5

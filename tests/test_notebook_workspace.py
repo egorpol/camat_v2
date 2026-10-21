@@ -335,6 +335,7 @@ def _notebook_code(name: str) -> str:
         "mei_facsimile_viewer.ipynb",
         "mei_pdf_facsimile_integration.ipynb",
         "mei_pdf_facsimile_guided.ipynb",
+        "mei_web_edition.ipynb",
         "cloud_setup.ipynb",
     ],
 )
