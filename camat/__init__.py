@@ -1,139 +1,15 @@
 __version__ = "0.2.7"
 
-from .pattern_search import (
-    convolution_map,
-    count_kernel_placements,
-    kernel_placement_starts,
-    pad_for_same,
-    run_pattern_search,
-    score_kernel_at,
-)
-from .parser_registry import (
-    get_parse_files,
-    list_parsers,
-    parse_files,
-    parse_files_quiet,
-)
-from .mensural_backend import parse_files_mensural
-from .verovio_backend import parse_files_verovio
-from .verovio_render import (
-    get_toolkit as vrv_get_toolkit,
-    vrv_set_options,
-    vrv_guess_input_from,
-    vrv_load_data,
-    vrv_load_from_file,
-    vrv_load_from_url,
-    vrv_convert_to_mei,
-    vrv_render_page,
-    vrv_render_all_pages,
-    vrv_display_svg,
-    vrv_quiet,
-    vrv_find_elements_at_time,
-    vrv_timemap,
-    vrv_get_mei,
-    vrv_set_mei,
-    vrv_mask_mei_to_ids,
-    vrv_render_selection_excerpt,
-    vrv_render_symbolic_selection,
-    vrv_render_source_context,
-    vrv_insert_annot,
-    vrv_has_mei_export,
-    vrv_set_additional_css,
-    vrv_highlight_ids,
-    vrv_crop_svg_to_ids,
-    vrv_crop_svgs_to_ids,
-    vrv_debug_info,
-    vrv_inject_highlight_css,
-    vrv_insert_annot_plist,
-    vrv_insert_annots_by_tstamps,
-    vrv_process_annotations,
-    vrv_namespaces,
-)
-from .overlay import (
-    select_metric_df,
-    kernel_from_variants,
-    compute_top_matches_df,
-    build_match_records,
-    build_overlay_source,
-    overlay_top_matches_on_piano_roll,
-)
-from .analysis_utils import (
-    parse_pitch_name,
-    name_to_midi,
-    midi_to_name,
-    build_pitch_counts,
-    sort_pitch_counts,
-    plot_pitch_distribution,
-    display_pitch_distribution,
-    build_pc_counts_from_names,
-    build_pitch_class_distributions,
-    display_pitch_class_distributions,
-    build_duration_counts,
-    plot_duration_distribution,
-    display_duration_distribution,
-    display_filtered_piano_roll,
-    extract_selected_xml_ids,
-    check_monophonic_input,
-    melodic_interval_distribution,
-    display_melodic_interval_distribution,
-    display_successive_pitch_transition_heatmaps,
-    build_onset_position_counts,
-    display_onset_position_histogram,
-)
-from .timeline_backend import (
-    TimelineParseResult,
-    humdrum_rap_to_timeline,
-    parse_rap_humdrum_file,
-    parse_rap_humdrum_source,
-    parse_files_timeline,
-    build_timeline_duration_counts,
-    build_timeline_onset_position_counts,
-    add_timeline_rhythm_analysis,
-    timeline_to_mei,
-    save_timeline_mei,
-    load_timeline_mei_with_verovio,
-    find_duplicate_mei_xml_ids,
-)
-from .parser_utils import (
-    expand_file_sources,
-    format_parsed_summary,
-    print_parsed_summary,
-)
-from .conversion import (
-    DownloadOptions,
-    MidiImportOptions,
-    convert_sources,
-    print_conversion_summary,
-    set_validation_stage,
-)
-from .midi_timing import MidiTimingResult, read_midi_timing
-from .facsimile_viewer import (
-    FacsimileViewerCache,
-    FacsimileUnavailableError,
-    InteractiveFacsimileViewer,
-    ResolvedMeiSource,
-    apply_facsimile_layout,
-    build_facsimile_viewer,
-    build_verovio_options,
-    display_path,
-    find_camat_root,
-    format_facsimile_summary,
-    infer_facsimile_layout,
-    launch_interactive_facsimile_viewer,
-    read_facsimile_model,
-    render_verovio_pages,
-    resolve_mei_source,
-    resolve_mei_source_info,
-    resolve_repo_path,
-)
-from .mei_renderer import (
-    DEFAULT_MEI,
-    InteractiveMeiRenderer,
-    launch_interactive_mei_renderer,
-    make_mei_renderer_html,
-    validate_mei_text,
-)
-from .check_mei_consistency import Finding, MeiChecker, check_mei_files
+# Public names are loaded on first access (PEP 562), so ``import camat`` needs
+# only the standard library and stays fast. ``camat.<name>`` and
+# ``from camat import <name>`` work as before; the submodule is imported then.
+import importlib
+from typing import TYPE_CHECKING
+
+# These two functions share their submodule's name. Importing the submodule
+# (``mei_consistency_workflow`` does) would set ``camat.<name>`` to the module,
+# so ``__getattr__`` would never run; bind them now. Both modules use only the
+# standard library.
 from .convert_harm_startid_to_tstamp import (
     ConversionResult as HarmConversionResult,
     HarmConversion,
@@ -145,94 +21,485 @@ from .link_pb_to_surface import (
     PbSurfaceRow,
     link_file as link_pb_to_surface,
 )
-from .mei_consistency_workflow import (
-    MEI_CMN_51_SCHEMA,
-    VEROVIO_REPORT_COLUMNS,
-    AnnotationResult,
-    CleanupResult,
-    CombineResult,
-    SchemaValidationResult,
-    VerovioLogResult,
-    WriteResult,
-    annotate_mei_from_report,
-    annotation_filter_description,
-    apply_safe_cleanup,
-    combine_meis,
-    facsimile_graphic_targets,
-    figured_bass_report_rows,
-    iiif_graphic_target_rows,
-    load_report,
-    make_unique_xml_id_copies,
-    normalize_single_layer_number_copies,
-    page_break_facs_report_rows,
-    prepare_pages_for_combine,
-    report_summary,
-    resolve_mei_inputs,
-    run_checker,
-    run_editorial_checks,
-    run_relaxng_validation,
-    run_verovio_warning_check,
-    source_snippet,
-    strip_ppq_copies,
-)
-from .facsimile_downloader import (
-    download_facsimile_image,
-    download_images as download_facsimile_images,
-    parse_bsb_filename_stem,
-    parse_bsb_viewer_url,
-    resolve_iiif_image_url,
-    stage_mei_copy,
-)
-from .iiif_page import (
-    IiifPagePlan,
-    collect_iiif_jobs_from_directory,
-    format_iiif_page_plans,
-    format_iiif_page_results,
-    integrate_iiif_page,
-    integrate_iiif_pages,
-    plan_iiif_page,
-    plan_iiif_pages,
-)
-from .integrate_measure_annotations import (
-    get_body_measures,
-    get_measure_alignment_report,
-    integrate_annotation_file,
-    parse_mei,
-    validate_measure_alignment,
-)
-from .page_filter import (
-    filter_mei_files,
-    page_in_ranges,
-    page_number_for_path,
-    parse_page_ranges,
-)
-from .upload_and_integrate_measure_annotations import (
-    DETECTOR_URL,
-    SkipFile as MeasureDetectionSkip,
-    build_annotation_tree,
-    process_mei_file as detect_and_integrate_mei,
-)
-from .validate_iiif_vs_local import (
-    IIIF_IMAGE_URL_TEMPLATE,
-    find_image_for_stem,
-    parse_graphic_from_output_mei,
-    read_image_size,
-    sha256_bytes,
-    sha256_file,
-)
-from .mensural_utils import (
-    DEFAULT_MENSURAL_DURATION_MAP,
-    inject_default_meter_signature_in_mei_text,
-    inject_default_meter_signature_in_mei_file,
-    normalize_mensural_durations_in_mei_text,
-    normalize_mensural_durations_in_mei_file,
-    normalize_mensural_mei_for_partitura_text,
-    normalize_mensural_mei_for_partitura_file,
-)
 
-from .mei_validation import ValidationResult, run_mei_validation, camat_provenance
-from .mei_schematron import run_schematron_validation
-from .mei_resources import image_resource_rows
+if TYPE_CHECKING:
+    from .pattern_search import (
+        convolution_map,
+        count_kernel_placements,
+        kernel_placement_starts,
+        pad_for_same,
+        run_pattern_search,
+        score_kernel_at,
+    )
+    from .parser_registry import (
+        get_parse_files,
+        list_parsers,
+        parse_files,
+        parse_files_quiet,
+    )
+    from .mensural_backend import parse_files_mensural
+    from .verovio_backend import parse_files_verovio
+    from .verovio_render import (
+        get_toolkit as vrv_get_toolkit,
+        vrv_set_options,
+        vrv_guess_input_from,
+        vrv_load_data,
+        vrv_load_from_file,
+        vrv_load_from_url,
+        vrv_convert_to_mei,
+        vrv_render_page,
+        vrv_render_all_pages,
+        vrv_display_svg,
+        vrv_quiet,
+        vrv_find_elements_at_time,
+        vrv_timemap,
+        vrv_get_mei,
+        vrv_set_mei,
+        vrv_mask_mei_to_ids,
+        vrv_render_selection_excerpt,
+        vrv_render_symbolic_selection,
+        vrv_render_source_context,
+        vrv_insert_annot,
+        vrv_has_mei_export,
+        vrv_set_additional_css,
+        vrv_highlight_ids,
+        vrv_crop_svg_to_ids,
+        vrv_crop_svgs_to_ids,
+        vrv_debug_info,
+        vrv_inject_highlight_css,
+        vrv_insert_annot_plist,
+        vrv_insert_annots_by_tstamps,
+        vrv_process_annotations,
+        vrv_namespaces,
+    )
+    from .overlay import (
+        select_metric_df,
+        kernel_from_variants,
+        compute_top_matches_df,
+        build_match_records,
+        build_overlay_source,
+        overlay_top_matches_on_piano_roll,
+    )
+    from .analysis_utils import (
+        parse_pitch_name,
+        name_to_midi,
+        midi_to_name,
+        build_pitch_counts,
+        sort_pitch_counts,
+        plot_pitch_distribution,
+        display_pitch_distribution,
+        build_pc_counts_from_names,
+        build_pitch_class_distributions,
+        display_pitch_class_distributions,
+        build_duration_counts,
+        plot_duration_distribution,
+        display_duration_distribution,
+        display_filtered_piano_roll,
+        extract_selected_xml_ids,
+        check_monophonic_input,
+        melodic_interval_distribution,
+        display_melodic_interval_distribution,
+        display_successive_pitch_transition_heatmaps,
+        build_onset_position_counts,
+        display_onset_position_histogram,
+    )
+    from .timeline_backend import (
+        TimelineParseResult,
+        humdrum_rap_to_timeline,
+        parse_rap_humdrum_file,
+        parse_rap_humdrum_source,
+        parse_files_timeline,
+        build_timeline_duration_counts,
+        build_timeline_onset_position_counts,
+        add_timeline_rhythm_analysis,
+        timeline_to_mei,
+        save_timeline_mei,
+        load_timeline_mei_with_verovio,
+        find_duplicate_mei_xml_ids,
+    )
+    from .parser_utils import (
+        expand_file_sources,
+        format_parsed_summary,
+        print_parsed_summary,
+    )
+    from .conversion import (
+        DownloadOptions,
+        MidiImportOptions,
+        convert_sources,
+        print_conversion_summary,
+        set_validation_stage,
+    )
+    from .midi_timing import MidiTimingResult, read_midi_timing
+    from .facsimile_viewer import (
+        FacsimileViewerCache,
+        FacsimileUnavailableError,
+        InteractiveFacsimileViewer,
+        ResolvedMeiSource,
+        apply_facsimile_layout,
+        build_facsimile_viewer,
+        build_verovio_options,
+        display_path,
+        find_camat_root,
+        format_facsimile_summary,
+        infer_facsimile_layout,
+        launch_interactive_facsimile_viewer,
+        read_facsimile_model,
+        render_verovio_pages,
+        resolve_mei_source,
+        resolve_mei_source_info,
+        resolve_repo_path,
+    )
+    from .mei_renderer import (
+        DEFAULT_MEI,
+        InteractiveMeiRenderer,
+        launch_interactive_mei_renderer,
+        make_mei_renderer_html,
+        validate_mei_text,
+    )
+    from .check_mei_consistency import Finding, MeiChecker, check_mei_files
+    from .mei_consistency_workflow import (
+        MEI_CMN_51_SCHEMA,
+        VEROVIO_REPORT_COLUMNS,
+        AnnotationResult,
+        CleanupResult,
+        CombineResult,
+        SchemaValidationResult,
+        VerovioLogResult,
+        WriteResult,
+        annotate_mei_from_report,
+        annotation_filter_description,
+        apply_safe_cleanup,
+        combine_meis,
+        facsimile_graphic_targets,
+        figured_bass_report_rows,
+        iiif_graphic_target_rows,
+        load_report,
+        make_unique_xml_id_copies,
+        normalize_single_layer_number_copies,
+        page_break_facs_report_rows,
+        prepare_pages_for_combine,
+        report_summary,
+        resolve_mei_inputs,
+        run_checker,
+        run_editorial_checks,
+        run_relaxng_validation,
+        run_verovio_warning_check,
+        source_snippet,
+        strip_ppq_copies,
+    )
+    from .facsimile_downloader import (
+        download_facsimile_image,
+        download_images as download_facsimile_images,
+        parse_bsb_filename_stem,
+        parse_bsb_viewer_url,
+        resolve_iiif_image_url,
+        stage_mei_copy,
+    )
+    from .iiif_page import (
+        IiifPagePlan,
+        collect_iiif_jobs_from_directory,
+        format_iiif_page_plans,
+        format_iiif_page_results,
+        integrate_iiif_page,
+        integrate_iiif_pages,
+        plan_iiif_page,
+        plan_iiif_pages,
+    )
+    from .integrate_measure_annotations import (
+        get_body_measures,
+        get_measure_alignment_report,
+        integrate_annotation_file,
+        parse_mei,
+        validate_measure_alignment,
+    )
+    from .page_filter import (
+        filter_mei_files,
+        page_in_ranges,
+        page_number_for_path,
+        parse_page_ranges,
+    )
+    from .upload_and_integrate_measure_annotations import (
+        DETECTOR_URL,
+        SkipFile as MeasureDetectionSkip,
+        build_annotation_tree,
+        process_mei_file as detect_and_integrate_mei,
+    )
+    from .validate_iiif_vs_local import (
+        IIIF_IMAGE_URL_TEMPLATE,
+        find_image_for_stem,
+        parse_graphic_from_output_mei,
+        read_image_size,
+        sha256_bytes,
+        sha256_file,
+    )
+    from .mensural_utils import (
+        DEFAULT_MENSURAL_DURATION_MAP,
+        inject_default_meter_signature_in_mei_text,
+        inject_default_meter_signature_in_mei_file,
+        normalize_mensural_durations_in_mei_text,
+        normalize_mensural_durations_in_mei_file,
+        normalize_mensural_mei_for_partitura_text,
+        normalize_mensural_mei_for_partitura_file,
+    )
+    from .mei_validation import ValidationResult, run_mei_validation, camat_provenance
+    from .mei_schematron import run_schematron_validation
+    from .mei_resources import image_resource_rows
+
+# Submodule -> public names it provides; see ``_RENAMED`` for aliases.
+_LAZY_EXPORTS = {
+    'pattern_search': (
+        'convolution_map',
+        'count_kernel_placements',
+        'kernel_placement_starts',
+        'pad_for_same',
+        'run_pattern_search',
+        'score_kernel_at',
+    ),
+    'parser_registry': (
+        'get_parse_files',
+        'list_parsers',
+        'parse_files',
+        'parse_files_quiet',
+    ),
+    'mensural_backend': (
+        'parse_files_mensural',
+    ),
+    'verovio_backend': (
+        'parse_files_verovio',
+    ),
+    'verovio_render': (
+        'vrv_get_toolkit',
+        'vrv_set_options',
+        'vrv_guess_input_from',
+        'vrv_load_data',
+        'vrv_load_from_file',
+        'vrv_load_from_url',
+        'vrv_convert_to_mei',
+        'vrv_render_page',
+        'vrv_render_all_pages',
+        'vrv_display_svg',
+        'vrv_quiet',
+        'vrv_find_elements_at_time',
+        'vrv_timemap',
+        'vrv_get_mei',
+        'vrv_set_mei',
+        'vrv_mask_mei_to_ids',
+        'vrv_render_selection_excerpt',
+        'vrv_render_symbolic_selection',
+        'vrv_render_source_context',
+        'vrv_insert_annot',
+        'vrv_has_mei_export',
+        'vrv_set_additional_css',
+        'vrv_highlight_ids',
+        'vrv_crop_svg_to_ids',
+        'vrv_crop_svgs_to_ids',
+        'vrv_debug_info',
+        'vrv_inject_highlight_css',
+        'vrv_insert_annot_plist',
+        'vrv_insert_annots_by_tstamps',
+        'vrv_process_annotations',
+        'vrv_namespaces',
+    ),
+    'overlay': (
+        'select_metric_df',
+        'kernel_from_variants',
+        'compute_top_matches_df',
+        'build_match_records',
+        'build_overlay_source',
+        'overlay_top_matches_on_piano_roll',
+    ),
+    'analysis_utils': (
+        'parse_pitch_name',
+        'name_to_midi',
+        'midi_to_name',
+        'build_pitch_counts',
+        'sort_pitch_counts',
+        'plot_pitch_distribution',
+        'display_pitch_distribution',
+        'build_pc_counts_from_names',
+        'build_pitch_class_distributions',
+        'display_pitch_class_distributions',
+        'build_duration_counts',
+        'plot_duration_distribution',
+        'display_duration_distribution',
+        'display_filtered_piano_roll',
+        'extract_selected_xml_ids',
+        'check_monophonic_input',
+        'melodic_interval_distribution',
+        'display_melodic_interval_distribution',
+        'display_successive_pitch_transition_heatmaps',
+        'build_onset_position_counts',
+        'display_onset_position_histogram',
+    ),
+    'timeline_backend': (
+        'TimelineParseResult',
+        'humdrum_rap_to_timeline',
+        'parse_rap_humdrum_file',
+        'parse_rap_humdrum_source',
+        'parse_files_timeline',
+        'build_timeline_duration_counts',
+        'build_timeline_onset_position_counts',
+        'add_timeline_rhythm_analysis',
+        'timeline_to_mei',
+        'save_timeline_mei',
+        'load_timeline_mei_with_verovio',
+        'find_duplicate_mei_xml_ids',
+    ),
+    'parser_utils': (
+        'expand_file_sources',
+        'format_parsed_summary',
+        'print_parsed_summary',
+    ),
+    'conversion': (
+        'DownloadOptions',
+        'MidiImportOptions',
+        'convert_sources',
+        'print_conversion_summary',
+        'set_validation_stage',
+    ),
+    'midi_timing': (
+        'MidiTimingResult',
+        'read_midi_timing',
+    ),
+    'facsimile_viewer': (
+        'FacsimileViewerCache',
+        'FacsimileUnavailableError',
+        'InteractiveFacsimileViewer',
+        'ResolvedMeiSource',
+        'apply_facsimile_layout',
+        'build_facsimile_viewer',
+        'build_verovio_options',
+        'display_path',
+        'find_camat_root',
+        'format_facsimile_summary',
+        'infer_facsimile_layout',
+        'launch_interactive_facsimile_viewer',
+        'read_facsimile_model',
+        'render_verovio_pages',
+        'resolve_mei_source',
+        'resolve_mei_source_info',
+        'resolve_repo_path',
+    ),
+    'mei_renderer': (
+        'DEFAULT_MEI',
+        'InteractiveMeiRenderer',
+        'launch_interactive_mei_renderer',
+        'make_mei_renderer_html',
+        'validate_mei_text',
+    ),
+    'check_mei_consistency': (
+        'Finding',
+        'MeiChecker',
+        'check_mei_files',
+    ),
+    'mei_consistency_workflow': (
+        'MEI_CMN_51_SCHEMA',
+        'VEROVIO_REPORT_COLUMNS',
+        'AnnotationResult',
+        'CleanupResult',
+        'CombineResult',
+        'SchemaValidationResult',
+        'VerovioLogResult',
+        'WriteResult',
+        'annotate_mei_from_report',
+        'annotation_filter_description',
+        'apply_safe_cleanup',
+        'combine_meis',
+        'facsimile_graphic_targets',
+        'figured_bass_report_rows',
+        'iiif_graphic_target_rows',
+        'load_report',
+        'make_unique_xml_id_copies',
+        'normalize_single_layer_number_copies',
+        'page_break_facs_report_rows',
+        'prepare_pages_for_combine',
+        'report_summary',
+        'resolve_mei_inputs',
+        'run_checker',
+        'run_editorial_checks',
+        'run_relaxng_validation',
+        'run_verovio_warning_check',
+        'source_snippet',
+        'strip_ppq_copies',
+    ),
+    'facsimile_downloader': (
+        'download_facsimile_image',
+        'download_facsimile_images',
+        'parse_bsb_filename_stem',
+        'parse_bsb_viewer_url',
+        'resolve_iiif_image_url',
+        'stage_mei_copy',
+    ),
+    'iiif_page': (
+        'IiifPagePlan',
+        'collect_iiif_jobs_from_directory',
+        'format_iiif_page_plans',
+        'format_iiif_page_results',
+        'integrate_iiif_page',
+        'integrate_iiif_pages',
+        'plan_iiif_page',
+        'plan_iiif_pages',
+    ),
+    'integrate_measure_annotations': (
+        'get_body_measures',
+        'get_measure_alignment_report',
+        'integrate_annotation_file',
+        'parse_mei',
+        'validate_measure_alignment',
+    ),
+    'page_filter': (
+        'filter_mei_files',
+        'page_in_ranges',
+        'page_number_for_path',
+        'parse_page_ranges',
+    ),
+    'upload_and_integrate_measure_annotations': (
+        'DETECTOR_URL',
+        'MeasureDetectionSkip',
+        'build_annotation_tree',
+        'detect_and_integrate_mei',
+    ),
+    'validate_iiif_vs_local': (
+        'IIIF_IMAGE_URL_TEMPLATE',
+        'find_image_for_stem',
+        'parse_graphic_from_output_mei',
+        'read_image_size',
+        'sha256_bytes',
+        'sha256_file',
+    ),
+    'mensural_utils': (
+        'DEFAULT_MENSURAL_DURATION_MAP',
+        'inject_default_meter_signature_in_mei_text',
+        'inject_default_meter_signature_in_mei_file',
+        'normalize_mensural_durations_in_mei_text',
+        'normalize_mensural_durations_in_mei_file',
+        'normalize_mensural_mei_for_partitura_text',
+        'normalize_mensural_mei_for_partitura_file',
+    ),
+    'mei_validation': (
+        'ValidationResult',
+        'run_mei_validation',
+        'camat_provenance',
+    ),
+    'mei_schematron': (
+        'run_schematron_validation',
+    ),
+    'mei_resources': (
+        'image_resource_rows',
+    ),
+}
+# Public name -> name in its submodule, where they differ.
+_RENAMED = {
+    'vrv_get_toolkit': 'get_toolkit',
+    'download_facsimile_images': 'download_images',
+    'MeasureDetectionSkip': 'SkipFile',
+    'detect_and_integrate_mei': 'process_mei_file',
+}
+_LAZY_ATTRS = {
+    name: (module, _RENAMED.get(name, name))
+    for module, names in _LAZY_EXPORTS.items()
+    for name in names
+}
 
 __all__ = [
     "ValidationResult", "run_mei_validation", "camat_provenance",
@@ -431,3 +698,24 @@ __all__ = [
     'normalize_mensural_mei_for_partitura_text',
     'normalize_mensural_mei_for_partitura_file',
 ]
+
+
+def __getattr__(name):
+    try:
+        module_name, attr = _LAZY_ATTRS[name]
+    except KeyError:
+        # ``camat.<submodule>`` without importing it first, as the eager init allowed.
+        if not name.startswith("_"):
+            try:
+                return importlib.import_module(f"{__name__}.{name}")
+            except ModuleNotFoundError as exc:
+                if exc.name != f"{__name__}.{name}":
+                    raise
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}") from None
+    value = getattr(importlib.import_module(f".{module_name}", __name__), attr)
+    globals()[name] = value
+    return value
+
+
+def __dir__():
+    return sorted(set(globals()) | set(__all__))

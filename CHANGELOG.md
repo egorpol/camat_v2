@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased][Unreleased]
 
+### Changed
+
+- `import camat` no longer imports every submodule up front. A public name such
+  as `camat.parse_files` imports its submodule on first access (PEP 562), so
+  `import camat` takes about 15 ms instead of about 1.3 s and loads only the
+  standard library; after `pip install --no-deps camat`, `import camat` and the
+  submodules that need no third-party packages work. `from camat import …`,
+  `camat.<submodule>` and `__all__` are unchanged. The partitura and Verovio
+  compatibility shims are now installed when a parser backend first loads,
+  not on `import camat`.
+
 ## [0.2.7][0.2.7] - 2026-10-21
 
 ### Fixed
