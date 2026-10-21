@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased][Unreleased]
 
+### Fixed
+
+- `camat.pdf_facsimile.render_pdf_pages` renders each page's crop box, the
+  area a PDF reader shows, instead of the whole media box with the margins
+  the PDF hides. Pages without a crop box render as before.
+
 ## [0.2.8][0.2.8] - 2026-10-21
 
 ### Added
