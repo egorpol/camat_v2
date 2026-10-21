@@ -117,11 +117,13 @@ unknown keys are errors too.
 | `title` | yes | Page title, and the heading unless `heading` is given |
 | `storage_prefix` | yes | Lower-case letters, digits and `-`. It keeps this site's remembered settings apart from other sites on the same host |
 | `works` | yes | List of works, see below |
+| `version` | no | `1`, the only version so far; without it, 1 |
+| `$schema` | no | URL or path of the JSON Schema below, for editors; the build ignores it |
 | `description` | no | `<meta name="description">` text |
 | `heading`, `subtitle` | no | Text above the score |
-| `lang` | no | Language tag of the page, default `en` |
+| `lang` | no | Language tag of the page (`<html lang>`), default `en`. It does not translate the interface |
 | `links` | no | List of `{"text": …, "url": …}` shown under the heading |
-| `footer` | no | Text above the credits line |
+| `footer` | no | Text above the credits line, or a list of text and `{"text": …, "url": …}` links |
 | `labels` | no | Interface words, see below |
 | `work_menu` | no | `"tabs"` or `"select"`; without it, more than 8 works come in a select |
 | `verovio` | no | Verovio options, merged over the defaults below |
@@ -133,6 +135,12 @@ Each work is `{"id", "label", "title", "mei"}`. `id` and `mei` are required.
 `-`. `label` names the work in the tabs or select (default: `id`). `title`
 names it in messages; without one, the viewer says "Movement" and the label.
 With a single work, the menu is hidden.
+
+A footer with a link:
+
+```json
+"footer": ["Encoding: ", {"text": "CC BY 4.0", "url": "https://creativecommons.org/licenses/by/4.0/"}, "."]
+```
 
 `labels` replaces any of these defaults:
 
@@ -152,6 +160,17 @@ The Verovio defaults are those of the facsimile notebook: `breaks: encoded`,
 `minLastJustification: 0`. Set `"minLastJustification": 0.8` when the print
 leaves its last systems short (see
 [Check and view](pdf-facsimiles.md#8-check-and-view)).
+
+camat ships a JSON Schema of this format, `camat/schemas/site.schema.json`.
+Editors such as VS Code then complete the keys and mark mistakes:
+
+```json
+"$schema": "https://raw.githubusercontent.com/egorpol/camat_v2/v0.2.8/camat/schemas/site.schema.json"
+```
+
+The schema checks keys, types and patterns. The build checks the rest: that
+the files exist, that work ids are unique, that URLs are http(s) or relative,
+and that the MEI matches the facsimile.
 
 ## PDF facsimile
 
@@ -275,6 +294,9 @@ edition-specific additions:
 ## Limits
 
 - One facsimile type per site, and zones for bars only.
+- Only the `labels` words can be changed. The rest of the interface, such as
+  "Loading Verovio…", "Open the PDF…", "Full-size image", the page label
+  "p. 3 (3/9)" and the warnings, is in English whatever `lang` says.
 - The IIIF adapter reads the `<graphic>` targets in the MEI, not IIIF
   manifests.
 - No search, and no rendering on the server: every page is drawn in the

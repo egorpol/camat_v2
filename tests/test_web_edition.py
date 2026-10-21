@@ -23,6 +23,7 @@ from camat import web_edition as we
 
 REPO = Path(__file__).resolve().parents[1]
 TEMPLATE = REPO / "camat" / "web_edition_template"
+SCHEMA = REPO / "camat" / "schemas" / "site.schema.json"
 SYSTEMS = {1: [[1, 2], [3]], 2: [[4, 5]]}
 
 
@@ -195,6 +196,9 @@ def _break(config: dict, example: Path) -> None:
 
 MUTATIONS = {
     "storage_prefix": (_break, "storage_prefix: expected lower-case"),
+    "version": (lambda c, e: c.update(version=2), "version: expected 1, the only site config version"),
+    "footer item": (lambda c, e: c.update(footer=["Encoding: ", 4]), "footer[1]: expected text or"),
+    "footer link": (lambda c, e: c.update(footer=[{"text": "x", "url": "javascript:alert(1)"}]), "footer[0].url: expected an http(s) URL"),
     "unknown key": (lambda c, e: c.update(titel="x"), "titel: unknown key"),
     "duplicate id": (lambda c, e: c["works"].append(dict(c["works"][0], mei="input/example.mei")), "'I' is used twice"),
     "work id": (lambda c, e: c["works"][0].update(id="I/1"), "works[0].id: expected letters"),
@@ -207,7 +211,8 @@ MUTATIONS = {
     "work_menu": (lambda c, e: c.update(work_menu="menu"), "work_menu: expected one of tabs, select, got 'menu'"),
     "url and copy": (lambda c, e: c["facsimile"]["images"].update(url="https://example.org/"), "give either url"),
     "http images": (lambda c, e: c["facsimile"]["images"].update(copy=False, url="http://example.org/"), "expected an https URL"),
-    "no source": (lambda c, e: c["facsimile"].update(pdf=False, images=None), "give pdf, images or both"),
+    "pdf text without url": (lambda c, e: c["facsimile"].update(pdf={"text": "the library"}), "facsimile.pdf: expected true, or an object with url"),
+    "no source": (lambda c, e: (c["facsimile"].update(pdf=False), c["facsimile"].pop("images")), "give pdf, images or both"),
     "image hash": (lambda c, e: Image.new("RGB", (320, 480), "white").save(e / "facsimiles/print/page-0002.png"),
                    "page-0002.png differs from its sha256"),
     "image not in pages.json": (lambda c, e: _rename_page(e), "shows 'page-0001.png', which is not in pages.json"),
@@ -405,6 +410,79 @@ def test_cli(example, capsys):
     assert "cannot read the site config" in capsys.readouterr().err
 
 
+def test_footer_links_version_and_schema_key(example):
+    footer = ["Encoding: ", {"text": "CC BY 4.0", "url": "https://creativecommons.org/licenses/by/4.0/"}, " & more."]
+    config = site_config(example, footer=footer, version=1, **{"$schema": "site.schema.json"})
+    we.build_site(config, example / "public")
+    index = (example / "public/index.html").read_text(encoding="utf-8")
+    assert ('<p>Encoding: <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a> &amp; more.</p>'
+            in index)
+
+
+def _schema_keys(node: dict) -> set[str]:
+    return set(node["properties"])
+
+
+def _anchored(pattern: re.Pattern) -> str:
+    return "^" + pattern.pattern.removesuffix(r"\Z") + "$"
+
+
+def test_schema_has_the_builders_keys_and_patterns():
+    schema = read_json(SCHEMA)
+    top, defs = schema["properties"], schema["definitions"]
+    assert _schema_keys(schema) == we._KEYS
+    assert set(schema["required"]) == {"title", "storage_prefix", "works"}
+    assert _schema_keys(top["works"]["items"]) == we._WORK_KEYS
+    assert {key: value["default"] for key, value in top["labels"]["properties"].items()} == we.LABELS
+    assert _schema_keys(defs["pdf_facsimile"]) == we._PDF_KEYS
+    assert _schema_keys(defs["pdf_facsimile"]["properties"]["pdf"]["anyOf"][1]) == we._PDF_LINK_KEYS
+    assert _schema_keys(defs["pdf_facsimile"]["properties"]["images"]) == we._IMAGES_KEYS
+    assert _schema_keys(defs["iiif_facsimile"]) == we._IIIF_KEYS
+    types = [defs[ref["$ref"].rsplit("/", 1)[1]]["properties"]["type"]["const"]
+             for ref in top["facsimile"]["oneOf"] if "$ref" in ref]
+    assert tuple(types) == we.FACSIMILE_TYPES
+    assert tuple(top["work_menu"]["enum"]) == we.WORK_MENUS
+    assert top["storage_prefix"]["pattern"] == _anchored(we._PREFIX)
+    assert top["works"]["items"]["properties"]["id"]["pattern"] == _anchored(we._WORK_ID)
+    assert top["lang"]["pattern"] == _anchored(we._LANG)
+
+
+# Mutations of the config alone that the schema catches too; the others need the files.
+SCHEMA_CATCHES = ["storage_prefix", "version", "footer item", "unknown key", "work id", "label", "unknown label",
+                  "ref_base", "type", "work_menu", "url and copy", "http images", "no source", "pdf text without url"]
+
+
+def _guide_configs() -> list[dict]:
+    """The guide's JSON examples; a "facsimile" fragment goes into a minimal config."""
+    text = (REPO / "docs/guides/web-edition.md").read_text(encoding="utf-8")
+    configs = []
+    for block in re.findall(r"```json\n(.*?)```", text, re.S):
+        if block.lstrip().startswith('"'):
+            block = '{"title": "T", "storage_prefix": "t", "works": [{"id": "a", "mei": "a.mei"}], ' + block + "}"
+        configs.append(json.loads(block))
+    return configs
+
+
+def test_schema_accepts_what_the_builder_accepts_and_refuses_its_mistakes(example):
+    jsonschema = pytest.importorskip("jsonschema")
+    validator = jsonschema.Draft7Validator(read_json(SCHEMA))
+    jsonschema.Draft7Validator.check_schema(validator.schema)
+    good = [read_json(site_config(example)), read_json(iiif_config(example)),
+            read_json(site_config(example, facsimile=None, ref_base=None, version=1,
+                                  footer=["a", {"text": "b", "url": "https://example.org/"}])),
+            read_json(site_config(example, facsimile={"type": "pdf", "pages": "p.json", "pdf": True})),
+            read_json(site_config(example, facsimile={"type": "pdf", "pages": "p.json",
+                                                      "images": {"url": "https://example.org/", "copy": False}})),
+            *_guide_configs()]
+    assert len(good) >= 8
+    for config in good:
+        assert not list(validator.iter_errors(config)), config
+    for name in SCHEMA_CATCHES:
+        config = read_json(site_config(example))
+        MUTATIONS[name][0](config, example)
+        assert list(validator.iter_errors(config)), name
+
+
 def test_template_files_are_package_data_and_the_cli_is_declared():
     project = tomllib.loads((REPO / "pyproject.toml").read_text(encoding="utf-8"))
     globs = project["tool"]["setuptools"]["package-data"]["camat"]
@@ -412,6 +490,7 @@ def test_template_files_are_package_data_and_the_cli_is_declared():
     assert shipped == sorted(we.TEMPLATE_FILES)
     for name in shipped:
         assert any(Path("web_edition_template", name).match(glob) for glob in globs), name
+    assert any(Path("schemas", SCHEMA.name).match(glob) for glob in globs)
     assert project["project"]["scripts"]["camat-build-site"] == "camat.web_edition:main"
 
 

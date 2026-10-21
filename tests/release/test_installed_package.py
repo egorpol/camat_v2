@@ -199,6 +199,8 @@ def test_web_edition_template_is_installed_and_builds(tmp_path: Path) -> None:
     assert shipped == sorted(web_edition.TEMPLATE_FILES)
     for name in shipped:
         assert template.joinpath(name).read_bytes() == (REPO_ROOT / "camat/web_edition_template" / name).read_bytes()
+    schema = files("camat").joinpath("schemas", "site.schema.json")
+    assert schema.read_bytes() == (REPO_ROOT / "camat/schemas/site.schema.json").read_bytes()
     config = {"title": "Release smoke test", "storage_prefix": "release-smoke",
               "works": [{"id": "basic", "mei": str(MEI_FIXTURE)}]}
     report = web_edition.build_site(config, tmp_path / "site", base_dir=tmp_path)

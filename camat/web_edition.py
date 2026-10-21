@@ -62,10 +62,12 @@ VEROVIO_OPTIONS = {
     "scale": 35, "spacingLinear": 0.25, "spacingNonLinear": 0.6, "minLastJustification": 0,
 }
 
-_KEYS = {"title", "description", "heading", "subtitle", "lang", "storage_prefix", "links", "footer",
-         "labels", "works", "work_menu", "verovio", "ref_base", "facsimile"}
+_KEYS = {"$schema", "version", "title", "description", "heading", "subtitle", "lang", "storage_prefix", "links",
+         "footer", "labels", "works", "work_menu", "verovio", "ref_base", "facsimile"}
 _WORK_KEYS = {"id", "label", "title", "mei"}
 _PDF_KEYS = {"type", "pages", "pdf", "images"}
+_PDF_LINK_KEYS = {"url", "text"}
+_IMAGES_KEYS = {"url", "copy", "confirm", "button"}
 _IIIF_KEYS = {"type", "confirm", "button"}
 # An Image API request: {base}/{region}/{size}/{rotation}/{quality}.{format}, region "full".
 _IIIF_REQUEST = re.compile(r"/full/[^/]+/[^/]+/[^/.]+\.[A-Za-z0-9]+\Z")
@@ -117,6 +119,33 @@ def _url(value: object, where: str, problems: list[str], *, https: bool = False)
             return value
     problems.append(f"{where}: expected {'an https URL' if https else 'an http(s) URL or a relative link'}, got {value!r}")
     return None
+
+
+def _link(item: object, where: str, problems: list[str]) -> str:
+    """An ``<a>`` element from ``{"text", "url"}``, or "" after a problem."""
+    if not isinstance(item, dict) or set(item) != {"text", "url"} or not isinstance(item["text"], str):
+        problems.append(f'{where}: expected {{"text": ..., "url": ...}}')
+        return ""
+    url = _url(item["url"], f"{where}.url", problems)
+    return f'<a href="{_escape(url)}">{_escape(item["text"])}</a>' if url else ""
+
+
+def _footer(value: object, problems: list[str]) -> str:
+    """Escaped text, or a list of text and ``{"text", "url"}`` links."""
+    if isinstance(value, str):
+        return _escape(value)
+    if not isinstance(value, list):
+        problems.append('footer: expected text, or a list of text and {"text": ..., "url": ...} links')
+        return ""
+    parts = []
+    for index, item in enumerate(value):
+        if isinstance(item, str):
+            parts.append(_escape(item))
+        elif isinstance(item, dict):
+            parts.append(_link(item, f"footer[{index}]", problems))
+        else:
+            problems.append(f'footer[{index}]: expected text or {{"text": ..., "url": ...}}, got {item!r}')
+    return "".join(parts)
 
 
 def _unknown(config: dict, allowed: set[str], where: str, problems: list[str]) -> None:
@@ -245,8 +274,10 @@ def _check_pdf_facsimile(facsimile: dict, base: Path, works: list[dict], problem
 
     pdf, source = facsimile.get("pdf", False), None
     if isinstance(pdf, dict):
-        _unknown(pdf, {"url", "text"}, "facsimile.pdf.", problems)
-        if "url" in pdf:
+        _unknown(pdf, _PDF_LINK_KEYS, "facsimile.pdf.", problems)
+        if "url" not in pdf:
+            problems.append("facsimile.pdf: expected true, or an object with url and optionally text")
+        else:
             source = {"url": _url(pdf["url"], "facsimile.pdf.url", problems),
                       "text": _text(pdf, "text", problems, where="facsimile.pdf.", default=pdf.get("url", ""))}
         pdf = True
@@ -259,7 +290,7 @@ def _check_pdf_facsimile(facsimile: dict, base: Path, works: list[dict], problem
             problems.append("facsimile.images: expected an object with url or copy")
             images = None
         else:
-            _unknown(images, {"url", "copy", "confirm", "button"}, "facsimile.images.", problems)
+            _unknown(images, _IMAGES_KEYS, "facsimile.images.", problems)
             if ("url" in images) == bool(images.get("copy")):
                 problems.append("facsimile.images: give either url (hosted elsewhere) or \"copy\": true")
             elif "url" in images:
@@ -408,19 +439,12 @@ def _render_index(config: dict, works: list[dict], labels: dict, runtime: dict, 
     title = _text(config, "title", problems)
     heading = _text(config, "heading", problems, default=title)
     subtitle = _text(config, "subtitle", problems)
-    footer = _text(config, "footer", problems)
+    footer = _footer(config.get("footer", ""), problems)
     links = config.get("links", [])
-    rendered_links = []
     if not isinstance(links, list):
         problems.append("links: expected a list of {text, url}")
         links = []
-    for index, link in enumerate(links):
-        if not isinstance(link, dict) or set(link) != {"text", "url"} or not isinstance(link["text"], str):
-            problems.append(f"links[{index}]: expected {{\"text\": ..., \"url\": ...}}")
-            continue
-        url = _url(link["url"], f"links[{index}].url", problems)
-        if url:
-            rendered_links.append(f'<a href="{_escape(url)}">{_escape(link["text"])}</a>')
+    rendered_links = [a for index, link in enumerate(links) if (a := _link(link, f"links[{index}]", problems))]
     first = works[0] if works else None
     example = f"{first['id']}/{first['info']['first_bar'] or 1}" if first else ""
     return Template(_template("index.html").decode("utf-8")).substitute(
@@ -440,7 +464,7 @@ def _render_index(config: dict, works: list[dict], labels: dict, runtime: dict, 
         panes_class="" if facsimile else " single",
         facsimile=_facsimile_pane(labels["facsimile"], (_pdf_intro if facsimile["type"] == "pdf" else _iiif_intro)(facsimile))
         if facsimile else "",
-        footer=f"    <p>{_escape(footer)}</p>\n" if footer else "",
+        footer=f"    <p>{footer}</p>\n" if footer else "",
         credits=", PDFs with <a href=\"https://mozilla.github.io/pdf.js/\">pdf.js</a> 6.3.289"
         if facsimile and facsimile.get("pdf") else "",
         link_example=_escape(example),
@@ -451,6 +475,11 @@ def _plan(config: dict, base: Path, config_path: Path | None, out: Path) -> tupl
     """Check everything and return the files to write, or raise SiteConfigError."""
     problems: list[str] = []
     _unknown(config, _KEYS, "", problems)
+    version = config.get("version", 1)
+    if isinstance(version, bool) or version != 1:
+        problems.append(f"version: expected 1, the only site config version camat {__version__} reads, got {version!r}")
+    if not isinstance(config.get("$schema", ""), str):
+        problems.append("$schema: expected the URL or path of a JSON Schema")
     if not isinstance(config.get("title"), str) or not config["title"].strip():
         problems.append("title: expected text")
     prefix = config.get("storage_prefix")

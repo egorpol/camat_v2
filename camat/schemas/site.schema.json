@@ -1,0 +1,124 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "camat web-edition site config",
+  "description": "Config of camat-build-site (camat.web_edition), version 1. Paths are relative to the config's folder. The build checks more than this schema: that files exist, work ids are unique, URLs are http(s) or relative, and the MEI matches the facsimile.",
+  "type": "object",
+  "required": ["title", "storage_prefix", "works"],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {"type": "string", "description": "URL or path of this schema, for editors; the build ignores it."},
+    "version": {"const": 1, "description": "Site config version. Without it, 1."},
+    "title": {"type": "string", "pattern": "\\S", "description": "Page title, and the heading unless heading is given."},
+    "description": {"type": "string", "description": "Text of <meta name=\"description\">."},
+    "heading": {"type": "string", "description": "Heading above the score. Default: title."},
+    "subtitle": {"type": "string", "description": "Line under the heading."},
+    "lang": {"type": "string", "pattern": "^[A-Za-z]{2,3}(-[A-Za-z0-9]{1,8})*$", "default": "en",
+             "description": "Language tag of the page (<html lang>). It does not translate the interface; see labels."},
+    "storage_prefix": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$",
+                       "description": "Prefix of the browser storage keys. Give each site on the same host its own."},
+    "links": {"type": "array", "items": {"$ref": "#/definitions/link"}, "description": "Links shown under the heading."},
+    "footer": {
+      "description": "Text above the credits line: text, or a list of text and {text, url} links.",
+      "anyOf": [
+        {"type": "string"},
+        {"type": "array", "items": {"anyOf": [{"type": "string"}, {"$ref": "#/definitions/link"}]}}
+      ]
+    },
+    "labels": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Interface words. Other interface text is English.",
+      "properties": {
+        "work": {"type": "string", "default": "Movement"},
+        "bar": {"type": "string", "default": "Bar"},
+        "bars": {"type": "string", "default": "Bars"},
+        "notes": {"type": "string", "default": "Editorial notes"},
+        "facsimile": {"type": "string", "default": "Facsimile"},
+        "mark_notes": {"type": "string", "default": "Mark all notes"},
+        "bar_boxes": {"type": "string", "default": "Bar boxes"},
+        "hint": {"type": "string", "default": "Hover a bar or a symbol to see its bar number and xml:id."}
+      }
+    },
+    "works": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "mei"],
+        "additionalProperties": false,
+        "properties": {
+          "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$", "description": "Used in links #<id>/<bar>; unique."},
+          "label": {"type": "string", "description": "Name in the tabs or select. Default: id."},
+          "title": {"type": "string", "description": "Name in messages. Default: labels.work and label."},
+          "mei": {"type": "string", "minLength": 1, "description": "Path of the MEI file; file names must differ between works."}
+        }
+      }
+    },
+    "work_menu": {"enum": ["tabs", "select"], "description": "Default: select when there are more than 8 works."},
+    "verovio": {
+      "type": "object",
+      "description": "Verovio options, merged over camat's defaults.",
+      "additionalProperties": {"type": ["string", "number", "boolean"]}
+    },
+    "ref_base": {"type": ["string", "null"], "pattern": "/$", "description": "Base URL for relative <ref target> links in the notes."},
+    "facsimile": {"oneOf": [{"$ref": "#/definitions/pdf_facsimile"}, {"$ref": "#/definitions/iiif_facsimile"}, {"type": "null"}]}
+  },
+  "definitions": {
+    "link": {
+      "type": "object",
+      "required": ["text", "url"],
+      "additionalProperties": false,
+      "properties": {
+        "text": {"type": "string"},
+        "url": {"type": "string", "minLength": 1, "description": "An http(s) URL or a relative link."}
+      }
+    },
+    "pdf_facsimile": {
+      "type": "object",
+      "required": ["type", "pages"],
+      "additionalProperties": false,
+      "description": "Give pdf, images or both.",
+      "anyOf": [
+        {"required": ["images"]},
+        {"required": ["pdf"], "properties": {"pdf": {"not": {"const": false}}}}
+      ],
+      "properties": {
+        "type": {"const": "pdf"},
+        "pages": {"type": "string", "minLength": 1, "description": "pages.json of camat.pdf_facsimile."},
+        "pdf": {
+          "description": "true: visitors may open their own copy of the PDF; {url, text} also says where to get it.",
+          "anyOf": [
+            {"type": "boolean"},
+            {"type": "object", "required": ["url"], "additionalProperties": false,
+             "properties": {"url": {"type": "string", "minLength": 1}, "text": {"type": "string"}}}
+          ]
+        },
+        "images": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Page images: copied into the site (copy: true) or hosted at url.",
+          "oneOf": [
+            {"required": ["url"], "properties": {"copy": {"const": false}}},
+            {"required": ["copy"], "properties": {"copy": {"const": true}}, "not": {"required": ["url"]}}
+          ],
+          "properties": {
+            "url": {"type": "string", "pattern": "^https://", "description": "https folder with the images under their names in pages.json."},
+            "copy": {"type": "boolean"},
+            "confirm": {"type": "string", "description": "Notice; the images appear only after the visitor confirms it."},
+            "button": {"type": "string", "description": "Label of the button that shows the images."}
+          }
+        }
+      }
+    },
+    "iiif_facsimile": {
+      "type": "object",
+      "required": ["type"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {"const": "iiif"},
+        "confirm": {"type": "string", "description": "Notice; the images appear only after the visitor confirms it."},
+        "button": {"type": "string", "description": "Label of the button that shows the images."}
+      }
+    }
+  }
+}

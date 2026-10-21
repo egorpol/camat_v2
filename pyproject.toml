@@ -32,7 +32,7 @@ classifiers = [
 dynamic = ["dependencies"]
 
 [project.optional-dependencies]
-test = ["pytest>=8", "packaging>=24"]
+test = ["pytest>=8", "packaging>=24", "jsonschema>=4.18"]
 notebooks = ["jupyterlab>=4"]
 validation = ["lxml>=5", "saxonche>=12,<14", "Pillow>=10"]
 
@@ -69,7 +69,7 @@ include-package-data = false
 include = ["camat*"]
 
 [tool.setuptools.package-data]
-camat = ["examples/*.mei", "examples/*.svg", "schemas/*.rng", "schemas/schxslt/*.xsl", "schemas/schxslt/compile/*.xsl", "schemas/schxslt/util/*.xsl", "schemas/schxslt/README.md", "web_edition_template/*.html", "web_edition_template/*.css", "web_edition_template/*.js"]
+camat = ["examples/*.mei", "examples/*.svg", "schemas/*.rng", "schemas/*.json", "schemas/schxslt/*.xsl", "schemas/schxslt/compile/*.xsl", "schemas/schxslt/util/*.xsl", "schemas/schxslt/README.md", "web_edition_template/*.html", "web_edition_template/*.css", "web_edition_template/*.js"]
 
 [tool.setuptools.dynamic]
 dependencies = { file = ["requirements.txt"] }

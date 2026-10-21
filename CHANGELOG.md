@@ -26,8 +26,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   select when there are more than eight (`work_menu` overrides). Every input is
   checked before anything is written; the output folder is replaced only if it
   is empty or an earlier build, and inside a git repository only if it is named
-  `_site`. The builder uses only the standard library. Guide: "From MEI to a
-  web edition".
+  `_site`. The builder uses only the standard library. The config may give
+  `"version": 1` (the only version so far) and a footer with links; camat
+  ships its JSON Schema as `camat/schemas/site.schema.json` for editors.
+  Guide: "From MEI to a web edition".
 - Docs: "Edition corpora" adds the Webern Op. 27 edition, both editions' web
   viewers and their 0.9.0 pre-releases.
 
