@@ -155,6 +155,7 @@ def render_pdf_pages(
 ) -> dict:
     """Rasterize every PDF page with Poppler, or verify and reuse its manifest.
 
+    Each image shows the page's crop box, the area a PDF reader shows.
     Existing derivatives are never overwritten when the input, settings or
     image hashes differ. Review fields in an existing manifest are preserved.
     """
@@ -190,7 +191,7 @@ def render_pdf_pages(
     output_dir.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix=".render-", dir=output_dir) as temp:
         stage = Path(temp)
-        _poppler(["pdftoppm", "-r", str(dpi), "-png", str(pdf), str(stage / "page")])
+        _poppler(["pdftoppm", "-r", str(dpi), "-cropbox", "-png", str(pdf), str(stage / "page")])
         pictures = sorted(stage.glob("page-*.png"), key=lambda p: int(p.stem.split("-")[-1]))
         if len(pictures) != count:
             raise RuntimeError(f"Expected {count} pages from {pdf}, got {len(pictures)}")

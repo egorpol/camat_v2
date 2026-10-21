@@ -257,6 +257,27 @@ def test_split_at_page_boundary(tmp_path, encoded):
     assert source.read_bytes() == before
 
 
+def test_tie_and_slur_across_a_new_page_break_keep_their_ends(tmp_path):
+    pages = fixture(tmp_path, [{"mdiv": 1, "systems": [[1, 2]]}, {"mdiv": 1, "systems": [[3]]}])
+    alignment = pf.build_measure_alignment(pages)
+    source = mei(tmp_path, [("1", [1, 2, 3])])
+    numbers = iter(range(3))
+    text = re.sub(r"<note ", lambda _: f'<note xml:id="note-{next(numbers)}" ', source.read_text())
+    for note, span in [(0, '<slur xml:id="slur" staff="1" startid="#note-0" endid="#note-2" />'),
+                       (1, '<tie xml:id="tie" staff="1" startid="#note-1" endid="#note-2" />')]:
+        old = f'<note xml:id="note-{note}" pname="c" oct="4" dur="4" /></layer></staff>'
+        text = text.replace(old, f"{old}\n            {span}")
+    source.write_text(text)
+    pf.integrate_pdf_facsimile(source, pages, alignment, source)
+    assert pf.write_page_breaks(source, pages, source)["pb"] == 2
+    root = ET.parse(source).getroot()
+    assert [e.get("facs") if e.tag == M + "pb" else e.get(ID) for e in root.iter()
+            if e.tag in {M + "pb", M + "note"}] == [
+        "#surface-print-p0001", "note-0", "note-1", "#surface-print-p0002", "note-2"]
+    assert {e.get(ID): (e.get("startid"), e.get("endid")) for e in root.iter()
+            if e.tag in {M + "slur", M + "tie"}} == {"slur": ("#note-0", "#note-2"), "tie": ("#note-1", "#note-2")}
+
+
 @pytest.mark.parametrize("bad", [
     {"role": "musci", "mdiv": 1, "systems": [[1]]},
     {"role": "music", "systems": [[1]]},
@@ -635,10 +656,12 @@ def test_body_gate_prevents_write(tmp_path, monkeypatch):
     assert source.read_bytes() == before
 
 
-def pdf(path: Path, *, rotate: int = 0, pages: int = 2) -> None:
+def pdf(path: Path, *, rotate: int = 0, pages: int = 2, crop: tuple[int, int, int, int] | None = None) -> None:
     objects = [b'<< /Type /Catalog /Pages 2 0 R >>',
                f'<< /Type /Pages /Count {pages} /Kids [{" ".join(f"{i + 3} 0 R" for i in range(pages))}] >>'.encode()]
-    objects.extend(f'<< /Type /Page /Parent 2 0 R /MediaBox [0 0 72 144] /Rotate {rotate} >>'.encode() for _ in range(pages))
+    box = f' /CropBox [{" ".join(map(str, crop))}]' if crop else ''
+    objects.extend(f'<< /Type /Page /Parent 2 0 R /MediaBox [0 0 72 144]{box} /Rotate {rotate} >>'.encode()
+                   for _ in range(pages))
     content = bytearray(b'%PDF-1.4\n')
     offsets = [0]
     for index, obj in enumerate(objects, 1):
@@ -686,6 +709,20 @@ def test_real_render_rotation_manifest_and_review_reuse(tmp_path, rotate):
     with pytest.raises(ValueError, match="pdf_sha256"):
         pf.render_pdf_pages(source, target, 72, source_id="print")
     assert path.read_bytes() == before
+
+
+@pytest.mark.skipif(shutil.which("pdftoppm") is None, reason="Poppler pdftoppm required")
+@pytest.mark.parametrize("rotate", [0, 90])
+def test_render_shows_the_crop_box_like_a_pdf_reader(tmp_path, rotate):
+    # A 72 x 144 pt sheet whose crop box keeps 36 x 72 pt; a reader shows only that window.
+    source = tmp_path / "cropped.pdf"
+    pdf(source, rotate=rotate, pages=1, crop=(9, 18, 45, 90))
+    result = pf.render_pdf_pages(source, tmp_path / "pages", 72, source_id="print")
+    page = result["pages"][0]
+    assert (page["width"], page["height"]) == ((72, 36) if rotate else (36, 72))
+    with Image.open(tmp_path / "pages" / page["image"]) as image:
+        assert image.size == (page["width"], page["height"])
+    assert re.search(r"CropBox:\s+9\.00\s+18\.00\s+45\.00\s+90\.00", (tmp_path / "pages" / "pdfinfo.txt").read_text())
 
 
 def test_render_input_ids_and_missing_poppler(tmp_path, monkeypatch):

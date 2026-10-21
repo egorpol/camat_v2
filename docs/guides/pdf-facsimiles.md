@@ -97,7 +97,8 @@ camat-pdf-facsimile render example-print-1900.pdf \
 The Python equivalent is
 `camat.pdf_facsimile.render_pdf_pages(pdf, output_dir, dpi=300)`. It needs
 Poppler's `pdftoppm` and `pdfinfo` on `PATH`. Every physical page becomes
-one `page-NNNN.png`; pages are never skipped at this stage. Coordinates are
+one `page-NNNN.png` of the area a PDF reader shows (the page's crop box);
+pages are never skipped at this stage. Coordinates are
 image pixels with the origin at the top left, after Poppler has applied the
 PDF's page rotation. A second run verifies the existing images against their
 hashes and reuses them. It stops, instead of overwriting, when the PDF, the
