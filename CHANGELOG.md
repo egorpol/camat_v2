@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased][Unreleased]
 
+### Added
+
+- A web-edition template: `camat.web_edition.build_site(config, out)` and
+  `camat-build-site CONFIG OUT` build a static site from MEI files and a JSON
+  site config. Visitors' browsers render each work with Verovio 6.3.0 (from
+  jsDelivr, with SRI) at its encoded page and system breaks, with editorial
+  notes, bar boxes, deep links `#<work>/<bar>`, and settings stored under the
+  config's `storage_prefix`. The `pdf` facsimile adapter reads the
+  `pages.json` of `camat.pdf_facsimile` and the zones that
+  `integrate_pdf_facsimile` writes: visitors open their own copy of the PDF
+  (pdf.js 6.3.289; a different PDF gets a warning) or see page images, copied
+  into the site or hosted elsewhere and checked against their hashes, shown at
+  once or after a confirmation. Every input is checked before anything is
+  written; the output folder is replaced only if it is empty or an earlier
+  build, and inside a git repository only if it is named `_site`. The builder
+  uses only the standard library.
+
 ### Changed
 
 - `import camat` no longer imports every submodule up front. A public name such
