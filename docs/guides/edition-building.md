@@ -41,7 +41,7 @@ general validation read-only; optional legacy rewrite helpers stay in
 | understand schemas, checks, statuses, reports and validation installation             | [General MEI validation](mei-validation.md) |
 | combine and check in one run, with extra flags                                       | [`mei_consistency_checks.ipynb`](../../notebooks/mei_consistency_checks.ipynb) |
 | check corrected full-score files with optional rewrite/cleanup flags                 | [`mei_corrected_full_checks.ipynb`](../../CAMAT_old/mei_corrected_full_checks.ipynb)                         |
-| publish finished MEI as a static web edition with notes and facsimile                | [From MEI to a web edition](web-edition.md)                                                                                                  |
+| publish finished MEI as a static web edition with notes and facsimile                | [From MEI to a web edition](web-edition.md) ([`mei_web_edition.ipynb`](../../notebooks/mei_web_edition.ipynb))                               |
 | see the editions that motivated this tooling                                         | [Edition corpora](edition-corpora.md)                                                                                                       |
 | build facsimile-linked MEI across a corpus                                           | [Add a facsimile and measure zones](#add-a-facsimile-and-measure-zones) below                                                                |
 

@@ -22,7 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   once or after a confirmation. The `iiif` adapter loads each page from the
   IIIF Image API request in its `<graphic>`, as camat's IIIF integration writes
   it, at the width the pane needs (in 500-pixel steps, never wider than the
-  graphic), shown at once or after a confirmation. Works come as tabs, or as a
+  graphic), shown at once or after a confirmation; MEI from the IIIF route
+  needs `camat-link-pb-surface --apply FILE.mei` first, because that route
+  leaves `pb/@facs` unset. Works come as tabs, or as a
   select when there are more than eight (`work_menu` overrides). Every input is
   checked before anything is written; the output folder is replaced only if it
   is empty or an earlier build, and inside a git repository only if it is named
@@ -30,6 +32,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `"version": 1` (the only version so far) and a footer with links; camat
   ships its JSON Schema as `camat/schemas/site.schema.json` for editors.
   Guide: "From MEI to a web edition".
+- Notebook `mei_web_edition.ipynb`: builds a web edition from the result of
+  the PDF tutorial (default), the IIIF tutorial or the guided PDF notebook,
+  adding missing page-break links to the MEI, and serves a local preview with
+  a stop cell. Without a result it builds a site of the score alone from
+  `test_corpus/`.
 - Docs: "Edition corpora" adds the Webern Op. 27 edition, both editions' web
   viewers and their 0.9.0 pre-releases.
 

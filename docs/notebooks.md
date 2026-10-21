@@ -78,6 +78,9 @@ Use this sequence when working from page files and source images:
 3. [Create a general MEI check report](../notebooks/mei_check_report.ipynb), correct
    the score, and return to
    [Inspect scores and facsimiles](../notebooks/mei_facsimile_viewer.ipynb).
+4. [Build a web edition](../notebooks/mei_web_edition.ipynb) to turn the
+   result into a static site with the score beside its scan
+   ([guide](guides/web-edition.md)).
 
 [Combine and check MEI](../notebooks/mei_consistency_checks.ipynb) provides the
 full toolkit with extra flags as an alternative to the focused combine/check

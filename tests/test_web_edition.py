@@ -6,6 +6,7 @@ variant points the same surfaces at an image server.
 """
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 from pathlib import Path
@@ -492,6 +493,41 @@ def test_template_files_are_package_data_and_the_cli_is_declared():
         assert any(Path("web_edition_template", name).match(glob) for glob in globs), name
     assert any(Path("schemas", SCHEMA.name).match(glob) for glob in globs)
     assert project["project"]["scripts"]["camat-build-site"] == "camat.web_edition:main"
+
+
+def _code_cells(name: str) -> dict[str, str]:
+    notebook = read_json(REPO / "notebooks" / name)
+    return {cell.get("id", str(i)): "".join(cell["source"])
+            for i, cell in enumerate(notebook["cells"]) if cell["cell_type"] == "code"}
+
+
+def test_notebook_is_clean_and_its_presets_match_the_tutorials():
+    from camat import pdf_facsimile_guided as guided
+    from camat.facsimile_viewer import resolve_repo_path
+
+    notebook = read_json(REPO / "notebooks" / "mei_web_edition.ipynb")
+    assert all(cell.get("execution_count") is None and not cell.get("outputs")
+               for cell in notebook["cells"] if cell["cell_type"] == "code")
+    assert "widgets" not in notebook.get("metadata", {})
+    cells = _code_cells("mei_web_edition.ipynb")
+    assert 'RESULT = "pdf"' in cells["settings"] and "PREVIEW_PORT = 0" in cells["settings"]
+    assert "STOP_PREVIEW = False" in cells["stop"]
+    assert '"127.0.0.1"' in cells["preview"]
+    assert not any("/home/" in code or "/Users/" in code for code in cells.values())
+
+    assign = next(node for node in ast.parse(cells["check"]).body
+                  if isinstance(node, ast.Assign) and node.targets[0].id == "RESULTS")
+    presets = ast.literal_eval(assign.value)
+    assert set(presets) == {"pdf", "iiif", "guided"}
+    for preset in presets.values():
+        tutorial = "\n".join(_code_cells(preset["notebook"]).values())
+        assert preset["folder"] in tutorial, preset["notebook"]
+        assert (REPO / preset["example"]).is_file()
+    assert "_pdf_facs_breaks" in "\n".join(_code_cells(presets["pdf"]["notebook"]).values())
+    assert "_facs_zones" in "\n".join(_code_cells(presets["iiif"]["notebook"]).values())
+    folder = resolve_repo_path(presets["guided"]["folder"])
+    assert guided._result_path(presets["guided"]["example"], folder) == folder / presets["guided"]["mei"]
+    assert guided._folders(folder)["pages_json"] == folder / presets["guided"]["pages"]
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="Node.js required")

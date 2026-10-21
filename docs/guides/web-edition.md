@@ -106,6 +106,12 @@ browsers load the viewer's modules only over HTTP.
 scan appears at once. Copy images only when you may publish them; otherwise
 leave out `images`, and visitors open their own copy of the PDF.
 
+The notebook
+[`mei_web_edition.ipynb`](../../notebooks/mei_web_edition.ipynb) does all of
+this in Jupyter: it writes this `site.json`, builds the site and serves a
+preview. A switch selects the result of the IIIF tutorial or the guided
+notebook instead.
+
 ## Site config
 
 `site.json` is a JSON object. Paths in it are relative to the file's folder.
@@ -224,6 +230,17 @@ that the zones are measured in:
 ```json
 "facsimile": {"type": "iiif", "confirm": "…", "button": "Show the facsimile"}
 ```
+
+camat's IIIF notebooks link each bar to its zone but leave the page breaks
+without `@facs`, and the build refuses MEI whose page breaks point at no
+surface. Link them first:
+
+```bash
+camat-link-pb-surface --apply FILE.mei
+```
+
+This takes each page from the zone of the bar after the break and changes
+nothing else. Without `--apply`, it only reports.
 
 `confirm` and `button` work as for PDF images. Both are optional; without
 `confirm`, the scan appears at once. The build requires every page's target
