@@ -16,15 +16,15 @@ jobs:
       tag_name: ${{ steps.version_check.outputs.tag_name }}
       prerelease: ${{ steps.version_check.outputs.prerelease }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
       - run: python -m pip install "packaging>=24"
       - name: Validate versions and release notes before compatibility tests
         id: version_check
         run: python scripts/prepare_release.py --notes release-notes.md
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: release-notes
           path: release-notes.md
@@ -42,11 +42,11 @@ jobs:
     permissions:
       id-token: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: dists
           path: dist/
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: release-checksums
       - name: Verify tested release files before publishing
@@ -62,10 +62,10 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: release-notes
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           name: camat ${{ needs.preflight.outputs.package_version }}
           tag_name: ${{ needs.preflight.outputs.tag_name }}
