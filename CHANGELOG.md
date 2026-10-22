@@ -13,6 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `xmllint`, and fails if any test skips. Fifteen tests that needed them had
   never run on CI: MEI version and conversion checks against RELAX NG, PDF
   page rendering, and the end-to-end validation of the PDF tutorial.
+- CI and the release workflow use the Node 24 releases of their GitHub
+  actions: checkout v7, setup-python v7, upload-artifact v7,
+  download-artifact v8 and action-gh-release v3.
 
 ### Fixed
 
