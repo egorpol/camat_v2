@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="generator" content="camat $camat_version (camat.review_page)">
+<title>$title</title>
+<link rel="stylesheet" href="review.css">
+</head>
+<body class="$body_class">
+<nav>
+<span class="cards">$nav</span>
+<span class="tools"><span id="count"></span>
+$before_toggle
+<button type="button" id="copy">Copy summary</button></span>
+</nav>
+<main>
+<h1>$title</h1>
+$intro
+$cards
+</main>
+<dialog id="summary">
+<p id="summary-status"></p>
+<textarea readonly rows="12"></textarea>
+<form method="dialog"><button>Close</button></form>
+</dialog>
+<script id="review-data" type="application/json">$data</script>
+<script src="review.js"></script>
+</body>
+</html>

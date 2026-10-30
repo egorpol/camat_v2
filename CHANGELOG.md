@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased][Unreleased]
 
+### Added
+
+- A review-page template: `camat.review_page.build_review_page(spec, out)`
+  and `camat-review-page SPEC OUT` build a local page with one card per
+  reading to confirm. Each card shows facsimile crops, the bars rendered
+  by Verovio at a git ref (default `HEAD`) and in the working tree, and a
+  description. Cards may show one row per bar, changed events matched by
+  `xml:id`, and extra images with captions. Reviewers mark cards or rows
+  ok or problem, add notes and copy a summary back to the editor; marks
+  stay in the browser under the spec's `storage_key`. IIIF regions and
+  locally cut images use the MEI's facsimile zones, with downloads cached.
+  Every check runs before the output is written, and each review needs a
+  new folder. camat ships the JSON Schema as
+  `camat/schemas/review.schema.json`. Guide: "Review pages".
+
 ### Changed
 
 - CI runs the checkout test suite with the `validation` extra, Poppler and

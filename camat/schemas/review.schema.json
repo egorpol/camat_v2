@@ -1,0 +1,83 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "camat review page spec",
+  "description": "Spec of camat-review-page (camat.review_page), version 1. Paths are relative to the spec's folder. The build checks more than this schema: that files exist, card ids are unique, the bars are in the MEI with an xml:id, and the MEI can be read at before_ref.",
+  "type": "object",
+  "required": ["title", "storage_key", "cards"],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {"type": "string", "description": "URL or path of this schema, for editors; the build ignores it."},
+    "version": {"const": 1, "description": "Spec version. Without it, 1."},
+    "title": {"type": "string", "pattern": "\\S", "description": "Page title and heading."},
+    "description": {"type": "string", "description": "HTML under the heading, inserted as written."},
+    "storage_key": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$",
+                    "description": "Key of this review's marks and notes in the browser's storage. Give each review its own."},
+    "before_ref": {"type": ["string", "null"], "pattern": "^[^-]", "default": "HEAD",
+                   "description": "Git ref of the 'before' column (git show REF:path). null: no before column."},
+    "labels": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Column captions.",
+      "properties": {
+        "source": {"type": "string", "default": "Source"},
+        "before": {"type": "string", "description": "Default: before_ref."},
+        "after": {"type": "string", "default": "now"}
+      }
+    },
+    "verovio": {
+      "type": "object",
+      "additionalProperties": {"type": ["string", "number", "boolean"]},
+      "description": "Verovio options over camat.review_page.VEROVIO_OPTIONS (the web edition's, with scale 50 and no header)."
+    },
+    "crop": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "How each bar's facsimile zone is cut.",
+      "properties": {
+        "padding": {"type": "array", "items": {"type": "integer", "minimum": 0}, "minItems": 4, "maxItems": 4,
+                    "default": [200, 80, 200, 240],
+                    "description": "Graphic pixels added left, top, right and bottom."},
+        "size": {"type": "string", "pattern": "^(max|full|!?[1-9][0-9]*,[1-9][0-9]*|[1-9][0-9]*,|,[1-9][0-9]*)$",
+                 "default": "!1400,1600", "description": "IIIF size of each crop, also applied to local images."}
+      }
+    },
+    "cards": {"type": "array", "minItems": 1, "items": {"$ref": "#/definitions/card"}}
+  },
+  "definitions": {
+    "card": {
+      "type": "object",
+      "required": ["id", "mei", "measures"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$",
+               "description": "Unique; the card's anchor and storage key."},
+        "label": {"type": "string", "description": "Heading, and the name in the summary. Default: id."},
+        "mei": {"type": "string", "minLength": 1, "description": "Path of the MEI file."},
+        "measures": {
+          "description": "Bars by @n (\"12\" or \"12-14\"), or [first, last] with @n values or #xml:ids.",
+          "anyOf": [
+            {"type": "string", "pattern": "^[^-]"},
+            {"type": "array", "items": {"type": "string", "minLength": 1}, "minItems": 1, "maxItems": 2}
+          ]
+        },
+        "description": {"type": "string", "description": "HTML, inserted as written."},
+        "status": {"enum": ["check", "partly", "confirmed"], "default": "check"},
+        "images": {"type": "array", "items": {"$ref": "#/definitions/image"},
+                   "description": "Further images under the columns, such as a second witness."},
+        "rows": {"type": "boolean", "default": false,
+                 "description": "One row per bar, each with its own marks and a list of the events that changed."},
+        "width": {"type": "integer", "minimum": 100,
+                  "description": "Verovio page width. Default: 1000 for one bar, 1800 for more, 900 for each row."}
+      }
+    },
+    "image": {
+      "type": "object",
+      "required": ["src"],
+      "additionalProperties": false,
+      "properties": {
+        "src": {"type": "string", "minLength": 1, "description": "Local path (copied) or http(s) URL."},
+        "caption": {"type": "string"}
+      }
+    }
+  }
+}

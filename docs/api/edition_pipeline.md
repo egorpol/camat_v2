@@ -137,6 +137,19 @@ Build a static site from finished MEI files and a JSON site config; see
         - build_site
         - main
 
+## Review pages
+
+Build a local page to confirm corrected readings against the source; see
+[Review pages](../guides/review-pages.md) for the review workflow and spec.
+
+::: camat.review_page
+    options:
+      members:
+        - build_review_page
+        - ReviewSpecError
+        - diff_events
+        - main
+
 ## IIIF validation and orchestration
 
 ::: camat.validate_iiif_vs_local
