@@ -231,7 +231,7 @@ def integrate_iiif_page(
     page_width_mm: float = 210.0,
     timeout: int = 180,
     minimum_measures: int = 5,
-    max_measure_mismatch: int | None = 1,
+    max_measure_mismatch: int | None = 0,
     overwrite_staged: bool = False,
     overwrite_output: bool = False,
     overwrite_images: bool = False,

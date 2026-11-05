@@ -178,6 +178,13 @@ runs the same job over a list of files (or a folder of already-named
 Its example is three clean Buxtehude pages in `test_corpus/`. Writes go to
 `converted_mei/iiif_batch/` and stay off until `RUN_IIIF_INTEGRATION` is True.
 
+Boxes are joined to bars by number, so a page whose bars and boxes differ stops
+and the next page goes on. Look at that page before raising
+`MAX_MEASURE_MISMATCH`: above 0, a page with a missed box passes and its later
+bars take the wrong region. The fault may be in the MEI rather than the
+detector, such as two bars fused by OMR. In the batch example, page 178 stops
+this way: the detector returned 10 boxes for its 11 bars.
+
 The archived maintainer notebooks in `CAMAT_old/` expose the same production work at broader
 scales:
 

@@ -11,7 +11,8 @@ Usage:
     # Re-download images (e.g. if local images are outdated or mismatched):
     camat-run-pipeline DdT_1/04_... --overwrite-images
 
-    # Use looser measure filters during annotation integration:
+    # Use looser measure filters during annotation integration
+    # (a page with a missed box then passes, its later bars on the wrong region):
     camat-run-pipeline DdT_1/04_... --minimum-measures 2 --max-measure-mismatch 4
 
     # Skip preface pages:
@@ -125,8 +126,9 @@ def main(argv=None) -> int:
                         help="Run only these step numbers, e.g. --steps 4 5 (default: all)")
     parser.add_argument("--minimum-measures", type=int, default=5,
                         help="Skip pages whose source MEI has fewer measures than this threshold (default: 5)")
-    parser.add_argument("--max-measure-mismatch", type=int, default=1,
-                        help="Maximum number of unmatched measure numbers allowed during integration (default: 1)")
+    parser.add_argument("--max-measure-mismatch", type=int, default=0,
+                        help="Maximum number of unmatched measure numbers allowed during integration (default: 0). "
+                             "Above 0, a page with a missed box passes and its later bars take the wrong region")
     parser.add_argument("--timeout", type=int, default=180,
                         help="HTTP timeout in seconds for measure detector uploads (default: 180)")
     parser.add_argument("--force", action="store_true",
