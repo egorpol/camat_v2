@@ -31,6 +31,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CI and the release workflow use the Node 24 releases of their GitHub
   actions: checkout v7, setup-python v7, upload-artifact v7,
   download-artifact v8 and action-gh-release v3.
+- On the IIIF route, any difference between a page's bars and the detector's
+  boxes now stops that page by default; the other pages go on.
+  `camat-run-pipeline`, `camat.iiif_page.integrate_iiif_page` and the two IIIF
+  notebooks default `max_measure_mismatch` to 0 (was 1), as the lower-level
+  commands already did. Boxes are joined to bars by number, so at 1 a page
+  with one missed box passed and its later bars took the next bar's region.
+  Pages that relied on it now need checking, or `--max-measure-mismatch 1`.
+  The batch notebook's example page 178, with 10 boxes for 11 bars, now stops.
 
 ### Fixed
 

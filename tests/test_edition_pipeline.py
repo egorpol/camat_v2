@@ -8,6 +8,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 import requests
 
 from camat import (
@@ -32,22 +33,26 @@ from camat.facsimile_downloader import (
 )
 from camat.fetch_bsb_metadata import localized_text, split_creation
 from camat.generate_volume_pages import build_markdown, extract_meta
+from camat.run_pipeline import main as run_pipeline_main
 from camat.run_pipeline import step1_args, step4_args, step5_args
 
 
 MEI_NS = "http://www.music-encoding.org/ns/mei"
 
 
-def _write_source_mei(path: Path) -> None:
+def _write_source_mei(path: Path, bars: int = 2) -> None:
+    measures = "\n".join(
+        f'    <measure xml:id="measure-{n}" n="{n}"><staff n="1"><layer n="1" /></staff></measure>'
+        for n in range(1, bars + 1)
+    )
     path.write_text(
-        '''<?xml version="1.0" encoding="UTF-8"?>
+        f'''<?xml version="1.0" encoding="UTF-8"?>
 <?xml-model href="https://music-encoding.org/schema/5.1/mei-CMN.rng"?>
 <mei xmlns="http://www.music-encoding.org/ns/mei" meiversion="5.1+CMN">
   <meiHead><fileDesc><titleStmt><title>Pipeline fixture</title></titleStmt>
     <pubStmt><p>Test</p></pubStmt></fileDesc></meiHead>
   <music><body><mdiv><score><section>
-    <measure xml:id="measure-1" n="1"><staff n="1"><layer n="1" /></staff></measure>
-    <measure xml:id="measure-2" n="2"><staff n="1"><layer n="1" /></staff></measure>
+{measures}
   </section></score></mdiv></body></music>
 </mei>
 ''',
@@ -55,14 +60,9 @@ def _write_source_mei(path: Path) -> None:
     )
 
 
-def _write_annotation_mei(path: Path) -> None:
+def _write_annotation_mei(path: Path, boxes=((10, 300), (320, 620))) -> None:
     tree = build_annotation_tree(
-        {
-            "measures": [
-                {"ulx": 10, "uly": 20, "lrx": 300, "lry": 200},
-                {"ulx": 320, "uly": 20, "lrx": 620, "lry": 200},
-            ]
-        },
+        {"measures": [{"ulx": ulx, "uly": 20, "lrx": lrx, "lry": 200} for ulx, lrx in boxes]},
         image_name="bsb00000000_00001.jpg",
         image_width=1000,
         image_height=1400,
@@ -363,6 +363,78 @@ def test_iiif_page_plans_and_batch_integration(tmp_path: Path, monkeypatch) -> N
     assert (target, width, height) == (expected_url, 1000, 1400)
 
 
+def test_iiif_page_with_a_missed_box_stops_unless_the_tolerance_is_raised(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from camat.iiif_page import integrate_iiif_page, integrate_iiif_pages, plan_iiif_pages
+
+    source = tmp_path / "bsb00000000_00001.mei"
+    _write_source_mei(source, bars=3)
+    target_dir = tmp_path / "out"
+    target_dir.mkdir()
+    plans = plan_iiif_pages(
+        [{"source_mei": source, "archive_url": "", "iiif_image_url": ""}],
+        target_dir=target_dir,
+    )
+    plan = plans[0]
+    png_bytes = b"\x89PNG\r\n\x1a\n" + b"\x00" * 8 + struct.pack(">II", 1000, 1400)
+
+    def fake_download(output_path, **_kwargs):
+        output_path = Path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(png_bytes)
+        return output_path, "https://example.test/page.jpg"
+
+    monkeypatch.setattr("camat.iiif_page.download_facsimile_image", fake_download)
+    # Three bars, and the detector missed the middle box.
+    _write_annotation_mei(plan.annotation_path, boxes=((10, 300), (640, 920)))
+    options = {
+        "reuse_annotations": True,
+        "overwrite_output": True,
+        "overwrite_staged": True,
+        "verify_iiif": False,
+        "minimum_measures": 1,
+        "timeout": 1,
+        "retries": 0,
+        "retry_delay": 0,
+    }
+
+    with pytest.raises(RuntimeError, match="does not align"):
+        integrate_iiif_page(plan, **options)
+    assert not plan.final_mei.exists()
+
+    (result,) = integrate_iiif_pages(plans, **options)
+    assert result["ok"] is False
+    assert "does not align" in str(result["error"])
+
+    # Why 1 is not the default: the page passes, with bar 2 on bar 3's box.
+    linked = integrate_iiif_page(plan, max_measure_mismatch=1, **options)
+    root = ET.parse(str(linked["final_mei"])).getroot()
+    zone_ulx = {
+        zone.get("{http://www.w3.org/XML/1998/namespace}id"): zone.get("ulx")
+        for zone in root.iter(f"{{{MEI_NS}}}zone")
+    }
+    facs = {
+        measure.get("n"): measure.get("facs")
+        for measure in root.iter(f"{{{MEI_NS}}}measure")
+    }
+    assert zone_ulx[facs["2"].lstrip("#")] == "640"
+    assert facs["3"] is None
+
+
+def test_pipeline_command_stops_on_any_measure_mismatch_by_default(monkeypatch) -> None:
+    commands = []
+
+    def fake_run(command, **_kwargs):
+        commands.append(command)
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr("camat.run_pipeline.subprocess.run", fake_run)
+
+    assert run_pipeline_main(["score", "--steps", "4"]) == 0
+    assert commands[0][commands[0].index("--max-measure-mismatch") + 1] == "0"
+
+
 def test_copied_pipeline_notebooks_use_package_imports_and_safe_defaults() -> None:
     repo_root = Path(__file__).resolve().parents[1]
 
@@ -385,6 +457,8 @@ def test_copied_pipeline_notebooks_use_package_imports_and_safe_defaults() -> No
     assert "RUN_IIIF_INTEGRATION = False" in single
     assert 'SCRIPTS_DIR' not in single
     assert "import setup_camat" in tutorial
+    assert "MAX_MEASURE_MISMATCH = 0" in tutorial
+    assert "MAX_MEASURE_MISMATCH = 0" in batch_tutorial
     assert 'test_corpus/Buxtehude-Anhang-S._185_musicxml_verovio.mei' in tutorial
     assert 'page=185' in tutorial
     assert "IIIF_IMAGE_URL" in tutorial
