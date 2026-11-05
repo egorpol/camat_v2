@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `resolve_mei_note_alters`, `regenerate_accid_ges_text` and `AccidGesReport`
+  resolve written MEI pitches and regenerate sounding `@accid.ges` values
+  while preserving every other byte. The standalone checker gains
+  `--check-accid-ges` (`check_accid_ges=True` in Python); mismatches are review
+  warnings, also enabled by `publication_profile`.
+
 - A review-page template: `camat.review_page.build_review_page(spec, out)`
   and `camat-review-page SPEC OUT` build a local page with one card per
   reading to confirm. Each card shows facsimile crops, the bars rendered
@@ -23,6 +29,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `camat/schemas/review.schema.json`. Guide: "Review pages".
 
 ### Changed
+
+- `combine_meis` regenerates gestural accidentals on the joined file by
+  default so MIDI readers retain sounding pitch. Opt out with
+  `regenerate_accid_ges=False`. Its result includes a regeneration report or
+  an error; unsupported resolution leaves the joined file as written.
+- `apply_safe_cleanup(clean_accid_ges=True)` now regenerates values instead
+  of removing them, after accidental and tie fixes. The default remains off.
 
 - CI runs the checkout test suite with the `validation` extra, Poppler and
   `xmllint`, and fails if any test skips. Fifteen tests that needed them had
@@ -41,6 +54,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The batch notebook's example page 178, with 10 boxes for 11 bars, now stops.
 
 ### Fixed
+
+- MEI pitch resolution follows the printed staff on cross-staff notes and
+  resolves consecutive graces before their main note. Notes inside
+  `<graceGrp>` are resolved in order without advancing musical time.
 
 - Scores with repeat ends that have no repeat start between them and no
   `<expansion>` no longer crash Python when parsed with the default Verovio

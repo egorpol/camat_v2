@@ -7,6 +7,17 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 import numpy as np
 import pandas as pd
 
+from .mei_sounding_pitch import (
+    _mei_accid_to_alter,
+    _mei_note_accid_value,
+    _mei_duration_quarters,
+    _tuplet_multiplier,
+    _mei_tuplet_span_multipliers,
+    _timed_element_tuplet_span_multiplier,
+    _extract_mei_tie_next_map,
+    _mei_tie_tokens,
+    _extract_mei_note_effective_alters,
+)
 from .music_utils import (
     canonicalize_pitch_name,
     draw_piano_roll,
@@ -98,44 +109,6 @@ def _mei_accid_to_suffix(raw: Any) -> str:
     return mapping.get(token, "")
 
 
-def _mei_accid_to_alter(raw: Any) -> Optional[int]:
-    token = None if raw is None else str(raw).strip().lower()
-    if not token:
-        return None
-    mapping = {
-        "s": 1,
-        "ns": 1,
-        "ss": 2,
-        "x": 2,
-        "xs": 3,
-        "ts": 3,
-        "f": -1,
-        "nf": -1,
-        "ff": -2,
-        "tf": -3,
-        "n": 0,
-        "sharp": 1,
-        "double-sharp": 2,
-        "flat": -1,
-        "double-flat": -2,
-        "natural": 0,
-    }
-    return mapping.get(token)
-
-
-def _mei_note_accid_value(note_el: Any) -> Optional[Any]:
-    attr_value = note_el.attrib.get("accid.ges") or note_el.attrib.get("accid")
-    if attr_value is not None:
-        return attr_value
-    for child in list(note_el):
-        if _local_name(child.tag) != "accid":
-            continue
-        child_value = child.attrib.get("accid.ges") or child.attrib.get("accid")
-        if child_value is not None:
-            return child_value
-    return None
-
-
 def _alter_to_suffix(alter: int) -> str:
     if alter > 0:
         return "#" * int(alter)
@@ -155,142 +128,6 @@ def _extract_mei_note_explicit_alters(root: Any) -> Dict[str, int]:
             note_alters[note_id] = int(explicit_alter)
 
     return note_alters
-
-
-def _extract_mei_note_effective_alters(root: Any) -> Dict[int, int]:
-    """Resolve common-notation key signatures and measure accidentals.
-
-    Verovio's MIDI accessor does not supply missing gestural accidentals from
-    every MEI key-signature encoding. Resolve the source notation independently
-    of playback timing. Explicit gestural values win; written accidentals carry
-    by staff, pitch letter and octave until the barline, including across layers.
-    The result uses element identities so source notes need not have xml:ids.
-    """
-    import itertools
-    import re
-
-    def signature(el):
-        declaration = next((child for child in el if _local_name(child.tag) == "keySig"), el)
-        raw = declaration.get("sig") if _local_name(declaration.tag) == "keySig" else None
-        raw = raw if raw is not None else el.get("keysig", el.get("key.sig"))
-        if raw is None:
-            return None
-        match = re.fullmatch(r"([0-7])([sf]?)", str(raw).strip())
-        if not match or (match[1] != "0" and not match[2]):
-            raise ValueError(f"Unsupported MEI key signature {raw!r} for implicit pitch resolution.")
-        letters = "fcgdaeb" if match[2] == "s" else "beadgcf"
-        return {letter: (1 if match[2] == "s" else -1) for letter in letters[:int(match[1])]}
-
-    def written_accidental(note):
-        value = note.get("accid")
-        if value is None:
-            value = next((child.get("accid") for child in note
-                          if _local_name(child.tag) == "accid" and child.get("accid") is not None), None)
-        return _mei_accid_to_alter(value)
-
-    def layer_events(layer, multiplier=1.0):
-        for child in layer:
-            tag = _local_name(child.tag)
-            if tag in {"note", "chord", "rest", "space", "mRest", "multiRest", "keySig"}:
-                yield child, multiplier
-            elif tag in {"beam", "tuplet", "bTrem", "fTrem"}:
-                scale = _tuplet_multiplier(child) if tag == "tuplet" else 1.0
-                yield from layer_events(child, multiplier * scale)
-
-    effective = {}
-    global_key, staff_keys = None, {}
-    tied_alters = {}
-    tie_next = _extract_mei_tie_next_map(root)
-    tuplet_spans = _mei_tuplet_span_multipliers(root)
-    meter_spans = _mei_measure_meter_spans(root)
-
-    def process_staff(staff, measure):
-        staff_n = staff.get("n", "1")
-        active_key = staff_keys.get(staff_n, global_key)
-        carried = {}
-        events = []
-        layers = [child for child in staff if _local_name(child.tag) == "layer"] or [staff]
-        for layer in layers:
-            cursor = 0.0
-            for event, scale in layer_events(layer):
-                tag = _local_name(event.tag)
-                events.append((round(cursor, 12), event))
-                if tag == "keySig":
-                    continue
-                duration = _mei_duration_quarters(event)
-                if duration is None and tag == "chord":
-                    duration = next((_mei_duration_quarters(note) for note in event
-                                     if _local_name(note.tag) == "note" and _mei_duration_quarters(note) is not None), None)
-                if duration is None and tag in {"mRest", "multiRest"}:
-                    duration = meter_spans.get(id(measure), 4.0)
-                cursor += (duration or 0.0) * scale * _timed_element_tuplet_span_multiplier(event, tuplet_spans)
-        for _, group in itertools.groupby(sorted(events, key=lambda item: item[0]), key=lambda item: item[0]):
-            simultaneous = [event for _, event in group]
-            for event in simultaneous:
-                if _local_name(event.tag) == "keySig":
-                    key = signature(event)
-                    if key is not None:
-                        active_key = staff_keys[staff_n] = key
-                        carried.clear()
-            notes = [note for event in simultaneous for note in
-                     ([event] if _local_name(event.tag) == "note" else
-                      [child for child in event if _local_name(child.tag) == "note"]
-                      if _local_name(event.tag) == "chord" else [])]
-            updates = {}
-            for note in notes:
-                accidental = written_accidental(note)
-                if accidental is not None:
-                    pitch = (note.get("pname"), note.get("oct"))
-                    updates.setdefault(pitch, set()).add(accidental)
-            # Simultaneous conflicting accidentals are explicit on their notes;
-            # they do not establish one unambiguous carry for other voices.
-            for pitch, values in updates.items():
-                if len(values) == 1:
-                    carried[pitch] = next(iter(values))
-            for note in notes:
-                note_id = _xml_id(note)
-                pitch = (note.get("pname"), note.get("oct"))
-                alter = _mei_accid_to_alter(_mei_note_accid_value(note))
-                if alter is None:
-                    alter = tied_alters.get(note_id, carried.get(pitch))
-                if alter is None and active_key is not None:
-                    alter = active_key.get(str(pitch[0]).lower(), 0)
-                if alter is not None:
-                    effective[id(note)] = alter
-                    if note_id in tie_next:
-                        tied_alters[tie_next[note_id]] = alter
-
-    def visit(el):
-        nonlocal global_key
-        tag = _local_name(el.tag)
-        if tag == "score":
-            global_key = None
-            staff_keys.clear()
-            tied_alters.clear()
-        if tag == "scoreDef":
-            key = signature(el)
-            if key is not None:
-                global_key = key
-                staff_keys.clear()
-        elif tag == "staffDef":
-            key = signature(el)
-            if key is not None:
-                staff_keys[el.get("n", "1")] = key
-        elif tag == "measure":
-            for child in el:
-                if _local_name(child.tag) in {"scoreDef", "staffDef"}:
-                    visit(child)
-                elif _local_name(child.tag) == "staff":
-                    process_staff(child, el)
-            return
-        for child in el:
-            visit(child)
-
-    music = [el for el in root.iter() if _local_name(el.tag) == "music"]
-    bodies = [el for node in music for el in node.iter() if _local_name(el.tag) == "body"]
-    for search_root in bodies or music or [root]:
-        visit(search_root)
-    return effective
 
 
 def _mei_written_pitch(note_el: Any, alter: Optional[int] = None) -> Optional[str]:
@@ -322,49 +159,6 @@ def _midi_from_mei_pitch(note_el: Any, alter: Optional[int] = None) -> Optional[
     except Exception:
         return None
     return int((oct_int + 1) * 12 + pc_map[letter] + alter)
-
-
-def _mei_duration_quarters(el: Any) -> Optional[float]:
-    if str(getattr(el, "attrib", {}).get("grace", "")).strip():
-        return 0.0
-    dur_raw = getattr(el, "attrib", {}).get("dur")
-    if dur_raw is None:
-        return None
-    token = str(dur_raw).strip().lower()
-    duration_map = {
-        "maxima": 32.0,
-        "long": 16.0,
-        "longa": 16.0,
-        "breve": 8.0,
-        "1": 4.0,
-        "2": 2.0,
-        "4": 1.0,
-        "8": 0.5,
-        "16": 0.25,
-        "32": 0.125,
-        "64": 0.0625,
-        "128": 0.03125,
-    }
-    base = duration_map.get(token)
-    if base is None:
-        try:
-            denom = float(token)
-            if denom <= 0:
-                return None
-            base = 4.0 / denom
-        except Exception:
-            return None
-    dots_raw = getattr(el, "attrib", {}).get("dots")
-    try:
-        dots = int(dots_raw) if dots_raw is not None else 0
-    except Exception:
-        dots = 0
-    total = float(base)
-    add = float(base)
-    for _ in range(max(0, dots)):
-        add /= 2.0
-        total += add
-    return total
 
 
 def _midi_quarter_scale(root: Any, tk: Any) -> float:
@@ -497,88 +291,6 @@ def _measure_number(measure_el: Any, fallback_index: int) -> int:
     return int(fallback_index)
 
 
-def _tuplet_multiplier(el: Any) -> float:
-    try:
-        num = float(el.attrib.get("num"))
-        numbase = float(el.attrib.get("numbase"))
-    except Exception:
-        return 1.0
-    if num <= 0 or numbase <= 0:
-        return 1.0
-    return float(numbase / num)
-
-
-def _mei_tuplet_span_multipliers(root: Any) -> Dict[str, float]:
-    """Return per-element metric multipliers for MEI ``tupletSpan`` ranges.
-
-    Container ``<tuplet>`` ratios are handled while walking layers.  Elements
-    already inside such a container are deliberately excluded here so an
-    equivalent ``tupletSpan`` cannot apply the same ratio twice.
-    """
-    parent_by_element = {child: parent for parent in root.iter() for child in parent}
-    element_by_id: Dict[str, Any] = {}
-    ordered_ids: List[str] = []
-    for el in root.iter():
-        if _local_name(el.tag) not in {"note", "chord", "rest", "space"}:
-            continue
-        xml_id = _xml_id(el)
-        if xml_id:
-            element_by_id[xml_id] = el
-            ordered_ids.append(xml_id)
-    position_by_id = {xml_id: idx for idx, xml_id in enumerate(ordered_ids)}
-
-    def _inside_tuplet_container(xml_id: str) -> bool:
-        current = parent_by_element.get(element_by_id.get(xml_id))
-        while current is not None:
-            if _local_name(current.tag) == "tuplet":
-                return True
-            current = parent_by_element.get(current)
-        return False
-
-    multipliers: Dict[str, float] = {}
-    for span in root.iter():
-        if _local_name(span.tag) != "tupletSpan":
-            continue
-        multiplier = _tuplet_multiplier(span)
-        if multiplier == 1.0:
-            continue
-        target_ids = {
-            normalized
-            for raw in str(span.attrib.get("plist", "")).split()
-            if (normalized := _normalize_xml_ref(raw))
-        }
-        start_id = _normalize_xml_ref(span.attrib.get("startid"))
-        end_id = _normalize_xml_ref(span.attrib.get("endid"))
-        if start_id in position_by_id and end_id in position_by_id:
-            start_idx = position_by_id[start_id]
-            end_idx = position_by_id[end_id]
-            if start_idx <= end_idx:
-                target_ids.update(ordered_ids[start_idx : end_idx + 1])
-        for target_id in target_ids:
-            if target_id not in element_by_id or _inside_tuplet_container(target_id):
-                continue
-            multipliers[target_id] = multipliers.get(target_id, 1.0) * multiplier
-    return multipliers
-
-
-def _timed_element_tuplet_span_multiplier(
-    timed_el: Any,
-    multipliers: Mapping[str, float],
-) -> float:
-    timed_id = _xml_id(timed_el)
-    if timed_id in multipliers:
-        return float(multipliers[timed_id])
-    if _local_name(timed_el.tag) != "chord":
-        return 1.0
-    child_values = {
-        float(multipliers[child_id])
-        for child in list(timed_el)
-        if _local_name(child.tag) == "note"
-        and (child_id := _xml_id(child)) in multipliers
-    }
-    return child_values.pop() if len(child_values) == 1 else 1.0
-
-
 def _iter_layer_timed_children(layer_el: Any, multiplier: float = 1.0) -> Iterable[Tuple[Any, float]]:
     for child in list(layer_el):
         tag = _local_name(child.tag)
@@ -587,72 +299,6 @@ def _iter_layer_timed_children(layer_el: Any, multiplier: float = 1.0) -> Iterab
         elif tag in {"beam", "tuplet", "bTrem", "fTrem"}:
             child_multiplier = multiplier * (_tuplet_multiplier(child) if tag == "tuplet" else 1.0)
             yield from _iter_layer_timed_children(child, child_multiplier)
-
-
-def _extract_mei_tie_next_map(root: Any) -> Dict[str, str]:
-    tie_next: Dict[str, str] = {}
-    for el in root.iter():
-        if _local_name(el.tag) != "tie":
-            continue
-        start_id = _normalize_xml_ref(el.attrib.get("startid"))
-        end_id = _normalize_xml_ref(el.attrib.get("endid"))
-        if start_id and end_id:
-            tie_next[start_id] = end_id
-
-    # Also support compact note/chord @tie encodings.  Open chains are keyed
-    # by staff/layer and written pitch so interleaved voices do not connect.
-    parent_by_element = {child: parent for parent in root.iter() for child in parent}
-    open_ties: Dict[Tuple[str, str, str, str], str] = {}
-
-    def _ancestor_number(el: Any, tag_name: str) -> str:
-        current = parent_by_element.get(el)
-        while current is not None:
-            if _local_name(current.tag) == tag_name:
-                return str(current.attrib.get("n", ""))
-            current = parent_by_element.get(current)
-        return ""
-
-    for note_el in root.iter():
-        if _local_name(note_el.tag) != "note":
-            continue
-        parent = parent_by_element.get(note_el)
-        raw_tie = note_el.attrib.get("tie")
-        if raw_tie is None and parent is not None and _local_name(parent.tag) == "chord":
-            raw_tie = parent.attrib.get("tie")
-        tokens = _mei_tie_tokens(raw_tie)
-        if not tokens:
-            continue
-        note_id = _xml_id(note_el)
-        if not note_id:
-            continue
-        pitch_key = (
-            str(note_el.attrib.get("pname") or note_el.attrib.get("pname.ges") or ""),
-            str(note_el.attrib.get("oct") or note_el.attrib.get("oct.ges") or ""),
-        )
-        key = (
-            _ancestor_number(note_el, "staff"),
-            _ancestor_number(note_el, "layer"),
-            pitch_key[0],
-            pitch_key[1],
-        )
-        is_start = bool(tokens & {"i", "initial", "start"})
-        is_middle = bool(tokens & {"m", "medial", "middle"})
-        is_stop = bool(tokens & {"t", "terminal", "stop"})
-        previous_id = open_ties.get(key)
-        if (is_middle or is_stop) and previous_id:
-            tie_next.setdefault(previous_id, note_id)
-        if is_start or is_middle:
-            open_ties[key] = note_id
-        if is_stop:
-            open_ties.pop(key, None)
-    return tie_next
-
-
-def _mei_tie_tokens(raw: Any) -> set[str]:
-    value = str(raw or "").strip().lower()
-    if not value:
-        return set()
-    return {tok for tok in value.replace(",", " ").split() if tok}
 
 
 def _apply_tied_duration_semantics(

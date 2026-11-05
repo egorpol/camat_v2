@@ -29,8 +29,10 @@ from pathlib import Path
 from typing import Iterable
 
 if __package__:
+    from .mei_sounding_pitch import regenerate_accid_ges_text
     from .mei_references import REFERENCE_ATTRS, resolve_pointer
 else:  # Preserve direct script use without importing CAMAT's consumer stack.
+    from mei_sounding_pitch import regenerate_accid_ges_text
     from mei_references import REFERENCE_ATTRS, resolve_pointer
 
 
@@ -87,6 +89,7 @@ class MeiChecker:
         publication_profile: bool = False,
         corpus_id_locations: dict[str, list[str]] | None = None,
         *,
+        check_accid_ges: bool = False,
         document_mode: str = "standalone",
         editorial_diagnostics: bool = False,
     ):
@@ -98,6 +101,7 @@ class MeiChecker:
             self.rel_path = self.path.relative_to(self.root_dir).as_posix()
         except ValueError:
             self.rel_path = self.path.name
+        self.check_accid_ges = check_accid_ges or publication_profile
         self.check_ppq = check_ppq
         self.publication_profile = publication_profile
         self.document_mode = document_mode
@@ -178,6 +182,8 @@ class MeiChecker:
         self.parent = {child: parent for parent in self.root.iter() for child in list(parent)}
         self.ids = {el.get(XML_ID): el for el in self.root.iter() if el.get(XML_ID)}
 
+        if self.check_accid_ges:
+            self._check_accid_ges()
         self._check_root()
         if self.publication_profile:
             self._check_publication_profile()
@@ -192,6 +198,31 @@ class MeiChecker:
         self._collect_staff_records()
 
         return self.findings, self.staff_records, self.term_records
+
+    def _check_accid_ges(self) -> None:
+        try:
+            _, report = regenerate_accid_ges_text(self.text)
+        except ValueError as exc:
+            self.add("warning", "pitch", "accid_ges_check_skipped", None,
+                     f"Gestural accidental comparison skipped; review the file: {exc}")
+            return
+        notes = [el for el in self.root.iter() if local_name(el.tag) == "note"]
+
+        def describe(locations):
+            if not locations:
+                return "(absent)"
+            return "; ".join(
+                f"{loc['value']} on " + ("note" if loc["location"] == "note" else
+                                         f"accid child {loc['child_index'] + 1}")
+                for loc in locations
+            )
+
+        for row in report.changes:
+            note = notes[row["note_index"]]
+            self.add("warning", "pitch", "accid_ges_mismatch", note,
+                     "The accid.ges value or location differs from regeneration; review it, "
+                     "as a gestural accidental may be intentional.",
+                     expected=describe(row["expected"]), actual=describe(row["actual"]))
 
     def _scan_xml_id_lines(self) -> dict[str, int]:
         id_lines: dict[str, int] = {}
@@ -1710,6 +1741,7 @@ def check_mei_files(
     *,
     root_dir: str | Path | None = None,
     check_ppq: bool = False,
+    check_accid_ges: bool = False,
     publication_profile: bool = False,
     document_mode: str = "standalone",
     editorial_diagnostics: bool = False,
@@ -1727,6 +1759,9 @@ def check_mei_files(
         working directory.
     check_ppq
         Compare optional ``@dur.ppq`` values with written durations.
+    check_accid_ges
+        Compare gestural accidentals with regeneration from written notation.
+        Differences are review warnings; also enabled by publication_profile.
     publication_profile
         Enable the legacy DdT-specific header and facsimile-topology checks.
         Retained for compatibility; general callers should leave this false.
@@ -1754,6 +1789,7 @@ def check_mei_files(
             file_path,
             root,
             check_ppq=check_ppq,
+            check_accid_ges=check_accid_ges,
             publication_profile=publication_profile,
             corpus_id_locations=corpus_id_locations,
             document_mode=document_mode,
@@ -1799,6 +1835,8 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Also compare optional @dur.ppq values against written @dur/@dots durations.",
     )
+    parser.add_argument("--check-accid-ges", action="store_true",
+                        help="Review accid.ges values that differ from written-notation regeneration.")
     parser.add_argument(
         "--publication-profile",
         action="store_true",
@@ -1844,6 +1882,7 @@ def main(argv: list[str] | None = None) -> int:
         files,
         root_dir=root_dir,
         check_ppq=args.check_ppq,
+        check_accid_ges=args.check_accid_ges,
         publication_profile=args.publication_profile,
         document_mode=args.document_mode,
         editorial_diagnostics=args.editorial_diagnostics,

@@ -29,6 +29,7 @@ from .check_mei_consistency import (
 )
 from .convert_harm_startid_to_tstamp import convert_file as convert_harm_startid_to_tstamp
 from .link_pb_to_surface import link_file as link_pb_to_surface
+from .mei_sounding_pitch import AccidGesReport, regenerate_accid_ges_text
 from .mei_references import REFERENCE_ATTRS, resolve_pointer
 from .verovio_guard import python_executable
 
@@ -60,6 +61,8 @@ class CombineResult:
     staff_group_names_written: int = 0
     later_staff_names_removed: int = 0
     inserted_page_score_defs: int = 0
+    accid_ges_report: AccidGesReport | None = None
+    accid_ges_error: str | None = None
 
 
 @dataclass
@@ -368,6 +371,12 @@ def apply_safe_cleanup(
     clean_accid_ges: bool = False,
     fix_ties: bool = False,
 ) -> CleanupResult:
+    """Apply requested cleanup and return edit counts plus review warnings.
+
+    ``clean_accid_ges=True`` regenerates sounding values (formerly removed
+    them). It runs last, after written-accidental and tie fixes have been saved.
+    Unsupported resolution leaves those values untouched and adds a review row.
+    """
     files = list(files)
     rows: list[dict[str, str]] = []
     changed_total = 0
@@ -377,52 +386,61 @@ def apply_safe_cleanup(
 
     for path in files:
         if clean_ppq:
-            cleaned, removed = strip_ppq_text(path.read_text(encoding="utf-8"))
+            cleaned, removed = strip_ppq_text(path.read_bytes().decode("utf-8"))
             if removed:
-                path.write_text(cleaned, encoding="utf-8")
+                path.write_bytes(cleaned.encode("utf-8"))
                 changed_total += removed
+
+        if clean_accid or fix_ties:
+            tree = ET.parse(path)
+            mei_root = tree.getroot()
+            text = path.read_bytes().decode("utf-8")
+            id_lines = _scan_xml_id_lines(text)
+            parent_map = _build_parent_map(mei_root)
+            ids = {element.get(XML_ID): element for element in mei_root.iter() if element.get(XML_ID)}
+            changed = 0
+
+            if clean_accid:
+                changed += _clean_duplicate_accidentals(
+                    path,
+                    mei_root,
+                    parent_map,
+                    id_lines=id_lines,
+                    root=root,
+                    rows=rows,
+                )
+
+            if fix_ties:
+                changed += _fix_ties_safely(
+                    path,
+                    mei_root,
+                    parent_map,
+                    ids=ids,
+                    id_lines=id_lines,
+                    root=root,
+                    rows=rows,
+                )
+
+            if changed:
+                _write_tree_with_original_preamble(tree, mei_root, path, path)
+                changed_total += changed
 
         if clean_accid_ges:
-            cleaned, removed = strip_accid_ges_text(path.read_text(encoding="utf-8"))
-            if removed:
-                path.write_text(cleaned, encoding="utf-8")
-                changed_total += removed
-
-        if not clean_accid and not fix_ties:
-            continue
-
-        tree = ET.parse(path)
-        mei_root = tree.getroot()
-        text = path.read_text(encoding="utf-8")
-        id_lines = _scan_xml_id_lines(text)
-        parent_map = _build_parent_map(mei_root)
-        ids = {element.get(XML_ID): element for element in mei_root.iter() if element.get(XML_ID)}
-        changed = 0
-
-        if clean_accid:
-            changed += _clean_duplicate_accidentals(
-                path,
-                mei_root,
-                parent_map,
-                id_lines=id_lines,
-                root=root,
-                rows=rows,
-            )
-
-        if fix_ties:
-            changed += _fix_ties_safely(
-                path,
-                mei_root,
-                parent_map,
-                ids=ids,
-                id_lines=id_lines,
-                root=root,
-                rows=rows,
-            )
-
-        if changed:
-            _write_tree_with_original_preamble(tree, mei_root, path, path)
-            changed_total += changed
+            original = path.read_bytes().decode("utf-8")
+            try:
+                cleaned, report = regenerate_accid_ges_text(original)
+            except ValueError as exc:
+                rows.append({
+                    "severity": "warning", "category": "cleanup",
+                    "check": "accid_ges_regeneration_skipped", "file": _relative_path_text(path, root),
+                    "line": "", "element": "", "measure_n": "", "staff_n": "", "layer_n": "",
+                    "xml_id": "", "message": f"Gestural regeneration skipped; review the file: {exc}",
+                    "expected": "", "actual": "", "context": "safe cleanup",
+                })
+            else:
+                if cleaned != original:
+                    path.write_bytes(cleaned.encode("utf-8"))
+                    changed_total += report.added + report.removed
 
     actions = []
     if clean_ppq:
@@ -430,7 +448,7 @@ def apply_safe_cleanup(
     if clean_accid:
         actions.append("accidental cleanup")
     if clean_accid_ges:
-        actions.append("accid.ges cleanup")
+        actions.append("accid.ges regeneration")
     if fix_ties:
         actions.append("safe tie cleanup")
     return CleanupResult(
@@ -818,6 +836,7 @@ def run_checker(
     csv_out: Path,
     json_out: Path | None = None,
     check_ppq: bool = False,
+    check_accid_ges: bool = False,
     publication_profile: bool = False,
     document_mode: str = "standalone",
     editorial_diagnostics: bool = False,
@@ -829,6 +848,7 @@ def run_checker(
         files,
         root_dir=root,
         check_ppq=check_ppq,
+        check_accid_ges=check_accid_ges,
         publication_profile=publication_profile,
         document_mode=document_mode,
         editorial_diagnostics=editorial_diagnostics,
@@ -1468,6 +1488,7 @@ def run_editorial_checks(
     csv_out: Path,
     json_out: Path | None = None,
     check_ppq: bool = True,
+    check_accid_ges: bool = False,
     publication_profile: bool = True,
     check_relaxng: bool = True,
     check_fb_tstamp: bool | None = None,
@@ -1495,6 +1516,7 @@ def run_editorial_checks(
         csv_out=csv_out,
         json_out=None,
         check_ppq=check_ppq,
+        check_accid_ges=check_accid_ges,
         publication_profile=publication_profile,
         document_mode=document_mode,
         editorial_diagnostics=editorial_diagnostics,
@@ -1762,6 +1784,7 @@ def combine_meis(
     keep_original_staff_names: bool = False,
     staff_names_only_at_start: bool = True,
     include_page_score_defs: bool = True,
+    regenerate_accid_ges: bool = True,
 ) -> CombineResult:
     """Join page-level MEI files into one score.
 
@@ -1771,6 +1794,10 @@ def combine_meis(
     into the combined section when it changes staffing, meter, key, or
     clefs. Identical page headers are left out. Set
     ``include_page_score_defs=False`` to keep the old section-only join.
+    By default the joined file receives regenerated gestural accidentals for
+    sounding pitch. Set ``regenerate_accid_ges=False`` to keep its values.
+    Resolution/scanning errors are returned in ``accid_ges_error`` and leave
+    the joined file as written.
     """
     files = [Path(path).resolve() for path in files]
     output_path = Path(output_path).resolve()
@@ -1838,6 +1865,17 @@ def combine_meis(
     )
     normalized_single_layers = normalize_single_layer_numbers_to_one(base_root) if normalize_single_layer_numbers else 0
     _write_tree_with_original_preamble(base_tree, base_root, base_path, output_path)
+    accid_ges_report = None
+    accid_ges_error = None
+    if regenerate_accid_ges:
+        try:
+            original = output_path.read_bytes().decode("utf-8")
+            regenerated, accid_ges_report = regenerate_accid_ges_text(original)
+        except ValueError as exc:
+            accid_ges_error = str(exc)
+        else:
+            if regenerated != original:
+                output_path.write_bytes(regenerated.encode("utf-8"))
     return CombineResult(
         output_path,
         duplicate_ids,
@@ -1849,6 +1887,8 @@ def combine_meis(
         staff_group_names_written,
         later_staff_names_removed,
         inserted_page_score_defs,
+        accid_ges_report,
+        accid_ges_error,
     )
 
 

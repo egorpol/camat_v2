@@ -23,6 +23,11 @@ from .link_pb_to_surface import (
 )
 
 if TYPE_CHECKING:
+    from .mei_sounding_pitch import (
+        AccidGesReport,
+        resolve_mei_note_alters,
+        regenerate_accid_ges_text,
+    )
     from .pattern_search import (
         convolution_map,
         count_kernel_placements,
@@ -247,6 +252,7 @@ if TYPE_CHECKING:
 
 # Submodule -> public names it provides; see ``_RENAMED`` for aliases.
 _LAZY_EXPORTS = {
+    "mei_sounding_pitch": ["AccidGesReport", "resolve_mei_note_alters", "regenerate_accid_ges_text"],
     'pattern_search': (
         'convolution_map',
         'count_kernel_placements',
@@ -502,6 +508,9 @@ _LAZY_ATTRS = {
 }
 
 __all__ = [
+    "AccidGesReport",
+    "resolve_mei_note_alters",
+    "regenerate_accid_ges_text",
     "ValidationResult", "run_mei_validation", "camat_provenance",
     "run_schematron_validation", "image_resource_rows",
     '__version__',
