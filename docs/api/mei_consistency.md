@@ -112,7 +112,47 @@ for generalized local/direct-HTTP checks.
       members:
         - image_resource_rows
 
+## Sounding pitch and gestural accidentals
+
+`resolve_mei_note_alters(text, *, honor_accid_ges=False)` returns sounding
+alterations keyed by `xml:id`, omitting unresolved notes and notes without IDs.
+By default it ignores existing gestural values before resolving written
+accidentals, keys and ties. Printed staff controls keys and carry; graces resolve
+in order before their main note, including within `graceGrp`.
+
+`regenerate_accid_ges_text(text)` returns `(text, AccidGesReport)`. It writes
+`s`/`f`/`ss`/`ff`/`ts`/`tf` for resolved altered notes without a written
+accidental, and removes other values. A note with an `accid` child receives its
+value there; an existing correct child value stays in place. Unresolved notes
+remain untouched and appear in `report.unresolved`. Attribute counts are
+`kept`, `added`, `removed`; `changes` contains one row per changed note, with
+its document index, ID, alteration and actual/expected locations.
+Only `accid.ges` attributes on note/accid start tags change. Decode and encode
+UTF-8 bytes directly to preserve CRLF and BOMs. Unsupported key signatures or
+a scanner/tree disagreement raise `ValueError`.
+
+`combine_meis(..., regenerate_accid_ges=True)` applies this after assembly;
+`CombineResult.accid_ges_report` holds the report, or `accid_ges_error` explains
+why regeneration was skipped. Opt out to preserve assembled values.
+`apply_safe_cleanup(clean_accid_ges=True)` also regenerates (formerly stripped)
+values, after written-accidental and tie cleanup. Its default remains false;
+resolution errors leave values untouched and add a review row.
+
+::: camat.mei_sounding_pitch
+    options:
+      members:
+        - AccidGesReport
+        - resolve_mei_note_alters
+        - regenerate_accid_ges_text
+
 ## Consistency checker
+
+`MeiChecker`, `check_mei_files`, `run_checker` and `run_editorial_checks` accept
+`check_accid_ges=False`. Enable it to report `accid_ges_mismatch` warnings, one
+per changed note with expected and actual locations. These request review:
+intentional sounding overrides can differ from regeneration. Unsupported keys
+give one `accid_ges_check_skipped` warning per file. The publication profile
+enables this check; `editorial_diagnostics` alone does not.
 
 ::: camat.check_mei_consistency
     options:
@@ -131,6 +171,7 @@ for generalized local/direct-HTTP checks.
       members:
         - MEI_CMN_51_SCHEMA
         - CleanupResult
+        - CombineResult
         - SchemaValidationResult
         - VerovioLogResult
         - resolve_mei_inputs

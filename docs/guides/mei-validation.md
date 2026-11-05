@@ -9,6 +9,24 @@ The validation API described here requires CAMAT 0.2.5 or newer. The repository'
 MkDocs pages are the documentation source to maintain during the migration from
 the earlier HfM Weimar wiki.
 
+The legacy consistency checker can compare sounding accidentals with written
+notation, including key signatures, accidental carry and ties:
+
+```sh
+camat-check-mei score.mei --check-accid-ges --output pitch-review.csv
+```
+
+The Python equivalents (`MeiChecker`, `check_mei_files`, `run_checker`,
+`run_editorial_checks`) accept `check_accid_ges=True`; `publication_profile`
+also enables it. General checking without the flag is unchanged.
+`accid_ges_mismatch` is a warning asking for review, with expected and actual
+values/locations, because a gestural override can be intentional. Unresolved
+notes produce no mismatch row; unsupported keys produce one
+`accid_ges_check_skipped` warning. This comparison does not rewrite the score.
+For an explicit transformation use `regenerate_accid_ges_text`; assembly through
+`combine_meis` regenerates by default (`regenerate_accid_ges=False` preserves
+assembled values). See the [sounding-pitch API](../api/mei_consistency.md#sounding-pitch-and-gestural-accidentals).
+
 <a id="development-installation"></a>
 
 ## Installation
