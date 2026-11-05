@@ -42,7 +42,7 @@ from .partitura_backend import (
     _source_to_name,
 )
 from .quiet_utils import suppress_native_output
-from .verovio_guard import guarded_load_into_verovio_toolkit
+from .verovio_guard import _temporary_expand_never, guarded_load_into_verovio_toolkit
 
 try:  # pragma: no cover - optional dependency
     from tqdm.auto import tqdm as _tqdm
@@ -731,8 +731,36 @@ def _verovio_common_mei_dataframes(
     quiet_native_warnings: bool = False,
 ) -> Tuple[pd.DataFrame, pd.DataFrame, Dict[str, str], List[float], Dict[str, Any], int]:
     try:
-        import xml.etree.ElementTree as ET
         import verovio  # type: ignore
+    except Exception as exc:
+        raise RuntimeError("verovio and XML support are required for the Verovio backend") from exc
+
+    # Shared toolkit (partitura shim) must not keep expandNever after this parse.
+    tk = verovio.toolkit()
+    with _temporary_expand_never(tk, True):
+        return _verovio_common_mei_dataframes_on_toolkit(
+            mei_path,
+            tk,
+            parse_enharmonic=parse_enharmonic,
+            include_xml_ids=include_xml_ids,
+            include_note_attachments=include_note_attachments,
+            collapse_tied_pitch_events=collapse_tied_pitch_events,
+            quiet_native_warnings=quiet_native_warnings,
+        )
+
+
+def _verovio_common_mei_dataframes_on_toolkit(
+    mei_path: str,
+    tk: Any,
+    *,
+    parse_enharmonic: bool = False,
+    include_xml_ids: bool = True,
+    include_note_attachments: bool = True,
+    collapse_tied_pitch_events: bool = True,
+    quiet_native_warnings: bool = False,
+) -> Tuple[pd.DataFrame, pd.DataFrame, Dict[str, str], List[float], Dict[str, Any], int]:
+    try:
+        import xml.etree.ElementTree as ET
     except Exception as exc:
         raise RuntimeError("verovio and XML support are required for the Verovio backend") from exc
 
@@ -742,21 +770,21 @@ def _verovio_common_mei_dataframes(
     note_explicit_alters = _extract_mei_note_explicit_alters(root)
     note_effective_alters = _extract_mei_note_effective_alters(root)
     staff_to_part = _source_staff_index_to_part_label_map_from_mei(root)
-    tk = verovio.toolkit()
     mei_data = Path(mei_path).read_text(encoding="utf-8", errors="ignore")
     with suppress_native_output(enabled=quiet_native_warnings):
         load_info = guarded_load_into_verovio_toolkit(
             tk,
             mei_data,
             input_from="mei",
-            options={"removeIds": False},
+            options={"removeIds": False, "expandNever": True},
             source_hint=mei_path,
         )
 
-    # Verovio timemaps expand playback constructs such as repeats, while CAMAT's
-    # common-notation rows currently model the encoded source order. Keep the
-    # timemap/MIDI accessors as fallback probes, but drive the first milestone
-    # from the source MEI layer timeline below.
+    # expandNever keeps Verovio from expanding repeats (and from segfaulting on
+    # scores with unpaired repeat ends; upstream verovio#4533). CAMAT's common-
+    # notation rows already model encoded source order. Keep the timemap/MIDI
+    # accessors as fallback probes, but drive the first milestone from the
+    # source MEI layer timeline below.
     scale = _MIDI_MS_PER_QUARTER_FALLBACK
     with suppress_native_output(enabled=quiet_native_warnings):
         timemap = _verovio_timemap_timing(tk)

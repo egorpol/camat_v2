@@ -101,9 +101,8 @@ def test_suite_passes_camat_validation_before_and_after_the_folder_moves(tmp_pat
     from camat.mei_validation import run_mei_validation
 
     _, linked, _ = suite_chain(tmp_path / "edition")
-    # music21 parses: Verovio's MIDI export crashes on this Suite (see the tutorial).
     result = run_mei_validation([linked], root=tmp_path / "edition", output_dir=tmp_path / "report",
-                                check_verovio=True, check_camat_parse=True, parsing_backend="music21")
+                                check_verovio=True, check_camat_parse=True)
     statuses = {name: run["status"] for name, run in result.record["executions"].items()}
     assert result.passed, statuses
     assert Path(result.record["schema"]["path"]).name == "mei-CMN-5.1.rng"

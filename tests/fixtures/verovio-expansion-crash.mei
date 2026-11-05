@@ -1,0 +1,43 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<mei xmlns="http://www.music-encoding.org/ns/mei" meiversion="5.1+CMN">
+  <meiHead>
+    <fileDesc>
+      <titleStmt>
+        <title>Automatic expansion crash: consecutive repeat endings</title>
+      </titleStmt>
+      <pubStmt />
+    </fileDesc>
+  </meiHead>
+  <music>
+    <body>
+      <mdiv>
+        <score>
+          <scoreDef>
+            <staffGrp>
+              <staffDef n="1" lines="5">
+                <clef shape="G" line="2" />
+                <meterSig count="4" unit="4" />
+              </staffDef>
+            </staffGrp>
+          </scoreDef>
+          <section xml:id="suite">
+            <measure n="1" right="rptend">
+              <staff n="1">
+                <layer n="1">
+                  <note xml:id="n1" pname="c" oct="4" dur="1" />
+                </layer>
+              </staff>
+            </measure>
+            <measure n="2" right="rptend">
+              <staff n="1">
+                <layer n="1">
+                  <note xml:id="n2" pname="d" oct="4" dur="1" />
+                </layer>
+              </staff>
+            </measure>
+          </section>
+        </score>
+      </mdiv>
+    </body>
+  </music>
+</mei>
