@@ -12,7 +12,13 @@ from contextlib import contextmanager
 from typing import Any, Dict, List, Optional, Tuple
 
 from .quiet_utils import suppress_native_output
-from .verovio_guard import guarded_load_into_verovio_toolkit
+from .verovio_guard import (
+    _clear_source_order_timing,
+    _format_probe_error,
+    _has_source_order_timing,
+    _probe_verovio_timing,
+    guarded_load_into_verovio_toolkit,
+)
 
 try:  # pragma: no cover - optional in some environments
     import verovio  # type: ignore
@@ -59,6 +65,13 @@ _VRV_OPTION_SUPPORT_CACHE: Dict[str, bool] = {}
 _VRV_QUIET_NATIVE_OUTPUT = False
 _VRV_QUIET_SUPPRESS_STDOUT = True
 _VRV_QUIET_SUPPRESS_STDERR = True
+_VRV_TIMING_SAFE_CACHE: Dict[str, bool] = {}
+
+_REPEAT_EXPANSION_TIMING_ERROR = (
+    "Verovio cannot build a timing map for this score: automatic repeat "
+    "expansion crashes on unpaired repeat ends (upstream verovio#4533). "
+    "Add an explicit <expansion> that describes the intended playback order."
+)
 
 # Common namespaces
 MEI_NS = "http://www.music-encoding.org/ns/mei"
@@ -331,6 +344,7 @@ def _vrv_load_zip_bytes(data: bytes, *, source_hint: Optional[str] = None) -> in
             f"Verovio failed to load compressed MusicXML{detail} (pageCount={pages}). "
             f"{('Log: ' + log_msg) if log_msg else ''}"
         )
+    _clear_source_order_timing(_VRV_TOOLKIT)
     return pages
 
 
@@ -356,7 +370,9 @@ def vrv_load_data(
         )
         if load_info.get("sanitized") and load_info.get("message"):
             warnings.warn(str(load_info["message"]), RuntimeWarning, stacklevel=2)
-        return _VRV_TOOLKIT.getPageCount()
+        pages = _VRV_TOOLKIT.getPageCount()
+    _clear_source_order_timing(_VRV_TOOLKIT)
+    return pages
 
 
 def vrv_load_from_file(path: str, *, input_from: Optional[str] = None, encoding: str = "utf-8") -> int:
@@ -444,15 +460,99 @@ def vrv_display_svg(svg: str) -> None:
         pass
 
 
+def _vrv_current_mei_text() -> str:
+    with _vrv_suppress_if_needed():
+        mei = _VRV_TOOLKIT.getMEI()
+    if mei is None:
+        return ""
+    if isinstance(mei, bytes):
+        try:
+            mei = mei.decode("utf-8", errors="ignore")
+        except Exception:
+            mei = mei.decode(errors="ignore")
+    return str(mei)
+
+
+def _vrv_current_options() -> Dict[str, Any]:
+    with _vrv_suppress_if_needed():
+        payload = _VRV_TOOLKIT.getOptions()
+    parsed = _vrv_parse_option_payload(payload)
+    return dict(parsed or {})
+
+
+def _vrv_timing_cache_key(mei: str, options: Dict[str, Any]) -> str:
+    payload = json.dumps(
+        {"mei": mei, "options": options},
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _vrv_rebuild_source_order_timing(mei: str) -> None:
+    """Reload the current MEI so Verovio rebuilds timing under options in force.
+
+    A prior expandNever pass can leave source-order timing prepared even after
+    the option is restored. ``getMEI()`` is always MEI, regardless of the
+    toolkit's current ``inputFrom``.
+    """
+    with _vrv_suppress_if_needed():
+        _VRV_TOOLKIT.setOptions({"inputFrom": "mei"})
+        if not _VRV_TOOLKIT.loadData(mei):
+            raise RuntimeError(
+                "Verovio timing rebuild failed before a timing call: "
+                "loadData returned False."
+            )
+
+
+def _vrv_ensure_timing_safe() -> None:
+    """Probe ``renderToTimemap`` in a child process before a native timing call.
+
+    The answer depends on the MEI currently in the toolkit and the options in
+    force at the call (notably ``expandNever``). A cache keyed on both keeps
+    repeat calls on one score from spawning another process. After the probe
+    passes, rebuild once if a source-order pass prepared timing on this toolkit.
+    """
+    mei = _vrv_current_mei_text()
+    if not mei.strip():
+        return
+
+    options = _vrv_current_options()
+    key = _vrv_timing_cache_key(mei, options)
+    cached = _VRV_TIMING_SAFE_CACHE.get(key)
+    if cached is False:
+        raise RuntimeError(_REPEAT_EXPANSION_TIMING_ERROR)
+
+    if cached is not True:
+        probe = _probe_verovio_timing(mei, options=options)
+        if probe.get("ok"):
+            _VRV_TIMING_SAFE_CACHE[key] = True
+        elif probe.get("crashed"):
+            _VRV_TIMING_SAFE_CACHE[key] = False
+            raise RuntimeError(_REPEAT_EXPANSION_TIMING_ERROR)
+        else:
+            raise RuntimeError(
+                "Verovio timing probe failed before a timing call. "
+                f"Probe details: {_format_probe_error(probe)}"
+            )
+
+    if _has_source_order_timing(_VRV_TOOLKIT):
+        _vrv_rebuild_source_order_timing(mei)
+        _clear_source_order_timing(_VRV_TOOLKIT)
+
+
 def vrv_find_elements_at_time(ms: float):
     if not hasattr(_VRV_TOOLKIT, "getElementsAtTime"):
         return None
+    _vrv_ensure_timing_safe()
     with _vrv_suppress_if_needed():
         return _VRV_TOOLKIT.getElementsAtTime(ms)
 
 
 def vrv_timemap():
     if hasattr(_VRV_TOOLKIT, "renderToTimemap"):
+        _vrv_ensure_timing_safe()
         with _vrv_suppress_if_needed():
             tm = _VRV_TOOLKIT.renderToTimemap()
         try:
@@ -495,6 +595,7 @@ def vrv_set_mei(mei_xml: str) -> int:
         _VRV_TOOLKIT.setOptions({"inputFrom": "mei"})
         _VRV_TOOLKIT.loadData(mei_xml)
         pages = _VRV_TOOLKIT.getPageCount()
+    _clear_source_order_timing(_VRV_TOOLKIT)
     if pages <= 0:
         log_msg = ""
         if hasattr(_VRV_TOOLKIT, "getLog"):

@@ -32,6 +32,7 @@ import xml.etree.ElementTree as ET
 import verovio
 
 from .quiet_utils import suppress_native_output
+from .verovio_guard import _temporary_expand_never
 
 MEI_NS = "http://www.music-encoding.org/ns/mei"
 XML_ID = "{http://www.w3.org/XML/1998/namespace}id"
@@ -1437,9 +1438,14 @@ def _resolve_render_annotations(
         return []
     context = _element_context(root)
     meter_units = _meter_units_by_measure(root)
-    timemap = toolkit.renderToTimemap()
+    timemap = toolkit.renderToTimemap({"includeMeasures": True})
     if isinstance(timemap, str):
         timemap = json.loads(timemap)
+    measure_starts = {
+        row["measureOn"]: float(row["qstamp"])
+        for row in timemap
+        if "measureOn" in row and "qstamp" in row
+    }
 
     resolved_annotations = []
     for source in annotations:
@@ -1453,13 +1459,15 @@ def _resolve_render_annotations(
             except (TypeError, ValueError):
                 beat = math.nan
             if measure_id and math.isfinite(beat) and toolkit.getPageWithElement(measure_id):
-                measure_start_ms = float(toolkit.getTimeForElement(measure_id))
-                measure_start_qstamp = _interpolate_timeline(
-                    timemap,
-                    measure_start_ms,
-                    input_key="tstamp",
-                    output_key="qstamp",
-                )
+                measure_start_qstamp = measure_starts.get(measure_id)
+                if measure_start_qstamp is None:
+                    measure_start_ms = float(toolkit.getTimeForElement(measure_id))
+                    measure_start_qstamp = _interpolate_timeline(
+                        timemap,
+                        measure_start_ms,
+                        input_key="tstamp",
+                        output_key="qstamp",
+                    )
                 meter_unit = meter_units.get(measure_id, 4.0)
                 target_qstamp = measure_start_qstamp + (beat - 1.0) * (4.0 / meter_unit)
                 target_ms = _interpolate_timeline(
@@ -1482,10 +1490,13 @@ def _resolve_render_annotations(
                         candidates.extend(at_time.get(key, []))
                 wanted_staff = set(annotation.get("staff", []))
                 wanted_layer = set(annotation.get("layer", []))
+                # Keep candidates missing from context (Verovio-generated ids);
+                # drop only those known to belong to another measure.
                 targets = [
                     element_id
                     for element_id in candidates
-                    if (
+                    if context.get(element_id, {}).get("measure_id") in (None, measure_id)
+                    and (
                         not wanted_staff
                         or context.get(element_id, {}).get("staff") in wanted_staff
                     )
@@ -1557,31 +1568,36 @@ def render_verovio_pages(
     render_root = ET.fromstring(mei_text)
     with suppress_native_output(enabled=not show_verovio_warnings):
         toolkit = verovio.toolkit()
-        toolkit.setOptions(options)
-        if not toolkit.loadData(mei_text):
-            raise RuntimeError(
-                f"Verovio could not load {display_path(mei_path, repo_root=repo_root)}"
-            )
-
-        page_count = toolkit.getPageCount()
-        requested_page = initial_page
-        if initial_page < 1 or initial_page > page_count:
-            if not clamp_initial_page:
-                raise ValueError(
-                    f"initial_page={initial_page} is outside the rendered page "
-                    f"range 1..{page_count}"
+        # expandNever is applied only at render time so annotation resolution
+        # uses source positions; it is not part of the caller-facing options
+        # hashed by verovio_options_hash. Restore the prior value afterwards so
+        # a shared toolkit (partitura shim) does not leak source-order timing.
+        with _temporary_expand_never(toolkit, True):
+            toolkit.setOptions({**options, "expandNever": True})
+            if not toolkit.loadData(mei_text):
+                raise RuntimeError(
+                    f"Verovio could not load {display_path(mei_path, repo_root=repo_root)}"
                 )
-            initial_page = max(1, min(initial_page, page_count))
 
-        pages = []
-        for page_number in range(1, page_count + 1):
-            svg = toolkit.renderToSVG(page_number)
-            if not svg.strip():
-                raise RuntimeError(f"Verovio returned an empty SVG for page {page_number}")
-            pages.append({"number": page_number, "svg": svg})
-        resolved_annotations = _resolve_render_annotations(
-            annotations or [], root=render_root, toolkit=toolkit
-        )
+            page_count = toolkit.getPageCount()
+            requested_page = initial_page
+            if initial_page < 1 or initial_page > page_count:
+                if not clamp_initial_page:
+                    raise ValueError(
+                        f"initial_page={initial_page} is outside the rendered page "
+                        f"range 1..{page_count}"
+                    )
+                initial_page = max(1, min(initial_page, page_count))
+
+            pages = []
+            for page_number in range(1, page_count + 1):
+                svg = toolkit.renderToSVG(page_number)
+                if not svg.strip():
+                    raise RuntimeError(f"Verovio returned an empty SVG for page {page_number}")
+                pages.append({"number": page_number, "svg": svg})
+            resolved_annotations = _resolve_render_annotations(
+                annotations or [], root=render_root, toolkit=toolkit
+            )
 
     return {
         "page_count": page_count,

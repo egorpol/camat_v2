@@ -42,6 +42,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Scores with repeat ends that have no repeat start between them and no
+  `<expansion>` no longer crash Python when parsed with the default Verovio
+  parser or shown in the facsimile viewer. Verovio's automatic repeat expansion
+  segfaults on them (upstream verovio#4533), so both now work in source order,
+  which is what their rows and positions already model. Rows for scores that
+  parsed before are unchanged, and the PDF facsimile tutorial no longer needs
+  `--parsing-backend music21`.
+- `vrv_timemap` and `vrv_find_elements_at_time` raise a `RuntimeError` naming
+  `<expansion>` on those scores instead of crashing. Other scores keep their
+  repeats in the timing, including after a parse or a viewer render.
+- Facsimile viewer annotations placed with `@tstamp` stay in their bar. They
+  could land on a neighbouring bar's notes when the bar started between two
+  whole milliseconds, or when the bar had nothing to show at that beat, such as
+  an empty bar or one opening on rests. Those now fall back to the bar itself.
 - `camat.pdf_facsimile.render_pdf_pages` renders each page's crop box, the
   area a PDF reader shows, instead of the whole media box with the margins
   the PDF hides. Pages without a crop box render as before.

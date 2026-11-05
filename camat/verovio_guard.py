@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+import json
 import os
+import signal
 import subprocess
 import sys
 import tempfile
 import textwrap
 import xml.etree.ElementTree as ET
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Dict, Mapping, Optional, Tuple
+from typing import Any, Dict, Iterator, Mapping, Optional, Tuple
 
 __all__ = ["guarded_load_into_verovio_toolkit", "python_executable"]
 
@@ -88,6 +91,103 @@ _PROBE_SCRIPT = textwrap.dedent(
     """
 )
 
+_TIMING_PROBE_SCRIPT = textwrap.dedent(
+    """
+    import json
+    import pathlib
+    import sys
+    import verovio
+
+    mei_path = pathlib.Path(sys.argv[1])
+    options_path = pathlib.Path(sys.argv[2])
+    data = mei_path.read_text(encoding="utf-8", errors="ignore")
+    options = json.loads(options_path.read_text(encoding="utf-8"))
+    tk = verovio.toolkit()
+    load_opts = dict(options)
+    load_opts["inputFrom"] = "mei"
+    tk.setOptions(load_opts)
+    if not tk.loadData(data):
+        sys.stderr.write("loadData failed\\n")
+        sys.exit(1)
+    # Options in force at the timing call decide expandNever (verovio#4533).
+    tk.setOptions(options)
+    tk.renderToTimemap()
+    print("ok")
+    """
+)
+
+# Only these native faults mean "this score crashes Verovio timing". Other
+# signals (SIGTERM, SIGKILL/OOM, ...) must not be blamed on repeats or cached.
+# SIGBUS is Unix-only; take whatever the platform defines so Windows imports.
+_NATIVE_CRASH_RETURNCODES = frozenset(
+    {
+        *(
+            -int(getattr(signal, name))
+            for name in ("SIGSEGV", "SIGABRT", "SIGBUS", "SIGILL", "SIGFPE")
+            if hasattr(signal, name)
+        ),
+        139,  # shell-style SIGSEGV (128 + 11)
+        0xC0000005,  # Windows STATUS_ACCESS_VIOLATION (unsigned)
+        -1073741819,  # same value as a signed 32-bit DWORD
+    }
+)
+
+# Toolkits whose timing was prepared under a temporary expandNever=True pass.
+# Verovio keeps that preparation after the option is restored, so public timing
+# must reload once before trusting expanded (or user) options again.
+_SOURCE_ORDER_TIMING_TOOLKIT_IDS: set[int] = set()
+
+
+def _is_native_crash_returncode(returncode: Optional[int]) -> bool:
+    if returncode is None:
+        return False
+    return int(returncode) in _NATIVE_CRASH_RETURNCODES
+
+
+def _read_expand_never(toolkit: Any) -> bool:
+    payload = toolkit.getOptions()
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except Exception:
+            payload = None
+    if not isinstance(payload, Mapping):
+        return False
+    return bool(payload.get("expandNever", False))
+
+
+def _mark_source_order_timing(toolkit: Any) -> None:
+    _SOURCE_ORDER_TIMING_TOOLKIT_IDS.add(id(toolkit))
+
+
+def _clear_source_order_timing(toolkit: Any) -> None:
+    _SOURCE_ORDER_TIMING_TOOLKIT_IDS.discard(id(toolkit))
+
+
+def _has_source_order_timing(toolkit: Any) -> bool:
+    return id(toolkit) in _SOURCE_ORDER_TIMING_TOOLKIT_IDS
+
+
+@contextmanager
+def _temporary_expand_never(toolkit: Any, value: bool = True) -> Iterator[bool]:
+    """Set ``expandNever`` for a call, then restore the previous value.
+
+    The partitura backend can make ``verovio.toolkit()`` a process-wide
+    singleton, so a leaked True would silently change later public timing.
+    When this pass actually changes the option, mark the toolkit so a later
+    public timing call can rebuild prepared timing lazily.
+    """
+    previous = _read_expand_never(toolkit)
+    desired = bool(value)
+    changed = previous != desired
+    toolkit.setOptions({"expandNever": desired})
+    try:
+        yield previous
+    finally:
+        toolkit.setOptions({"expandNever": previous})
+        if changed:
+            _mark_source_order_timing(toolkit)
+
 
 def _probe_verovio_load(data: str, *, input_from: str) -> Dict[str, Any]:
     suffix = ".mei" if input_from == "mei" else ".xml"
@@ -112,6 +212,53 @@ def _probe_verovio_load(data: str, *, input_from: str) -> Dict[str, Any]:
             os.unlink(path)
         except OSError:
             pass
+
+
+def _probe_verovio_timing(mei: str, *, options: Mapping[str, Any]) -> Dict[str, Any]:
+    """Run ``renderToTimemap`` on ``mei`` under ``options`` in a child process."""
+    mei_fd, mei_path = tempfile.mkstemp(suffix=".mei")
+    opt_fd, opt_path = tempfile.mkstemp(suffix=".json")
+    try:
+        with os.fdopen(mei_fd, "w", encoding="utf-8", errors="ignore") as handle:
+            handle.write(mei)
+        with os.fdopen(opt_fd, "w", encoding="utf-8") as handle:
+            json.dump(dict(options), handle)
+        try:
+            proc = subprocess.run(
+                [
+                    python_executable(),
+                    "-X",
+                    "faulthandler",
+                    "-c",
+                    _TIMING_PROBE_SCRIPT,
+                    mei_path,
+                    opt_path,
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except OSError as exc:
+            return {
+                "ok": False,
+                "crashed": False,
+                "returncode": None,
+                "stdout": "",
+                "stderr": str(exc),
+            }
+        return {
+            "ok": proc.returncode == 0,
+            "crashed": _is_native_crash_returncode(proc.returncode),
+            "returncode": proc.returncode,
+            "stdout": (proc.stdout or "").strip(),
+            "stderr": (proc.stderr or "").strip(),
+        }
+    finally:
+        for path in (mei_path, opt_path):
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
 
 
 def _remove_mei_elements_by_local_name(data: str, *, local_name: str) -> Tuple[str, int]:
