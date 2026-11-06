@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased][Unreleased]
 
+### Added
+
+- Guide "Playback data": what an MEI file needs to play correctly in Verovio
+  and music21 (sounding pitch, instruments, tempo), and the Verovio behaviour
+  to plan around.
+
 ## [0.2.9][0.2.9] - 2026-11-06
 
 ### Added

@@ -318,5 +318,7 @@ edition-specific additions:
   manifests.
 - No search, and no rendering on the server: every page is drawn in the
   visitor's browser.
+- No audio player. [Playback data](playback.md) covers what the MEI needs
+  for one.
 - The built files are not a stable interface. A project that changes them
   keeps its own copy, as the two examples do.
