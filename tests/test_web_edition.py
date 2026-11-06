@@ -538,3 +538,89 @@ def test_viewer_modules_parse(name, tmp_path):
     shutil.copyfile(TEMPLATE / name, module)
     result = subprocess.run(["node", "--check", str(module)], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="Node.js required")
+def test_facsimile_adapters_draw_at_device_pixel_size(tmp_path):
+    # draw(surface, width, height, …) must size the bitmap to that box, not derive
+    # height from width; IIIF must request by the width passed in.
+    for name in ("facsimile-pdf.js", "facsimile-iiif.js"):
+        shutil.copyfile(TEMPLATE / name, tmp_path / (Path(name).stem + ".mjs"))
+    script = tmp_path / "draw_size.mjs"
+    script.write_text(
+        r"""
+const els = {
+  "facs-warning": { hidden: true, textContent: "" },
+  "scan-show": { addEventListener() {} },
+};
+const $ = (id) => els[id];
+const canvases = [];
+globalThis.document = {
+  createElement(tag) {
+    if (tag !== "canvas") throw new Error(`unexpected element: ${tag}`);
+    const c = { width: 0, height: 0, getContext: () => ({ imageSmoothingQuality: "", drawImage() {} }) };
+    canvases.push(c);
+    return c;
+  },
+  createDocumentFragment: () => ({ append() {} }),
+};
+globalThis.createImageBitmap = async () => ({ width: 200, height: 400 });
+const imageSrcs = [];
+globalThis.Image = class {
+  constructor() { this.naturalWidth = 2000; this.naturalHeight = 4000; }
+  set src(url) { this._src = url; imageSrcs.push(url); }
+  get src() { return this._src; }
+  decode() { return Promise.resolve(); }
+};
+const imageBytes = new ArrayBuffer(8);
+const HASH = [...new Uint8Array(await crypto.subtle.digest("SHA-256", imageBytes))]
+  .map((b) => b.toString(16).padStart(2, "0")).join("");
+globalThis.fetch = async (url) => {
+  if (String(url).endsWith("pages.json")) {
+    return {
+      ok: true,
+      json: async () => ({
+        page_count: 1, pdf_sha256: HASH,
+        pages: [{ image: "page-0001.png", sha256: HASH, pdf_page_number: 1, printed_page: 1 }],
+      }),
+    };
+  }
+  return { ok: true, arrayBuffer: async () => imageBytes };
+};
+
+const width = 100, height = 37; // 37 ≠ round(100 × surfaceHeight / surfaceWidth)
+const surface = {
+  id: "s1", file: "page-0001.png", width: 2000, height: 4000, n: "1",
+  target: "https://example.org/iiif/page/full/2000,/0/default.jpg",
+};
+const core = {
+  config: null, labels: {}, $, storageKey: (n) => n,
+  showError() {}, show() {}, render() {},
+};
+
+const { create: createPdf } = await import("./facsimile-pdf.mjs");
+core.config = { type: "pdf", pages: "pages.json", images: { url: "https://example.org/", confirm: false } };
+const pdf = createPdf(core);
+await pdf.restore();
+const pdfCanvas = await pdf.draw(surface, width, height, () => false);
+if (!pdfCanvas || pdfCanvas.width !== width || pdfCanvas.height !== height) {
+  throw new Error(`pdf draw size ${pdfCanvas?.width}x${pdfCanvas?.height}, expected ${width}x${height}`);
+}
+
+const { create: createIiif } = await import("./facsimile-iiif.mjs");
+core.config = { type: "iiif", confirm: false };
+const iiif = createIiif(core);
+iiif.restore();
+const iiifCanvas = await iiif.draw(surface, width, height);
+if (!iiifCanvas || iiifCanvas.width !== width || iiifCanvas.height !== height) {
+  throw new Error(`iiif draw size ${iiifCanvas?.width}x${iiifCanvas?.height}, expected ${width}x${height}`);
+}
+const requested = imageSrcs.find((u) => u.includes("/full/"));
+if (!requested || !requested.includes("/full/500,/")) {
+  throw new Error(`iiif URL width not from device width: ${requested}`);
+}
+""",
+        encoding="utf-8",
+    )
+    result = subprocess.run(["node", str(script)], capture_output=True, text=True, cwd=tmp_path)
+    assert result.returncode == 0, result.stderr or result.stdout

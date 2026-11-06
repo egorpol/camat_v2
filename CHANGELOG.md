@@ -76,6 +76,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `camat.pdf_facsimile.render_pdf_pages` renders each page's crop box, the
   area a PDF reader shows, instead of the whole media box with the margins
   the PDF hides. Pages without a crop box render as before.
+- The web-edition facsimile is drawn at the canvas's device-pixel size and
+  redrawn when that size changes. The bitmap used to miss its box by a pixel
+  at many window widths and display scales, so the browser resampled the
+  scan and staff lines blurred. A page with no linked facsimile no longer
+  leaves a blank area.
 
 ## [0.2.8][0.2.8] - 2026-10-21
 

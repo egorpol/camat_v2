@@ -1,8 +1,8 @@
 // IIIF facsimile adapter for the camat web-edition viewer. Each surface's
 // <graphic> is an IIIF Image API request (…/full/<size>/<rotation>/<quality>.<format>),
 // as camat's IIIF integration writes it, and the zones are in pixels of that
-// graphic. A page is requested at the width the pane needs, in steps of 500
-// pixels and never wider than the graphic, then drawn at the graphic's shape,
+// graphic. A page is requested at the canvas's device-pixel width, in steps of
+// 500 pixels and never wider than the graphic, then drawn at that box's size,
 // so the zones line up by width alone. Shown at once, or after the visitor
 // confirms a notice.
 
@@ -15,7 +15,7 @@ export function create(core) {
   let shown = false;
   const loaded = new Map(); // surface id → { width, image: Promise<HTMLImageElement> }
 
-  const requestWidth = (surface, pixels) => Math.min(surface.width, Math.ceil(pixels / STEP) * STEP);
+  const requestWidth = (surface, width) => Math.min(surface.width, Math.ceil(width / STEP) * STEP);
 
   // The same request with another size: rotation, quality and format stay.
   function imageUrl(surface, width) {
@@ -39,24 +39,24 @@ export function create(core) {
     return ready;
   }
 
-  async function draw(surface, pixels) {
-    const image = await load(surface, requestWidth(surface, pixels));
+  async function draw(surface, width, height) {
+    const image = await load(surface, requestWidth(surface, width));
     const expected = surface.width / surface.height;
     const warning = $('facs-warning');
     warning.hidden = Math.abs(image.naturalWidth / image.naturalHeight - expected) <= 0.01 * expected;
     warning.textContent = `The image server sent a page of a different shape (${image.naturalWidth}×${image.naturalHeight}) from the one the zones were measured on (${surface.width}×${surface.height}). The bar outlines may not line up.`;
     const scratch = document.createElement('canvas');
-    scratch.width = Math.round(pixels);
-    scratch.height = Math.round((pixels * surface.height) / surface.width);
+    scratch.width = width;
+    scratch.height = height;
     const context = scratch.getContext('2d');
     context.imageSmoothingQuality = 'high';
-    context.drawImage(image, 0, 0, scratch.width, scratch.height);
+    context.drawImage(image, 0, 0, width, height);
     return scratch;
   }
 
   // The next page, at the size it will be drawn.
-  function prefetch(surface, pixels) {
-    if (shown && surface) load(surface, requestWidth(surface, pixels)).catch(() => {});
+  function prefetch(surface, width) {
+    if (shown && surface) load(surface, requestWidth(surface, width)).catch(() => {});
   }
 
   function label(surface) {
