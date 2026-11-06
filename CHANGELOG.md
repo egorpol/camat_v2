@@ -7,10 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased][Unreleased]
 
+## [0.2.9][0.2.9] - 2026-11-06
+
 ### Added
 
 - `resolve_mei_note_alters`, `regenerate_accid_ges_text` and `AccidGesReport`
-  resolve written MEI pitches and regenerate sounding `@accid.ges` values
+  resolve written MEI pitches and regenerate sounding `accid.ges` values
   while preserving every other byte. The standalone checker gains
   `--check-accid-ges` (`check_accid_ges=True` in Python); mismatches are review
   warnings, also enabled by `publication_profile`.
@@ -69,7 +71,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `vrv_timemap` and `vrv_find_elements_at_time` raise a `RuntimeError` naming
   `<expansion>` on those scores instead of crashing. Other scores keep their
   repeats in the timing, including after a parse or a viewer render.
-- Facsimile viewer annotations placed with `@tstamp` stay in their bar. They
+- Facsimile viewer annotations placed with `tstamp` stay in their bar. They
   could land on a neighbouring bar's notes when the bar started between two
   whole milliseconds, or when the bar had nothing to show at that beat, such as
   an empty bar or one opening on rests. Those now fall back to the bar itself.
@@ -1194,7 +1196,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-[Unreleased]: https://github.com/egorpol/camat_v2/compare/v0.2.8...HEAD
+[Unreleased]: https://github.com/egorpol/camat_v2/compare/v0.2.9...HEAD
+[0.2.9]: https://github.com/egorpol/camat_v2/compare/v0.2.8...v0.2.9
 [0.2.8]: https://github.com/egorpol/camat_v2/compare/v0.2.7...v0.2.8
 [0.2.7]: https://github.com/egorpol/camat_v2/compare/v0.2.6...v0.2.7
 [0.2.6]: https://github.com/egorpol/camat_v2/compare/v0.2.5...v0.2.6
