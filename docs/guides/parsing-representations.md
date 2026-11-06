@@ -111,4 +111,24 @@ version with stored results. They make it possible to explain an analytical
 row, trace a matrix cell to its notes, or highlight a match in the rendered
 score.
 
+## Trace a row back to the page
+
+When the MEI links its bars to a facsimile, `add_facsimile_columns` adds the
+zone, page, image and zone corners to `df_pitch` or `df_events`:
+
+```python
+from camat import add_facsimile_columns
+
+notes = add_facsimile_columns(df_pitch, "path/to/score.mei")
+```
+
+The link is bar-level: it follows `xml_id` to the element, the element to its
+`<measure>`, and `measure/@facs` to the zone. It names the bar on the page,
+and never where inside the bar a note sits. A bar split over several zones
+still gives one row per note: each zone cell then holds one value per zone,
+separated by spaces in `@facs` order, and the k-th value of every cell belongs
+to the k-th zone. `zone_status` says why a row has no link. See
+[Facsimile columns](../api/facsimile_table.md) for the columns, statuses and
+errors.
+
 Continue with [Analyse music: statistics and pattern search](analysis.md).

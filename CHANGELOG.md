@@ -7,7 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased][Unreleased]
 
+## [0.2.10][0.2.10] - 2026-11-06
+
 ### Added
+
+- `add_facsimile_columns(table, mei)` adds the page, image and zone of each
+  row's bar to a note or event table: `zone_id`, `surface_id`, `page`, `image`,
+  the four zone corners and `zone_status`. It joins on `xml_id`, goes from the
+  element to its bar and follows that bar's `facs`, so the link is bar-level
+  and never says where inside the bar a note sits. A bar with several zones
+  keeps one row per note, with one space-separated value per zone in each cell,
+  in `facs` order. `zone_status` says why a row has no link. An MEI with no
+  usable facsimile raises unless `allow_missing_facsimile=True`; invalid
+  facsimile records always raise. API page: "Facsimile columns".
 
 - Guide "Playback data": what an MEI file needs to play correctly in Verovio
   and music21 (sounding pitch, instruments, tempo), and the Verovio behaviour
@@ -1202,7 +1214,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-[Unreleased]: https://github.com/egorpol/camat_v2/compare/v0.2.9...HEAD
+[Unreleased]: https://github.com/egorpol/camat_v2/compare/v0.2.10...HEAD
+[0.2.10]: https://github.com/egorpol/camat_v2/compare/v0.2.9...v0.2.10
 [0.2.9]: https://github.com/egorpol/camat_v2/compare/v0.2.8...v0.2.9
 [0.2.8]: https://github.com/egorpol/camat_v2/compare/v0.2.7...v0.2.8
 [0.2.7]: https://github.com/egorpol/camat_v2/compare/v0.2.6...v0.2.7

@@ -1,4 +1,4 @@
-__version__ = "0.2.9"
+__version__ = "0.2.10"
 
 # Public names are loaded on first access (PEP 562), so ``import camat`` needs
 # only the standard library and stays fast. ``camat.<name>`` and
