@@ -86,6 +86,7 @@ nav:
           - Edition and IIIF pipeline: api/edition_pipeline.md
           - MEI consistency and cleanup: api/mei_consistency.md
           - MEI facsimile viewer: api/facsimile_viewer.md
+          - Facsimile columns: api/facsimile_table.md
           - Mensural utils: api/mensural_utils.md
           - MIDI timing: api/midi_timing.md
           - Music21 backend: api/music21_backend.md

@@ -14,6 +14,7 @@ through `import camat`. The pages below contain the full module documentation.
   Schematron, resources, execution records and legacy maintenance helpers.
   Start with the [validation guide](guides/mei-validation.md) for setup and results.
 - [Facsimile viewer](api/facsimile_viewer.md): linked score and image inspection.
+- [Facsimile columns](api/facsimile_table.md): page, image and zone columns for a note or event table.
 - [Verovio rendering](api/verovio_render.md): SVG scores, annotations, and highlights.
 
 ## Convert and parse
