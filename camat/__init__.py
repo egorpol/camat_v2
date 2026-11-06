@@ -154,6 +154,7 @@ if TYPE_CHECKING:
         resolve_mei_source_info,
         resolve_repo_path,
     )
+    from .facsimile_table import add_facsimile_columns
     from .mei_renderer import (
         DEFAULT_MEI,
         InteractiveMeiRenderer,
@@ -385,6 +386,9 @@ _LAZY_EXPORTS = {
         'resolve_mei_source',
         'resolve_mei_source_info',
         'resolve_repo_path',
+    ),
+    'facsimile_table': (
+        'add_facsimile_columns',
     ),
     'mei_renderer': (
         'DEFAULT_MEI',
@@ -623,6 +627,7 @@ __all__ = [
     'resolve_mei_source',
     'resolve_mei_source_info',
     'resolve_repo_path',
+    'add_facsimile_columns',
     'DEFAULT_MEI',
     'InteractiveMeiRenderer',
     'launch_interactive_mei_renderer',
