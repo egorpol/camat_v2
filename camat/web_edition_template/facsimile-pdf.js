@@ -103,15 +103,17 @@ export function create(core) {
 
   // ------------------------------------------------------------ drawing
 
-  // Both return an off-screen canvas `pixels` wide, or null when a newer render has taken over.
-  async function drawPdfPage(page, pixels, stale) {
+  // Both return an off-screen canvas of exactly `width` × `height`, or null when a newer
+  // render has taken over. The box follows the surface's shape (zones), not the PDF's.
+  async function drawPdfPage(page, width, height, stale) {
     const pdfPage = await pdf.getPage(page.pdf_page_number);
     if (stale()) return null;
-    const viewport = pdfPage.getViewport({ scale: pixels / pdfPage.getViewport({ scale: 1 }).width });
+    const viewport = pdfPage.getViewport({ scale: width / pdfPage.getViewport({ scale: 1 }).width });
     renderTask?.cancel();
+    // Rendered straight into the box: resizing afterwards would resample the whole page.
     const scratch = document.createElement('canvas');
-    scratch.width = Math.round(viewport.width);
-    scratch.height = Math.round(viewport.height);
+    scratch.width = width;
+    scratch.height = height;
     renderTask = pdfPage.render({ canvas: scratch, viewport });
     try {
       await renderTask.promise;
@@ -122,20 +124,20 @@ export function create(core) {
     return scratch;
   }
 
-  async function drawHostedImage(page, pixels) {
+  async function drawHostedImage(page, width, height) {
     const image = await hostedImage(page);
     const scratch = document.createElement('canvas');
-    scratch.width = Math.round(pixels);
-    scratch.height = Math.round((image.height * pixels) / image.width);
+    scratch.width = width;
+    scratch.height = height;
     const context = scratch.getContext('2d');
     context.imageSmoothingQuality = 'high';
-    context.drawImage(image, 0, 0, scratch.width, scratch.height);
+    context.drawImage(image, 0, 0, width, height);
     return scratch;
   }
 
-  async function draw(surface, pixels, stale) {
+  async function draw(surface, width, height, stale) {
     const page = await pageOf(surface);
-    return images ? drawHostedImage(page, pixels) : drawPdfPage(page, pixels, stale);
+    return images ? drawHostedImage(page, width, height) : drawPdfPage(page, width, height, stale);
   }
 
   function label(surface) {

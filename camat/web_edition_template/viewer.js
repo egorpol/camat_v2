@@ -355,6 +355,35 @@ function showFacsError(text) {
   $('facs-error').hidden = !text;
 }
 
+// A bitmap the size of the canvas box in device pixels is shown 1:1; any other size is
+// resampled by the browser, which blurs the scan.
+function entryPixels(entry) {
+  const box = entry.devicePixelContentBoxSize?.[0];
+  if (box) return [box.inlineSize, box.blockSize];
+  const ratio = window.devicePixelRatio || 1;
+  return [Math.round(entry.contentRect.width * ratio), Math.round(entry.contentRect.height * ratio)];
+}
+
+function observeDevicePixels(observer, element) {
+  try {
+    observer.observe(element, { box: 'device-pixel-content-box' });
+  } catch {
+    observer.observe(element); // no device-pixel box (Safari): fall back to CSS pixels × ratio
+  }
+}
+
+function devicePixelSize(canvas) {
+  // A ResizeObserver on an element with no box never fires (#facs-view hidden).
+  if (!canvas.clientWidth && !canvas.clientHeight) return Promise.resolve([0, 0]);
+  return new Promise((resolve) => {
+    const observer = new ResizeObserver(([entry]) => {
+      observer.disconnect();
+      resolve(entryPixels(entry));
+    });
+    observeDevicePixels(observer, canvas);
+  });
+}
+
 // The adapter calls this when it has a source to draw from (true) or none.
 function showFacsView(shown) {
   $('facs-view').hidden = !shown;
@@ -371,6 +400,9 @@ async function renderFacsimile() {
   const surface = model.surfaces.get(model.pages[state.page - 1]?.surface);
   const clear = () => {
     canvas.width = 0;
+    canvas.height = 0;
+    canvas.style.aspectRatio = '';
+    canvas.parentElement.classList.remove('is-loading');
     zones.replaceChildren();
   };
   if (!surface) {
@@ -378,12 +410,17 @@ async function renderFacsimile() {
     $('facs-label').textContent = 'No facsimile page is linked to this page.';
     return;
   }
-  const pixels = (canvas.parentElement.clientWidth || 600) * (window.devicePixelRatio || 1);
+  // The page fixes the canvas's shape, so its layout does not depend on the bitmap size.
+  canvas.style.aspectRatio = `${surface.width} / ${surface.height}`;
+  const [width, height] = await devicePixelSize(canvas);
+  if (token !== facsToken || !width) return;
   // A page that takes a while (a remote image server) dims the one still shown.
-  const slow = setTimeout(() => canvas.parentElement.classList.add('is-loading'), 200);
+  const slow = setTimeout(() => {
+    if (token === facsToken) canvas.parentElement.classList.add('is-loading');
+  }, 200);
   let image;
   try {
-    image = await facs.draw(surface, pixels, () => token !== facsToken);
+    image = await facs.draw(surface, width, height, () => token !== facsToken);
   } catch (error) {
     if (token === facsToken) {
       clear();
@@ -413,7 +450,7 @@ async function renderFacsimile() {
     }));
   $('facs-label').replaceChildren(facs.label(surface));
   applyHighlights();
-  facs.prefetch?.(model.surfaces.get(model.pages[state.page]?.surface), pixels);
+  facs.prefetch?.(model.surfaces.get(model.pages[state.page]?.surface), width);
 }
 
 async function loadFacsimile() {
@@ -506,11 +543,12 @@ function bindUi() {
     facs?.close();
     showFacsView(false);
   });
-  let lastWidth = 0;
-  new ResizeObserver(([entry]) => {
-    const width = Math.round(entry.contentRect.width);
-    if (width !== lastWidth) { lastWidth = width; renderFacsimile(); }
-  }).observe($('facs'));
+  const canvas = $('facs-canvas');
+  observeDevicePixels(new ResizeObserver(([entry]) => {
+    const [width, height] = entryPixels(entry);
+    // A canvas collapsed by clear() stays so: redrawing a failed page would retry it for ever.
+    if (width && height && (width !== canvas.width || height !== canvas.height)) renderFacsimile();
+  }), canvas);
 }
 
 async function main() {
