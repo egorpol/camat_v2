@@ -25,7 +25,8 @@ notes produce no mismatch row; unsupported keys produce one
 `accid_ges_check_skipped` warning. This comparison does not rewrite the score.
 For an explicit transformation use `regenerate_accid_ges_text`; assembly through
 `combine_meis` regenerates by default (`regenerate_accid_ges=False` preserves
-assembled values). See the [sounding-pitch API](../api/mei_consistency.md#sounding-pitch-and-gestural-accidentals).
+assembled values). See the [sounding-pitch API](../api/mei_consistency.md#sounding-pitch-and-gestural-accidentals)
+and [Playback data](playback.md).
 
 <a id="development-installation"></a>
 

@@ -15,6 +15,7 @@ by this implicit-pitch resolver.
 This is independent of the playback timeline: Verovio's MIDI output uses
 encoded sounding accidental values such as `accid.ges`, which can be absent
 on notes whose alteration is only implied by the written score.
-See [Verovio's MIDI output reference](https://book.verovio.org/toolkit-reference/output-formats.html#midi).
+See [Verovio's MIDI output reference](https://book.verovio.org/toolkit-reference/output-formats.html#midi)
+and [Playback data](../guides/playback.md).
 
 ::: camat.verovio_backend

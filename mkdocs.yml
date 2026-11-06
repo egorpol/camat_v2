@@ -61,6 +61,7 @@ nav:
           - Convert to MEI: guides/formats.md
           - Batch conversion: guides/batch-conversion.md
           - PDF facsimiles: guides/pdf-facsimiles.md
+          - Playback data: guides/playback.md
           - From MEI to a web edition: guides/web-edition.md
           - Review pages: guides/review-pages.md
           - Test sources: guides/sources.md
