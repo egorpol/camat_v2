@@ -243,9 +243,10 @@ so generated canonical links use the deployed domain and version path. See
 
 For each release:
 
-1. Confirm the release tag is active in Read the Docs and its build succeeds.
-2. Check that `stable` selects the intended release and is the default public
-   documentation version.
+1. Confirm that Read the Docs built `stable` from the release tag's commit and
+   that the build succeeded. Tags have no documentation versions of their own,
+   so `/en/v<version>/` does not exist.
+2. Check that `stable` is the default public documentation version.
 3. Open the stable site in a logged-out browser and check notebook links and
    any newly added pages. Move explicit development links to stable when their
    content is included in the release.
