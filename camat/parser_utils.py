@@ -159,10 +159,33 @@ def _regular_span_from_offsets(offsets: Sequence[float]) -> Optional[float]:
     return max(counts, key=lambda span: (counts[span], span))
 
 
+def _normalise_measure_offsets(measure_offsets: Sequence[Any]) -> List[float]:
+    return sorted({
+        round(number, 9)
+        for value in measure_offsets
+        for number in [_finite_float(value)]
+        if number is not None
+    })
+
+
+def _grid_measure_labels(
+    measure_offsets: Sequence[Any],
+    labels: Optional[Iterable[int]],
+) -> Optional[dict[float, int]]:
+    if labels is None:
+        return None
+    offsets = _normalise_measure_offsets(measure_offsets)
+    ordered_labels = list(labels)
+    if len(offsets) != len(ordered_labels):
+        return None
+    return dict(zip(offsets, ordered_labels))
+
+
 def reanchor_to_measure_offsets(
     df: pd.DataFrame,
     measure_offsets: Sequence[Any],
     *,
+    measure_labels: Optional[Mapping[float, int]] = None,
     onset_col: str = "Global Onset",
     measure_col: str = "Measure",
     local_onset_col: str = "Local Onset",
@@ -173,22 +196,19 @@ def reanchor_to_measure_offsets(
     """
     Recompute measure number and local onset from a shared measure-offset grid.
 
-    CAMAT treats ``measure_offsets`` as the authoritative encoded timeline for
-    notebook analysis. This avoids leaking backend-specific measure labels into
-    ``df_pitch`` when a source has pickup or repeated MEI measure numbers.
-    Source labels such as MEI ``@n`` remain available in event metadata.
+    When ``measure_labels`` covers every normalised grid start, use those
+    labels as measure numbers. Otherwise, use one-based grid positions.
+    Local onset always comes from the grid.
     """
     if not isinstance(df, pd.DataFrame) or df.empty or onset_col not in df.columns:
         return df
 
-    offsets = sorted({
-        round(number, 9)
-        for value in measure_offsets
-        for number in [_finite_float(value)]
-        if number is not None
-    })
+    offsets = _normalise_measure_offsets(measure_offsets)
     if not offsets:
         return df
+    labels = list(range(1, len(offsets) + 1))
+    if measure_labels is not None and all(start in measure_labels for start in offsets):
+        labels = [measure_labels[start] for start in offsets]
 
     regular = _finite_float(regular_span)
     if regular is None or regular <= 0:
@@ -226,7 +246,7 @@ def reanchor_to_measure_offsets(
         local = float(onset - offsets[idx])
         if idx == 0 and pickup_local_shift:
             local += pickup_local_shift
-        measures.append(idx + 1)
+        measures.append(labels[idx])
         locals_.append(local)
 
     out[measure_col] = pd.Series(measures, index=out.index, dtype="Int64")

@@ -11,7 +11,6 @@ from .mei_sounding_pitch import (
     _mei_accid_to_alter,
     _mei_note_accid_value,
     _mei_duration_quarters,
-    _tuplet_multiplier,
     _mei_tuplet_span_multipliers,
     _timed_element_tuplet_span_multiplier,
     _extract_mei_tie_next_map,
@@ -42,10 +41,13 @@ from .partitura_backend import (
     _extract_mei_events,
     _extract_mei_note_attachments,
     _format_voice_label,
+    _iter_layer_timed_children,
     _mei_event_merge_key,
     _mei_initial_meter_span,
+    _mei_measure_labels,
     _mei_measure_meter_spans,
     _mei_music_measures,
+    _mei_timed_measure_positions,
     _midi_to_pitch_name,
     _normalize_xml_ref,
     _other_mei_events_to_dataframe,
@@ -286,21 +288,6 @@ def _midi_time_duration_quarters(
     return onset_q, duration_q, midi_pitch
 
 
-def _measure_number(measure_el: Any, fallback_index: int) -> int:
-    del measure_el
-    return int(fallback_index)
-
-
-def _iter_layer_timed_children(layer_el: Any, multiplier: float = 1.0) -> Iterable[Tuple[Any, float]]:
-    for child in list(layer_el):
-        tag = _local_name(child.tag)
-        if tag in {"note", "rest", "mRest", "multiRest", "space", "chord"}:
-            yield child, multiplier
-        elif tag in {"beam", "tuplet", "bTrem", "fTrem"}:
-            child_multiplier = multiplier * (_tuplet_multiplier(child) if tag == "tuplet" else 1.0)
-            yield from _iter_layer_timed_children(child, child_multiplier)
-
-
 def _apply_tied_duration_semantics(
     df_pitch: pd.DataFrame,
     tie_next: Mapping[str, str],
@@ -375,7 +362,10 @@ def _verovio_common_mei_dataframes(
     include_note_attachments: bool = True,
     collapse_tied_pitch_events: bool = True,
     quiet_native_warnings: bool = False,
-) -> Tuple[pd.DataFrame, pd.DataFrame, Dict[str, str], List[float], Dict[str, Any], int]:
+) -> Tuple[
+    pd.DataFrame, pd.DataFrame, Dict[str, str], List[float], Dict[str, Any], int,
+    Optional[Dict[float, int]],
+]:
     try:
         import verovio  # type: ignore
     except Exception as exc:
@@ -404,7 +394,10 @@ def _verovio_common_mei_dataframes_on_toolkit(
     include_note_attachments: bool = True,
     collapse_tied_pitch_events: bool = True,
     quiet_native_warnings: bool = False,
-) -> Tuple[pd.DataFrame, pd.DataFrame, Dict[str, str], List[float], Dict[str, Any], int]:
+) -> Tuple[
+    pd.DataFrame, pd.DataFrame, Dict[str, str], List[float], Dict[str, Any], int,
+    Optional[Dict[float, int]],
+]:
     try:
         import xml.etree.ElementTree as ET
     except Exception as exc:
@@ -447,33 +440,19 @@ def _verovio_common_mei_dataframes_on_toolkit(
         measure_elements,
         fallback=initial_meter_span,
     )
-    active_measure_index: Dict[int, int] = {}
-    for pre_idx, pre_measure_el in enumerate(measure_elements, start=1):
-        has_timed_content = False
-        for pre_staff in [el for el in pre_measure_el.iter() if _local_name(el.tag) == "staff"]:
-            pre_layers = [child for child in list(pre_staff) if _local_name(child.tag) == "layer"] or [pre_staff]
-            for pre_layer in pre_layers:
-                for _ in _iter_layer_timed_children(pre_layer):
-                    has_timed_content = True
-                    break
-                if has_timed_content:
-                    break
-            if has_timed_content:
-                break
-        if has_timed_content:
-            active_measure_index[pre_idx] = len(active_measure_index) + 1
+    active_measure_index = _mei_timed_measure_positions(measure_elements)
 
     measure_start_unshifted = 0.0
     previous_meter_span: Optional[float] = None
-    for measure_index, measure_el in enumerate(measure_elements, start=1):
-        if measure_index not in active_measure_index:
+    for measure_el in measure_elements:
+        measure_num = active_measure_index.get(id(measure_el))
+        if measure_num is None:
             continue
         meter_span = meter_spans.get(id(measure_el), initial_meter_span)
         meter_changed = (
             previous_meter_span is not None
             and abs(float(meter_span) - float(previous_meter_span)) > 1e-6
         )
-        measure_num = _measure_number(measure_el, active_measure_index[measure_index])
         layer_end_positions: List[float] = []
         staff_elements = [el for el in list(measure_el) if _local_name(el.tag) == "staff"]
         if not staff_elements:
@@ -535,6 +514,7 @@ def _verovio_common_mei_dataframes_on_toolkit(
                         "staff_n": staff_n,
                         "layer_n": layer_n,
                         "element_type": tag,
+                        "measure_n": measure_el.get("n", ""),
                     }
                     timed_rows.append(timed_row)
 
@@ -620,8 +600,7 @@ def _verovio_common_mei_dataframes_on_toolkit(
             or not str(measure_el.attrib.get("n", "")).strip()
         )
         is_initial_pickup = (
-            len(active_measure_index) > 0
-            and active_measure_index[measure_index] == 1
+            measure_num == 1
             and regular_measure_span > 0
             and 0 < actual_measure_span < regular_measure_span
         )
@@ -658,8 +637,8 @@ def _verovio_common_mei_dataframes_on_toolkit(
     first_measure_el = next(
         (
             measure_el
-            for idx, measure_el in enumerate(measure_elements, start=1)
-            if active_measure_index.get(idx) == 1
+            for measure_el in measure_elements
+            if active_measure_index.get(id(measure_el)) == 1
         ),
         None,
     )
@@ -683,6 +662,16 @@ def _verovio_common_mei_dataframes_on_toolkit(
         start = float(min(starts) + pickup_shift)
         measure_start_by_index[idx] = start
         measure_offsets.append(start)
+    source_labels = _mei_measure_labels(root)
+    # Iteration in score order lets the later bar label a shared rounded start.
+    measure_labels = (
+        {
+            round(measure_start_by_index[position], 9): source_labels[measure_id]
+            for measure_id, position in active_measure_index.items()
+            if position in measure_start_by_index
+        }
+        if source_labels is not None else None
+    )
 
     def _local_for(measure_number_value: Any, global_onset: Any) -> float:
         try:
@@ -743,6 +732,7 @@ def _verovio_common_mei_dataframes_on_toolkit(
         "staff_n",
         "layer_n",
         "element_type",
+        "measure_n",
     ]
     for col in timed_expected:
         if col not in timed_df.columns:
@@ -762,7 +752,7 @@ def _verovio_common_mei_dataframes_on_toolkit(
         collapse=collapse_tied_pitch_events,
     )
 
-    return df_pitch, timed_df, staff_to_part, measure_offsets, load_info, missing_timed_ids
+    return df_pitch, timed_df, staff_to_part, measure_offsets, load_info, missing_timed_ids, measure_labels
 
 
 def _rest_events_to_dataframe(df_timed: pd.DataFrame) -> pd.DataFrame:
@@ -807,11 +797,13 @@ def _rest_events_to_dataframe(df_timed: pd.DataFrame) -> pd.DataFrame:
                 "measure_type": pd.NA,
                 "measure_metcon": pd.NA,
                 "measure_join": pd.NA,
-                "measure_n": pd.NA,
+                "measure_n": row.get("measure_n", pd.NA),
                 "extra": pd.NA,
             }
         )
     df_events = pd.DataFrame(rows)
+    # Preserve the event metadata dtype when all rest labels are strings.
+    df_events["measure_n"] = df_events["measure_n"].astype(object)
     for col in _EVENT_DF_COLUMNS:
         if col not in df_events.columns:
             df_events[col] = pd.NA
@@ -933,15 +925,16 @@ def parse_files_verovio(
                         "parse_files_verovio currently supports common-notation MEI sources only"
                     )
 
-                df_raw, df_timed_raw, staff_to_part, measure_offsets, load_info, missing_timed_ids = (
-                    _verovio_common_mei_dataframes(
-                        file_path,
-                        parse_enharmonic=parse_enharmonic,
-                        include_xml_ids=bool(include_xml_ids),
-                        include_note_attachments=bool(include_note_attachments),
-                        collapse_tied_pitch_events=collapse_tied_pitch_events,
-                        quiet_native_warnings=quiet_native_warnings,
-                    )
+                (
+                    df_raw, df_timed_raw, staff_to_part, measure_offsets, load_info,
+                    missing_timed_ids, measure_labels,
+                ) = _verovio_common_mei_dataframes(
+                    file_path,
+                    parse_enharmonic=parse_enharmonic,
+                    include_xml_ids=bool(include_xml_ids),
+                    include_note_attachments=bool(include_note_attachments),
+                    collapse_tied_pitch_events=collapse_tied_pitch_events,
+                    quiet_native_warnings=quiet_native_warnings,
                 )
                 if load_info.get("sanitized") and load_info.get("message"):
                     log(f"Warning: {load_info['message']}")
@@ -977,19 +970,23 @@ def parse_files_verovio(
                     filter_zero_duration=filter_zero_duration,
                     adjust_fractional_duration=adjust_fractional_duration,
                 ).sort_values(["Global Onset", "MIDI"], kind="stable").reset_index(drop=True)
-                df_pitch = reanchor_to_measure_offsets(df_pitch, measure_offsets)
+                df_pitch = reanchor_to_measure_offsets(
+                    df_pitch, measure_offsets, measure_labels=measure_labels
+                )
                 df_timed = filter_and_adjust_durations(
                     df_timed_raw,
                     filter_zero_duration=filter_zero_duration,
                     adjust_fractional_duration=adjust_fractional_duration,
                 ).sort_values("Global Onset", na_position="last").reset_index(drop=True)
-                df_timed = reanchor_to_measure_offsets(df_timed, measure_offsets)
+                df_timed = reanchor_to_measure_offsets(
+                    df_timed, measure_offsets, measure_labels=measure_labels
+                )
                 if include_xml_ids and "xml_id" not in df_pitch.columns:
                     df_pitch["xml_id"] = pd.NA
 
                 extracted_mei_events: List[Dict[str, Any]] = []
                 seen_event_keys: set[Tuple[str, ...]] = set()
-                for raw_event in _extract_mei_events(file_path):
+                for raw_event in _extract_mei_events(file_path, use_measure_labels=True):
                     event = dict(raw_event)
                     key = _mei_event_merge_key(event)
                     if key in seen_event_keys:
@@ -1033,6 +1030,8 @@ def parse_files_verovio(
                     barline_events,
                     measure_offsets=measure_offsets,
                 )
+                for event in barline_events:
+                    event.pop("measure_label", None)
                 df_rests = _rest_events_to_dataframe(df_timed)
                 df_other_events = _other_mei_events_to_dataframe(
                     other_events,
