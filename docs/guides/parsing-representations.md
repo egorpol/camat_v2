@@ -67,7 +67,7 @@ The stable core columns are:
 
 | Column | Meaning |
 | --- | --- |
-| `Measure` | parsed measure position |
+| `Measure` | MEI bar number when all bars have strictly increasing integer `@n` values, otherwise one-based position |
 | `Local Onset` | onset within the measure |
 | `Global Onset` | onset on the score timeline, in quarter-note units |
 | `Duration` | metric segment duration, in quarter-note units |
@@ -75,6 +75,20 @@ The stable core columns are:
 | `MIDI` | numeric pitch |
 | `Voice` | CAMAT voice label |
 | `xml_id` | link to the originating MEI note |
+
+An MEI pickup numbered `n="0"` reads as 0, and gaps in bar numbering are
+allowed. If any bar number repeats, is missing, is non-integer, or decreases,
+the whole file uses positions 1, 2, 3, and so on. This includes files that
+restart numbering between movements or reuse a number for a bar split across
+pages. The source label is available in `df_events["measure_n"]`. Because
+labels can start at 0 or skip numbers, `Measure` is not an index into
+`measure_offsets`. Verovio
+applies the rule to notes, rests, and other MEI events. Partitura applies it to
+MEI notes when its bar grid has one start per score bar and uses positions
+otherwise. Its other MEI events follow the file's numbering rule, while its
+rest rows retain their existing numbering. MusicXML and Kern input use
+positions. The music21 backend uses its existing numbering, including when
+Partitura falls back to it.
 
 Optional enrichment adds note attachments such as tie, slur, tuplet, fermata,
 articulation, ornament, and technical information. Tie handling changes whether

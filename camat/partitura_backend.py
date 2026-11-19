@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import io
 import os
+import re
 import sys
 import tempfile
 import threading
 import types
 import warnings
+import xml.etree.ElementTree as ET
 from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Set, Tuple, Union, Sequence
@@ -177,6 +179,7 @@ except ImportError as exc:  # pragma: no cover - handled at runtime
         "Install it with `pip install partitura`."
     ) from exc
 
+from .mei_sounding_pitch import _tuplet_multiplier
 from .music_utils import (  # type: ignore
     draw_piano_roll,
     filter_and_adjust_durations,
@@ -187,6 +190,7 @@ from .music_utils import (  # type: ignore
     accidental_rank_from_name,
 )
 from .parser_utils import (
+    _grid_measure_labels,
     reanchor_to_measure_offsets,
     reject_unexpected_kwargs,
     resolve_collapse_tied_pitch_events,
@@ -1742,7 +1746,7 @@ def partitura_score_to_dataframe(
     elif len(frames) == 1:
         df = frames[0]
     else:
-        df = pd.concat(frames, ignore_index=True, sort=False, copy=False)
+        df = pd.concat(frames, ignore_index=True, sort=False)
 
     if parse_enharmonic and "Pitch Enharmonic" not in df.columns:
         df["Pitch Enharmonic"] = None
@@ -1835,6 +1839,90 @@ def _mei_music_measures(root: Any) -> List[Any]:
         if measures:
             return measures
     return [el for el in root.iter() if _mei_local_name(el.tag) == "measure"]
+
+
+def _mei_measure_labels(root: Any) -> Optional[Dict[int, int]]:
+    """Return strictly increasing integer bar numbers in document order."""
+    labels: Dict[int, int] = {}
+    previous: Optional[int] = None
+    for measure in _mei_music_measures(root):
+        raw_label = measure.get("n", "").strip()
+        if re.fullmatch(r"-?\d+", raw_label) is None:
+            return None
+        label = int(raw_label)
+        if previous is not None and label <= previous:
+            return None
+        labels[id(measure)] = label
+        previous = label
+    return labels
+
+
+def _iter_layer_timed_children(
+    layer_el: Any, multiplier: float = 1.0
+) -> Iterable[Tuple[Any, float]]:
+    for child in layer_el:
+        tag = _mei_local_name(child.tag)
+        if tag in {"note", "rest", "mRest", "multiRest", "space", "chord"}:
+            yield child, multiplier
+        elif tag in {"beam", "tuplet", "bTrem", "fTrem"}:
+            child_multiplier = multiplier * (_tuplet_multiplier(child) if tag == "tuplet" else 1.0)
+            yield from _iter_layer_timed_children(child, child_multiplier)
+
+
+def _mei_timed_measure_positions(measures: Sequence[Any]) -> Dict[int, int]:
+    """Count only the measures that contribute to the Verovio timeline."""
+    positions: Dict[int, int] = {}
+    for measure in measures:
+        for staff in measure.iter():
+            if _mei_local_name(staff.tag) != "staff":
+                continue
+            layers = [child for child in staff if _mei_local_name(child.tag) == "layer"] or [staff]
+            if any(next(_iter_layer_timed_children(layer), None) is not None for layer in layers):
+                positions[id(measure)] = len(positions) + 1
+                break
+    return positions
+
+
+def _mei_event_measure_labels(root: Any) -> Dict[int, int]:
+    labels = _mei_measure_labels(root)
+    if labels is not None:
+        return labels
+    measures = _mei_music_measures(root)
+    positions = _mei_timed_measure_positions(measures)
+    if not positions:
+        return {id(measure): index for index, measure in enumerate(measures, start=1)}
+
+    # Untimed bars take the next timed position, or the final one.
+    labels = {}
+    position = len(positions)
+    for measure in reversed(measures):
+        position = positions.get(id(measure), position)
+        labels[id(measure)] = position
+    return labels
+
+
+def _apply_source_measure_labels_to_converted_events(
+    events: Sequence[Dict[str, Any]], source_root: ET.Element
+) -> None:
+    """Give converted events their source bar's label, matched by xml:id.
+
+    An event whose ``xml_id`` and ``measure_xml_id`` are both missing from the
+    source keeps the converted file's numbering, while notes take source labels
+    from the grid; the two differ only if a conversion regenerates IDs.
+    """
+    labels = _mei_event_measure_labels(source_root)
+    labels_by_xml_id = {
+        xml_id: labels[id(measure)]
+        for measure in _mei_music_measures(source_root)
+        for element in measure.iter()
+        if (xml_id := _mei_xml_id(element)) is not None
+    }
+    for event in events:
+        label = labels_by_xml_id.get(event.get("xml_id"))
+        if label is None:
+            label = labels_by_xml_id.get(event.get("measure_xml_id"))
+        if label is not None:
+            event["measure_label"] = label
 
 
 def _source_staff_index_to_part_label_map_from_mei(root: Any) -> Dict[str, str]:
@@ -2713,7 +2801,7 @@ def _event_row(
     return {
         "type": event_type,
         "subtype": event.get("subtype", pd.NA),
-        "Measure": event.get("measure"),
+        "Measure": event.get("measure_label", event.get("measure")),
         "Local Onset": local_onset,
         "Global Onset": global_onset,
         "Duration": duration,
@@ -2912,15 +3000,17 @@ def _count_event_anchor_xml_id_overlap(
 
 
 _MEI_EVENTS_CACHE_MAX = 32
-_MEI_EVENTS_CACHE: Dict[Tuple[str, float, int], List[Dict[str, Any]]] = {}
+_MEI_EVENTS_CACHE: Dict[Tuple[str, float, int, bool], List[Dict[str, Any]]] = {}
 
 
-def _mei_events_cache_key(mei_path: str) -> Optional[Tuple[str, float, int]]:
+def _mei_events_cache_key(
+    mei_path: str, use_measure_labels: bool
+) -> Optional[Tuple[str, float, int, bool]]:
     try:
         st = os.stat(mei_path)
     except OSError:
         return None
-    return (os.path.abspath(mei_path), float(st.st_mtime), int(st.st_size))
+    return (os.path.abspath(mei_path), float(st.st_mtime), int(st.st_size), use_measure_labels)
 
 
 def _clone_mei_events(events: Sequence[Mapping[str, Any]]) -> List[Dict[str, Any]]:
@@ -2935,29 +3025,28 @@ def _clone_mei_events(events: Sequence[Mapping[str, Any]]) -> List[Dict[str, Any
     return out
 
 
-def _extract_mei_events(mei_path: str) -> List[Dict[str, Any]]:
+def _extract_mei_events(
+    mei_path: str, *, root: Optional[ET.Element] = None, use_measure_labels: bool = False
+) -> List[Dict[str, Any]]:
     """
     Extract supported MEI control/text elements as lightweight event dictionaries.
 
-    Results are cached per (path, mtime, size) so repeated calls on the same
-    file (common when partitura loads a sanitized copy pointing at the same
-    bytes) don't re-walk the XML tree.
+    Results are cached by file metadata and measure numbering mode.
     """
     if Path(mei_path).suffix.lower() != ".mei":
         return []
 
-    cache_key = _mei_events_cache_key(mei_path)
+    cache_key = _mei_events_cache_key(mei_path, use_measure_labels)
     if cache_key is not None:
         cached = _MEI_EVENTS_CACHE.get(cache_key)
         if cached is not None:
             return _clone_mei_events(cached)
 
-    try:
-        import xml.etree.ElementTree as ET
-
-        root = ET.parse(mei_path).getroot()
-    except Exception:
-        return []
+    if root is None:
+        try:
+            root = ET.parse(mei_path).getroot()
+        except Exception:
+            return []
 
     def _local_name(tag: Any) -> str:
         raw = str(tag)
@@ -3086,30 +3175,28 @@ def _extract_mei_events(mei_path: str) -> List[Dict[str, Any]]:
     xml_id_key = "{http://www.w3.org/XML/1998/namespace}id"
     parent_map = {child: parent for parent in root.iter() for child in parent}
     measure_elements = [el for el in root.iter() if _local_name(el.tag) == "measure"]
-    measure_index_map = {id(el): idx for idx, el in enumerate(measure_elements, start=1)}
+    measure_labels = _mei_event_measure_labels(root) if use_measure_labels else {}
     events: List[Dict[str, Any]] = []
     barline_ordinal = 0
-
-    for measure_el in measure_elements:
-        measure_index = measure_index_map.get(id(measure_el))
-        measure_number: Optional[int] = None
+    measure_fields: Dict[int, Dict[str, Any]] = {}
+    for measure_index, measure_el in enumerate(measure_elements, start=1):
+        measure_id = id(measure_el)
         try:
             measure_number = int(str(measure_el.attrib.get("n")))
         except Exception:
             measure_number = measure_index
-        measure_event: Dict[str, Any] = {
-            "event": "measure",
-            "scope": "measure",
-        }
-        if measure_index is not None:
-            measure_event["measure_index"] = measure_index
-        if measure_number is not None:
-            measure_event["measure"] = measure_number
+        # Preserve the original measure value used for event merging and deduplication.
+        fields: Dict[str, Any] = {"measure_index": measure_index, "measure": measure_number}
+        if measure_id in measure_labels:
+            fields["measure_label"] = measure_labels[measure_id]
         measure_xml_id = _get_xml_id(measure_el)
         if measure_xml_id:
+            fields["measure_xml_id"] = measure_xml_id
+        fields.update(_measure_metadata(measure_el))
+        measure_fields[measure_id] = fields
+        measure_event = {"event": "measure", "scope": "measure", **fields}
+        if measure_xml_id:
             measure_event["xml_id"] = measure_xml_id
-            measure_event["measure_xml_id"] = measure_xml_id
-        measure_event.update(_measure_metadata(measure_el))
         events.append(measure_event)
 
     # Per-layer precomputed indexes used by barline lookups. Without this, each
@@ -3204,15 +3291,6 @@ def _extract_mei_events(mei_path: str) -> List[Dict[str, Any]]:
         if layer_n is None and layer_el is not None:
             layer_n = _first_token(layer_el.attrib.get("n"))
 
-        measure_index: Optional[int] = None
-        measure_number: Optional[int] = None
-        if measure_el is not None:
-            measure_index = measure_index_map.get(id(measure_el))
-            try:
-                measure_number = int(str(measure_el.attrib.get("n")))
-            except Exception:
-                measure_number = measure_index
-
         event: Dict[str, Any] = {
             "event": event_type,
             "scope": "point",
@@ -3220,15 +3298,8 @@ def _extract_mei_events(mei_path: str) -> List[Dict[str, Any]]:
         xml_id = _get_xml_id(el)
         if xml_id:
             event["xml_id"] = xml_id
-        if measure_index is not None:
-            event["measure_index"] = measure_index
-        if measure_number is not None:
-            event["measure"] = measure_number
         if measure_el is not None:
-            measure_xml_id = _get_xml_id(measure_el)
-            if measure_xml_id:
-                event["measure_xml_id"] = measure_xml_id
-            event.update(_measure_metadata(measure_el))
+            event.update(measure_fields[id(measure_el)])
         if staff_n is not None:
             event["staff_n"] = staff_n
         if staff_raw is not None:
@@ -4235,7 +4306,16 @@ def parse_files_partitura(
                 conversion_source_path = file_path
                 is_mei_source = Path(file_path).suffix.lower() == ".mei"
                 is_mensural_source = _file_looks_mensural_mei(file_path)
-                source_mei_events = _extract_mei_events(file_path) if is_mei_source else []
+                source_root = None
+                if is_mei_source:
+                    try:
+                        source_root = ET.parse(file_path).getroot()
+                    except Exception:
+                        pass
+                source_mei_events = (
+                    _extract_mei_events(file_path, root=source_root, use_measure_labels=True)
+                    if source_root is not None else []
+                )
                 used_verovio_conversion = False
                 if (
                     is_mei_source
@@ -4333,10 +4413,9 @@ def parse_files_partitura(
                         with warning_ctx, output_ctx:
                             score = _load_partitura_score(sanitized_path)
                     except Exception as load_exc:
-                        is_mei_source = str(sanitized_path).lower().endswith(".mei")
                         if (
                             try_verovio_mei_conversion
-                            and is_mei_source
+                            and str(sanitized_path).lower().endswith(".mei")
                             and _is_partitura_unsupported_mei_structure_error(load_exc)
                         ):
                             log(
@@ -4377,7 +4456,16 @@ def parse_files_partitura(
                         else:
                             raise
                     if str(score_source_path).lower().endswith(".mei"):
-                        extracted_mei_events = _extract_mei_events(score_source_path)
+                        if score_source_path == file_path:
+                            extracted_mei_events = source_mei_events
+                        else:
+                            extracted_mei_events = _extract_mei_events(
+                                score_source_path, use_measure_labels=not used_verovio_conversion
+                            )
+                            if used_verovio_conversion and source_root is not None:
+                                _apply_source_measure_labels_to_converted_events(
+                                    extracted_mei_events, source_root
+                                )
                         converted_barline_count = sum(
                             1
                             for evt in extracted_mei_events
@@ -4435,11 +4523,8 @@ def parse_files_partitura(
                 with warning_ctx, output_ctx:
                     measure_offsets = _partitura_measure_offsets(score)
                 staff_to_part = _staff_index_to_part_label_map(score)
-                if is_mei and isinstance(df_raw, pd.DataFrame) and not df_raw.empty:
+                if source_root is not None and is_mei and isinstance(df_raw, pd.DataFrame) and not df_raw.empty:
                     try:
-                        import xml.etree.ElementTree as ET
-
-                        source_root = ET.parse(file_path).getroot()
                         source_staff_to_part = _source_staff_index_to_part_label_map_from_mei(
                             source_root
                         )
@@ -4573,9 +4658,20 @@ def parse_files_partitura(
                     filter_zero_duration=filter_zero_duration,
                     adjust_fractional_duration=adjust_fractional_duration,
                 ).reset_index(drop=True)
+                measure_labels = None
+                if source_root is not None:
+                    source_labels = _mei_measure_labels(source_root)
+                    if source_labels is not None:
+                        measure_labels = _grid_measure_labels(measure_offsets, source_labels.values())
+                        if measure_labels is None:
+                            log(
+                                f"Partitura kept measure positions for {short_name} because its "
+                                f"grid does not have one start per source bar ({len(source_labels)} bars)."
+                            )
                 df_processed = reanchor_to_measure_offsets(
                     df_processed,
                     measure_offsets,
+                    measure_labels=measure_labels,
                 )
 
                 include_ids_this_score = (want_xml_ids and "xml_id" in df_processed.columns)
@@ -4655,6 +4751,8 @@ def parse_files_partitura(
                     barline_events,
                     measure_offsets=measure_offsets,
                 )
+                for event in barline_events:
+                    event.pop("measure_label", None)
                 df_other_events = _other_mei_events_to_dataframe(
                     other_events,
                     df_pitch,

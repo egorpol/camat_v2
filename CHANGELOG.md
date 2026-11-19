@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased][Unreleased]
 
+### Changed
+
+- MEI notes and events now use the score's bar numbers when every bar has a
+  strictly increasing integer `@n`. Webern-style pickups now read as bar 0
+  in both MEI parsers, with matching note, rest, and event numbers in Verovio.
+  Scores numbered consecutively from 1 with one timed grid start per bar keep
+  their existing measure numbers.
+- In MEI files whose bar numbers repeat, restart, decrease or are missing,
+  event rows (barlines, dynamics, text) now read the bar positions that
+  Verovio's notes use instead of the raw `@n`.
+- Verovio rest rows in `df_events` now carry their bar's raw `@n` in
+  `measure_n`.
+
 ## [0.2.10][0.2.10] - 2026-11-06
 
 ### Added
