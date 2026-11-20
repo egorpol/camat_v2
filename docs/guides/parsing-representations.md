@@ -104,6 +104,22 @@ slurs, ornaments, setup changes, and related MEI events. Anchor columns such as
 `start_xml_id` and `end_xml_id` connect spans to notes where the MEI provides
 that relationship.
 
+## Editorial markup (`<choice>`, `<app>`, `<subst>`)
+
+When an MEI file encodes alternative readings inside `<choice>`, `<app>`, or
+`<subst>`, CAMAT keeps a single selected branch across `df_pitch`, `df_events`,
+sounding-pitch resolution, tie extraction, Partitura import, and
+`camat-check-mei` rhythm/facsimile checks (while document-wide reference checks
+still validate pointers in unselected readings):
+
+- `<choice>` and `<subst>`: the first child element in document order (matching
+  Verovio's default `choiceXPathQuery` / `substXPathQuery`).
+- `<app>`: the first `<lem>` child when present, otherwise the first `<rdg>`
+  (matching Verovio on schema-valid MEI 5.1, where `<lem>` precedes `<rdg>`).
+
+Standalone transcription wrappers outside those three containers (such as
+`<supplied>`) are left unchanged.
+
 ## Parser backends are adapters
 
 | Backend | Role |

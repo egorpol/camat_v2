@@ -11,6 +11,21 @@ import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
+try:
+    from .mei_editorial import (
+        EDITORIAL_CONTAINERS,
+        iter_selected_children,
+        select_editorial_branch,
+        unselected_editorial_element_ids,
+    )
+except ImportError:  # pragma: no cover - sibling script execution
+    from mei_editorial import (
+        EDITORIAL_CONTAINERS,
+        iter_selected_children,
+        select_editorial_branch,
+        unselected_editorial_element_ids,
+    )
+
 __all__ = ["AccidGesReport", "resolve_mei_note_alters", "regenerate_accid_ges_text"]
 
 XML_ID = "{http://www.w3.org/XML/1998/namespace}id"
@@ -70,7 +85,7 @@ def _mei_note_accid_value(note_el: Any) -> Optional[Any]:
     attr_value = note_el.attrib.get("accid.ges") or note_el.attrib.get("accid")
     if attr_value is not None:
         return attr_value
-    for child in list(note_el):
+    for child in iter_selected_children(note_el):
         if _local_name(child.tag) != "accid":
             continue
         child_value = child.attrib.get("accid.ges") or child.attrib.get("accid")
@@ -140,10 +155,13 @@ def _mei_tuplet_span_multipliers(root: Any) -> Dict[str, float]:
     already inside such a container are deliberately excluded here so an
     equivalent ``tupletSpan`` cannot apply the same ratio twice.
     """
+    unselected = unselected_editorial_element_ids(root)
     parent_by_element = {child: parent for parent in root.iter() for child in parent}
     element_by_id: Dict[str, Any] = {}
     ordered_ids: List[str] = []
     for el in root.iter():
+        if id(el) in unselected:
+            continue
         if _local_name(el.tag) not in {"note", "chord", "rest", "space"}:
             continue
         xml_id = _xml_id(el)
@@ -162,6 +180,8 @@ def _mei_tuplet_span_multipliers(root: Any) -> Dict[str, float]:
 
     multipliers: Dict[str, float] = {}
     for span in root.iter():
+        if id(span) in unselected:
+            continue
         if _local_name(span.tag) != "tupletSpan":
             continue
         multiplier = _tuplet_multiplier(span)
@@ -197,7 +217,7 @@ def _timed_element_tuplet_span_multiplier(
         return 1.0
     child_values = {
         float(multipliers[child_id])
-        for child in list(timed_el)
+        for child in iter_selected_children(timed_el)
         if _local_name(child.tag) == "note"
         and (child_id := _xml_id(child)) in multipliers
     }
@@ -205,8 +225,11 @@ def _timed_element_tuplet_span_multiplier(
 
 
 def _extract_mei_tie_next_map(root: Any) -> Dict[str, str]:
+    unselected = unselected_editorial_element_ids(root)
     tie_next: Dict[str, str] = {}
     for el in root.iter():
+        if id(el) in unselected:
+            continue
         if _local_name(el.tag) != "tie":
             continue
         start_id = _normalize_xml_ref(el.attrib.get("startid"))
@@ -228,6 +251,8 @@ def _extract_mei_tie_next_map(root: Any) -> Dict[str, str]:
         return ""
 
     for note_el in root.iter():
+        if id(note_el) in unselected:
+            continue
         if _local_name(note_el.tag) != "note":
             continue
         parent = parent_by_element.get(note_el)
@@ -298,12 +323,18 @@ def _extract_mei_note_effective_alters(root: Any) -> Dict[int, int]:
     def written_accidental(note):
         value = note.get("accid")
         if value is None:
-            value = next((child.get("accid") for child in note
-                          if _local_name(child.tag) == "accid" and child.get("accid") is not None), None)
+            value = next(
+                (
+                    child.get("accid")
+                    for child in iter_selected_children(note)
+                    if _local_name(child.tag) == "accid" and child.get("accid") is not None
+                ),
+                None,
+            )
         return _mei_accid_to_alter(value)
 
     def layer_events(layer, multiplier=1.0, grace=False, staff=None):
-        for child in layer:
+        for child in iter_selected_children(layer):
             tag = _local_name(child.tag)
             if tag in {"note", "chord", "rest", "space", "mRest", "multiRest", "keySig"}:
                 yield child, multiplier, grace or child.get("grace") is not None, child.get("staff") or staff
@@ -320,9 +351,11 @@ def _extract_mei_note_effective_alters(root: Any) -> Dict[int, int]:
     def process_measure(measure):
         events = []
         order = itertools.count()
-        for staff in (child for child in measure if _local_name(child.tag) == "staff"):
+        for staff in (child for child in iter_selected_children(measure) if _local_name(child.tag) == "staff"):
             staff_n = staff.get("n", "1")
-            layers = [child for child in staff if _local_name(child.tag) == "layer"] or [staff]
+            layers = [
+                child for child in iter_selected_children(staff) if _local_name(child.tag) == "layer"
+            ] or [staff]
             for layer in layers:
                 cursor = 0.0
                 grace_order = 0
@@ -347,8 +380,15 @@ def _extract_mei_note_effective_alters(root: Any) -> Dict[int, int]:
                         continue
                     duration = _mei_duration_quarters(event)
                     if duration is None and tag == "chord":
-                        duration = next((_mei_duration_quarters(note) for note in event
-                                         if _local_name(note.tag) == "note" and _mei_duration_quarters(note) is not None), None)
+                        duration = next(
+                            (
+                                _mei_duration_quarters(note)
+                                for note in iter_selected_children(event)
+                                if _local_name(note.tag) == "note"
+                                and _mei_duration_quarters(note) is not None
+                            ),
+                            None,
+                        )
                     cursor += (duration or 0.0) * scale * _timed_element_tuplet_span_multiplier(event, tuplet_spans)
         carried = {}
         for _, group in itertools.groupby(sorted(events, key=lambda item: item[:3]), key=lambda item: item[:2]):
@@ -365,8 +405,11 @@ def _extract_mei_note_effective_alters(root: Any) -> Dict[int, int]:
                 if tag == "note":
                     notes.append((event, display))
                 elif tag == "chord":
-                    notes.extend((note, _first_staff(note.get("staff"), display))
-                                 for note in event if _local_name(note.tag) == "note")
+                    notes.extend(
+                        (note, _first_staff(note.get("staff"), display))
+                        for note in iter_selected_children(event)
+                        if _local_name(note.tag) == "note"
+                    )
             updates = {}
             for note, display in notes:
                 accidental = written_accidental(note)
@@ -394,6 +437,11 @@ def _extract_mei_note_effective_alters(root: Any) -> Dict[int, int]:
     def visit(el):
         nonlocal global_key
         tag = _local_name(el.tag)
+        if tag in EDITORIAL_CONTAINERS:
+            selected = select_editorial_branch(el)
+            if selected is not None:
+                visit(selected)
+            return
         if tag == "score":
             global_key = None
             staff_keys.clear()
@@ -408,7 +456,7 @@ def _extract_mei_note_effective_alters(root: Any) -> Dict[int, int]:
             if key is not None:
                 staff_keys[el.get("n", "1")] = key
         elif tag == "measure":
-            for child in el:
+            for child in iter_selected_children(el):
                 if _local_name(child.tag) in {"scoreDef", "staffDef"}:
                     visit(child)
             process_measure(el)

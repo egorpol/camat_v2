@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased][Unreleased]
 
+### Fixed
+
+- MEI parsers (`verovio` and `partitura`), sounding-pitch resolution, tie and
+  event extraction, and `camat-check-mei` rhythm and facsimile checks now
+  select a single branch inside `<choice>`, `<app>`, and `<subst>` containers
+  instead of dropping or double-counting wrapped notes and shifting later
+  onsets. Default selection matches Verovio 6.3.0 on schema-valid MEI 5.1:
+  first child element for `<choice>` and `<subst>`, and `<lem>` (else first
+  `<rdg>`) for `<app>`. Unselected branches do not leak carried accidentals,
+  ties, meter changes, or event text, while document-wide XML reference checks
+  continue to validate pointers in unselected readings. Standalone wrappers
+  outside those three containers remain unchanged.
+- Notes and chords inside `<graceGrp>` no longer advance the metric cursor in
+  symbolic timing or trigger false bar-duration errors in `camat-check-mei`.
+
 ## [0.2.11][0.2.11] - 2026-11-19
 
 ### Changed

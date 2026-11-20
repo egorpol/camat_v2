@@ -7,6 +7,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 import numpy as np
 import pandas as pd
 
+from .mei_editorial import iter_selected_children, unselected_editorial_element_ids
 from .mei_sounding_pitch import (
     _mei_accid_to_alter,
     _mei_note_accid_value,
@@ -120,8 +121,11 @@ def _alter_to_suffix(alter: int) -> str:
 
 
 def _extract_mei_note_explicit_alters(root: Any) -> Dict[str, int]:
+    unselected = unselected_editorial_element_ids(root)
     note_alters: Dict[str, int] = {}
     for el in root.iter():
+        if id(el) in unselected:
+            continue
         if _local_name(el.tag) != "note":
             continue
         note_id = _xml_id(el)
@@ -164,7 +168,10 @@ def _midi_from_mei_pitch(note_el: Any, alter: Optional[int] = None) -> Optional[
 
 
 def _midi_quarter_scale(root: Any, tk: Any) -> float:
+    unselected = unselected_editorial_element_ids(root)
     for el in root.iter():
+        if id(el) in unselected:
+            continue
         if _local_name(el.tag) not in {"note", "chord"}:
             continue
         xid = _xml_id(el)
@@ -454,20 +461,29 @@ def _verovio_common_mei_dataframes_on_toolkit(
             and abs(float(meter_span) - float(previous_meter_span)) > 1e-6
         )
         layer_end_positions: List[float] = []
-        staff_elements = [el for el in list(measure_el) if _local_name(el.tag) == "staff"]
+        staff_elements = [
+            el for el in iter_selected_children(measure_el) if _local_name(el.tag) == "staff"
+        ]
         if not staff_elements:
-            staff_elements = [el for el in measure_el.iter() if _local_name(el.tag) == "staff"]
+            unselected = unselected_editorial_element_ids(measure_el)
+            staff_elements = [
+                el
+                for el in measure_el.iter()
+                if _local_name(el.tag) == "staff" and id(el) not in unselected
+            ]
         for staff_idx, staff_el in enumerate(staff_elements, start=1):
             staff_n = _first_token(staff_el.attrib.get("n")) or str(staff_idx)
             part_label = staff_to_part.get(str(staff_n), f"P{staff_n}")
-            layer_elements = [child for child in list(staff_el) if _local_name(child.tag) == "layer"]
+            layer_elements = [
+                child for child in iter_selected_children(staff_el) if _local_name(child.tag) == "layer"
+            ]
             if not layer_elements:
                 layer_elements = [staff_el]
             for layer_idx, layer_el in enumerate(layer_elements, start=1):
                 layer_n = _first_token(getattr(layer_el, "attrib", {}).get("n")) or str(layer_idx)
                 voice_label = _format_voice_label(part_label, layer_n)
                 cursor = 0.0
-                for timed_el, duration_multiplier in _iter_layer_timed_children(layer_el):
+                for timed_el, duration_multiplier, is_grace in _iter_layer_timed_children(layer_el):
                     tag = _local_name(timed_el.tag)
                     timed_xml_id = _xml_id(timed_el)
                     duration_multiplier *= _timed_element_tuplet_span_multiplier(
@@ -475,8 +491,10 @@ def _verovio_common_mei_dataframes_on_toolkit(
                         tuplet_span_multipliers,
                     )
                     fallback_duration = _mei_duration_quarters(timed_el)
+                    if is_grace:
+                        fallback_duration = 0.0
                     if fallback_duration is None and tag == "chord":
-                        for note_child in list(timed_el):
+                        for note_child in iter_selected_children(timed_el):
                             if _local_name(note_child.tag) == "note":
                                 fallback_duration = _mei_duration_quarters(note_child)
                                 if fallback_duration is not None:
@@ -522,7 +540,9 @@ def _verovio_common_mei_dataframes_on_toolkit(
                     if tag == "note":
                         note_elements = [timed_el]
                     elif tag == "chord":
-                        note_elements = [ch for ch in list(timed_el) if _local_name(ch.tag) == "note"]
+                        note_elements = [
+                            ch for ch in iter_selected_children(timed_el) if _local_name(ch.tag) == "note"
+                        ]
                     else:
                         note_elements = []
 
@@ -538,7 +558,7 @@ def _verovio_common_mei_dataframes_on_toolkit(
                             note_pitch = midi_pitch
                         if tag == "chord":
                             child_duration_fallback = _mei_duration_quarters(note_el)
-                            if str(timed_el.attrib.get("grace", "")).strip():
+                            if is_grace or str(timed_el.attrib.get("grace", "")).strip():
                                 child_duration_fallback = 0.0
                             if child_duration_fallback is not None:
                                 child_duration_fallback = float(child_duration_fallback) * float(duration_multiplier)

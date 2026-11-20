@@ -29,9 +29,11 @@ from pathlib import Path
 from typing import Iterable
 
 if __package__:
+    from .mei_editorial import iter_selected_children, unselected_editorial_element_ids
     from .mei_sounding_pitch import regenerate_accid_ges_text
     from .mei_references import REFERENCE_ATTRS, resolve_pointer
 else:  # Preserve direct script use without importing CAMAT's consumer stack.
+    from mei_editorial import iter_selected_children, unselected_editorial_element_ids
     from mei_sounding_pitch import regenerate_accid_ges_text
     from mei_references import REFERENCE_ATTRS, resolve_pointer
 
@@ -113,6 +115,7 @@ class MeiChecker:
         self.findings: list[Finding] = []
         self.root: ET.Element | None = None
         self.parent: dict[ET.Element, ET.Element] = {}
+        self.unselected_ids: set[int] = set()
         self.current_staff_defs: dict[str, dict[str, str]] = {}
         self.initial_staff_defs: dict[str, dict[str, str]] = {}
         self.ids: dict[str, ET.Element] = {}
@@ -181,6 +184,7 @@ class MeiChecker:
 
         self.parent = {child: parent for parent in self.root.iter() for child in list(parent)}
         self.ids = {el.get(XML_ID): el for el in self.root.iter() if el.get(XML_ID)}
+        self.unselected_ids = unselected_editorial_element_ids(self.root)
 
         if self.check_accid_ges:
             self._check_accid_ges()
@@ -575,7 +579,11 @@ class MeiChecker:
                 actual=", ".join(map(str, surface_numbers)),
             )
 
-        measures = [element for element in self.root.iter() if local_name(element.tag) == "measure"]
+        measures = [
+            element
+            for element in self.root.iter()
+            if local_name(element.tag) == "measure" and id(element) not in self.unselected_ids
+        ]
         used_zones = Counter(measure.get("facs", "").lstrip("#") for measure in measures)
         for zone_id, count in used_zones.items():
             if zone_id and count > 1 and zone_id in zone_elements:
@@ -589,7 +597,11 @@ class MeiChecker:
                     actual=str(count),
                 )
 
-        page_breaks = [element for element in self.root.iter() if local_name(element.tag) == "pb"]
+        page_breaks = [
+            element
+            for element in self.root.iter()
+            if local_name(element.tag) == "pb" and id(element) not in self.unselected_ids
+        ]
         pb_surfaces = Counter(pb.get("facs", "").lstrip("#") for pb in page_breaks)
         referenced_surfaces = {
             zone_surface.get(measure.get("facs", "").lstrip("#"), "")
@@ -626,6 +638,8 @@ class MeiChecker:
 
         active_surface = ""
         for element in self.root.iter():
+            if id(element) in self.unselected_ids:
+                continue
             tag = local_name(element.tag)
             if tag == "pb":
                 active_surface = element.get("facs", "").lstrip("#")
@@ -645,6 +659,8 @@ class MeiChecker:
         encoded_system_breaks: set[str] = set()
         pending_system_break = False
         for element in self.root.iter():
+            if id(element) in self.unselected_ids:
+                continue
             tag = local_name(element.tag)
             if tag == "sb":
                 pending_system_break = True
@@ -763,6 +779,9 @@ class MeiChecker:
             )
 
     def _check_references(self) -> None:
+        # Document-wide pointer validation still covers unselected editorial
+        # branches so broken @source/@startid targets inside a rejected <rdg>
+        # remain visible to editors.
         assert self.root is not None
         for element in self.root.iter():
             for attr_name, value in element.attrib.items():
@@ -879,6 +898,8 @@ class MeiChecker:
         for measure in self.root.iter():
             if local_name(measure.tag) != "measure":
                 continue
+            if id(measure) in self.unselected_ids:
+                continue
             facs = measure.get("facs", "")
             if not facs:
                 self.add("warning", "facsimile", "measure_facs", measure, "Measure has no @facs reference.")
@@ -956,6 +977,8 @@ class MeiChecker:
             return
         previous_measure_n: int | None = None
         for element in music.iter():
+            if id(element) in self.unselected_ids:
+                continue
             tag = local_name(element.tag)
             if tag == "scoreDef":
                 self._apply_score_def(element)
@@ -1135,7 +1158,11 @@ class MeiChecker:
 
     def _check_measure_staff_inventory(self, measure: ET.Element) -> None:
         expected = set(self.current_staff_defs)
-        actual = {child.get("n", "") for child in list(measure) if local_name(child.tag) == "staff"}
+        actual = {
+            child.get("n", "")
+            for child in iter_selected_children(measure)
+            if local_name(child.tag) == "staff"
+        }
         if not expected:
             return
         missing = sorted(staff for staff in expected - actual if staff)
@@ -1164,11 +1191,15 @@ class MeiChecker:
             )
 
     def _check_measure_rhythm(self, measure: ET.Element) -> None:
-        for staff in direct_children(measure, "staff"):
+        for staff in (
+            child for child in iter_selected_children(measure) if local_name(child.tag) == "staff"
+        ):
             staff_n = staff.get("n", "")
             staff_def = self.current_staff_defs.get(staff_n, {})
             expected = expected_measure_ppq(staff_def)
-            layers = direct_children(staff, "layer")
+            layers = [
+                child for child in iter_selected_children(staff) if local_name(child.tag) == "layer"
+            ]
             if not layers:
                 self.add("warning", "rhythm", "missing_layer", staff, "Staff has no layer.")
                 continue
@@ -1209,13 +1240,15 @@ class MeiChecker:
         space_count = 0
         missing_duration = []
         for event in layer.iter():
+            if id(event) in self.unselected_ids:
+                continue
             tag = local_name(event.tag)
             if tag not in TIMED_EVENTS:
                 continue
-            if tag == "note" and parent_is(event, self.parent, "chord"):
+            if tag == "note" and ancestor_element(event, self.parent, "chord") is not None:
                 self._check_pitch(event)
                 continue
-            if event.get("grace"):
+            if event.get("grace") or ancestor_element(event, self.parent, "graceGrp") is not None:
                 continue
             if tag == "space":
                 space_count += 1
