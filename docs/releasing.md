@@ -164,8 +164,8 @@ checksums again, and uploads them to PyPI without rebuilding. The checksum
 file is retained separately from the distributions. The preflight runs
 `scripts/prepare_release.py` to check the tag, both package version declarations,
 and a nonempty, dated changelog section. Both plain headings such as
-`## [0.2.11] - 2026-11-19` and reference-linked headings such as
-`## [0.2.11][0.2.11] - 2026-11-19` are supported. The `Unreleased` section is
+`## [0.2.12] - 2026-11-20` and reference-linked headings such as
+`## [0.2.12][0.2.12] - 2026-11-20` are supported. The `Unreleased` section is
 ignored. The checker also rejects GitHub `@mention`
 tokens such as `@facs` in those notes, because release pages would otherwise
 list unrelated accounts under Contributors. Write MEI attributes as `` `facs` ``
@@ -176,7 +176,7 @@ as GitHub prereleases and do not replace the latest stable release.
 Check the metadata locally without publishing anything:
 
 ```bash
-python scripts/prepare_release.py --tag v0.2.11
+python scripts/prepare_release.py --tag v0.2.12
 ```
 
 Use the tag for the version being prepared.

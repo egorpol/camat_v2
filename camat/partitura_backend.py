@@ -16,6 +16,14 @@ from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Set, 
 import numpy as np
 import pandas as pd
 
+from .mei_editorial import (
+    EDITORIAL_CONTAINERS,
+    iter_selected_children,
+    resolve_editorial_containers_in_tree,
+    select_editorial_branch,
+    selected_itertext,
+    unselected_editorial_element_ids,
+)
 from .quiet_utils import _NATIVE_FD_LOCK, suppress_native_output
 
 
@@ -721,6 +729,16 @@ def _sanitize_source_for_partitura(
 
     if suffix == ".mei":
         sanitized, _ = _copy_staffgrp_symbol_for_partitura(sanitized)
+        # Resolve <choice>/<app>/<subst> so partitura's importer (which rejects
+        # those tags) sees only the selected Verovio-default reading.
+        try:
+            mei_root = ET.fromstring(sanitized)
+        except ET.ParseError:
+            mei_root = None
+        if mei_root is not None and resolve_editorial_containers_in_tree(mei_root):
+            sanitized = ET.tostring(mei_root, encoding="unicode")
+            if original_text.lstrip("\ufeff").startswith("<?xml"):
+                sanitized = '<?xml version="1.0" encoding="UTF-8"?>\n' + sanitized
 
     mensural_replacement_count = 0
     meter_injection_count = 0
@@ -1080,11 +1098,13 @@ def _extract_mei_note_attachments(mei_path: str) -> Dict[str, Dict[str, Any]]:
             out.append(tok[1:] if tok.startswith("#") else tok)
         return out
 
+    unselected = unselected_editorial_element_ids(root)
     parent_map = {child: parent for parent in root.iter() for child in parent}
     ordered_note_ids = [
         note_id
         for candidate in root.iter()
-        if _lname(candidate.tag) == "note"
+        if id(candidate) not in unselected
+        and _lname(candidate.tag) == "note"
         and (note_id := _xid(candidate)) is not None
     ]
     note_position = {note_id: index for index, note_id in enumerate(ordered_note_ids)}
@@ -1120,6 +1140,8 @@ def _extract_mei_note_attachments(mei_path: str) -> Dict[str, Dict[str, Any]]:
     def _note_ids_in(el: Any) -> List[str]:
         ids: List[str] = []
         for ch in el.iter():
+            if id(ch) in unselected:
+                continue
             if _lname(ch.tag) in {"note", "chord"}:
                 xid = _xid(ch)
                 if xid:
@@ -1129,11 +1151,13 @@ def _extract_mei_note_attachments(mei_path: str) -> Dict[str, Dict[str, Any]]:
     def _chord_child_note_ids(chord_el: Any) -> List[str]:
         return [
             _xid(ch)
-            for ch in chord_el
+            for ch in iter_selected_children(chord_el)
             if _lname(ch.tag) == "note" and _xid(ch) is not None
         ]  # type: ignore[misc]
 
     for el in root.iter():
+        if id(el) in unselected:
+            continue
         tag = _lname(el.tag)
 
         if tag == "note":
@@ -1168,7 +1192,7 @@ def _extract_mei_note_attachments(mei_path: str) -> Dict[str, Dict[str, Any]]:
             if tie_tokens & {"t", "terminal", "stop"}:
                 _mark(nid, "tied", "stop")
             # Children like <artic>, <trill>, <mordent>, <turn>, <ornam>.
-            for child in el:
+            for child in iter_selected_children(el):
                 ctag = _lname(child.tag)
                 if ctag == "artic":
                     val = child.attrib.get("artic") or child.attrib.get("value") or ctag
@@ -1821,24 +1845,34 @@ def _mei_xml_id(el: Any) -> Optional[str]:
 
 def _mei_music_measures(root: Any) -> List[Any]:
     """Return performed-score measures, excluding header incipits/examples."""
-    music_nodes = [el for el in root.iter() if _mei_local_name(el.tag) == "music"]
+    unselected = unselected_editorial_element_ids(root)
+
+    def _selected_measures(search_root: Any) -> List[Any]:
+        return [
+            el
+            for el in search_root.iter()
+            if _mei_local_name(el.tag) == "measure" and id(el) not in unselected
+        ]
+
+    music_nodes = [
+        el
+        for el in root.iter()
+        if _mei_local_name(el.tag) == "music" and id(el) not in unselected
+    ]
     if music_nodes:
         body_nodes = [
             el
             for music in music_nodes
             for el in music.iter()
-            if _mei_local_name(el.tag) == "body"
+            if _mei_local_name(el.tag) == "body" and id(el) not in unselected
         ]
         search_roots = body_nodes or music_nodes
         measures = [
-            el
-            for search_root in search_roots
-            for el in search_root.iter()
-            if _mei_local_name(el.tag) == "measure"
+            el for search_root in search_roots for el in _selected_measures(search_root)
         ]
         if measures:
             return measures
-    return [el for el in root.iter() if _mei_local_name(el.tag) == "measure"]
+    return _selected_measures(root)
 
 
 def _mei_measure_labels(root: Any) -> Optional[Dict[int, int]]:
@@ -1858,25 +1892,36 @@ def _mei_measure_labels(root: Any) -> Optional[Dict[int, int]]:
 
 
 def _iter_layer_timed_children(
-    layer_el: Any, multiplier: float = 1.0
-) -> Iterable[Tuple[Any, float]]:
-    for child in layer_el:
+    layer_el: Any, multiplier: float = 1.0, *, grace: bool = False
+) -> Iterable[Tuple[Any, float, bool]]:
+    """Yield ``(element, tuplet_multiplier, is_grace)`` for timed layer content."""
+    for child in iter_selected_children(layer_el):
         tag = _mei_local_name(child.tag)
+        child_grace = (
+            grace
+            or bool(str(child.attrib.get("grace", "")).strip())
+            or tag == "graceGrp"
+        )
         if tag in {"note", "rest", "mRest", "multiRest", "space", "chord"}:
-            yield child, multiplier
-        elif tag in {"beam", "tuplet", "bTrem", "fTrem"}:
+            yield child, multiplier, child_grace
+        elif tag in {"beam", "tuplet", "bTrem", "fTrem", "graceGrp"}:
             child_multiplier = multiplier * (_tuplet_multiplier(child) if tag == "tuplet" else 1.0)
-            yield from _iter_layer_timed_children(child, child_multiplier)
+            yield from _iter_layer_timed_children(
+                child, child_multiplier, grace=child_grace
+            )
 
 
 def _mei_timed_measure_positions(measures: Sequence[Any]) -> Dict[int, int]:
     """Count only the measures that contribute to the Verovio timeline."""
     positions: Dict[int, int] = {}
     for measure in measures:
+        unselected = unselected_editorial_element_ids(measure)
         for staff in measure.iter():
-            if _mei_local_name(staff.tag) != "staff":
+            if _mei_local_name(staff.tag) != "staff" or id(staff) in unselected:
                 continue
-            layers = [child for child in staff if _mei_local_name(child.tag) == "layer"] or [staff]
+            layers = [
+                child for child in iter_selected_children(staff) if _mei_local_name(child.tag) == "layer"
+            ] or [staff]
             if any(next(_iter_layer_timed_children(layer), None) is not None for layer in layers):
                 positions[id(measure)] = len(positions) + 1
                 break
@@ -1961,10 +2006,17 @@ def _source_staff_index_to_part_label_map_from_mei(root: Any) -> Dict[str, str]:
 
 def _mei_initial_meter_span(root: Any, fallback: float = 4.0) -> float:
     """Read the initial performed-score meter as a quarter-note span."""
-    music_nodes = [el for el in root.iter() if _mei_local_name(el.tag) == "music"]
+    unselected = unselected_editorial_element_ids(root)
+    music_nodes = [
+        el
+        for el in root.iter()
+        if _mei_local_name(el.tag) == "music" and id(el) not in unselected
+    ]
     search_roots = music_nodes or [root]
     for search_root in search_roots:
         for el in search_root.iter():
+            if id(el) in unselected:
+                continue
             if _mei_local_name(el.tag) not in {"scoreDef", "staffDef", "meterSig"}:
                 continue
             count = el.attrib.get("meter.count") or el.attrib.get("count")
@@ -2000,13 +2052,18 @@ def _mei_measure_meter_spans(
     if not target_measures:
         return {}
     target_ids = {id(measure) for measure in target_measures}
+    unselected = unselected_editorial_element_ids(root)
 
-    music_nodes = [el for el in root.iter() if _mei_local_name(el.tag) == "music"]
+    music_nodes = [
+        el
+        for el in root.iter()
+        if _mei_local_name(el.tag) == "music" and id(el) not in unselected
+    ]
     body_nodes = [
         el
         for music in music_nodes
         for el in music.iter()
-        if _mei_local_name(el.tag) == "body"
+        if _mei_local_name(el.tag) == "body" and id(el) not in unselected
     ]
     search_roots = body_nodes or music_nodes or [root]
 
@@ -2028,6 +2085,8 @@ def _mei_measure_meter_spans(
     spans: Dict[int, float] = {}
     for search_root in search_roots:
         for el in search_root.iter():
+            if id(el) in unselected:
+                continue
             name = _mei_local_name(el.tag)
             if name in {"scoreDef", "staffDef", "meterSig"}:
                 declared_span = _span_from_element(el)
@@ -2041,6 +2100,8 @@ def _mei_measure_meter_spans(
             # that measure. The iterator will encounter it again afterward,
             # keeping the value active for subsequent measures as well.
             for descendant in el.iter():
+                if id(descendant) in unselected:
+                    continue
                 if _mei_local_name(descendant.tag) not in {"scoreDef", "staffDef", "meterSig"}:
                     continue
                 declared_span = _span_from_element(descendant)
@@ -2145,7 +2206,7 @@ def _extract_mei_symbolic_note_timing(
     previous_regular_span: Optional[float] = None
 
     def _children_named(el: Any, name: str) -> List[Any]:
-        return [child for child in list(el) if _mei_local_name(child.tag) == name]
+        return [child for child in iter_selected_children(el) if _mei_local_name(child.tag) == name]
 
     def _store_note_timing(
         note: Any,
@@ -2181,10 +2242,31 @@ def _extract_mei_symbolic_note_timing(
         duration_scale: float = 1.0,
         staff_n: Optional[str] = None,
         layer_n: Optional[str] = None,
+        grace: bool = False,
     ) -> float:
         name = _mei_local_name(el.tag)
+        is_grace = (
+            grace
+            or bool(str(el.attrib.get("grace", "")).strip())
+            or name == "graceGrp"
+        )
 
-        if name in {"beam", "bTrem", "fTrem"}:
+        if name in EDITORIAL_CONTAINERS:
+            selected = select_editorial_branch(el)
+            if selected is None:
+                return cursor
+            return _walk_timed(
+                selected,
+                cursor,
+                inherited_dur=inherited_dur,
+                inherited_dots=inherited_dots,
+                duration_scale=duration_scale,
+                staff_n=staff_n,
+                layer_n=layer_n,
+                grace=is_grace,
+            )
+
+        if name in {"beam", "bTrem", "fTrem", "graceGrp"}:
             for child in list(el):
                 cursor = _walk_timed(
                     child,
@@ -2194,6 +2276,7 @@ def _extract_mei_symbolic_note_timing(
                     duration_scale=duration_scale,
                     staff_n=staff_n,
                     layer_n=layer_n,
+                    grace=is_grace,
                 )
             return cursor
 
@@ -2215,6 +2298,7 @@ def _extract_mei_symbolic_note_timing(
                     duration_scale=scale,
                     staff_n=staff_n,
                     layer_n=layer_n,
+                    grace=is_grace,
                 )
             return cursor
 
@@ -2225,7 +2309,7 @@ def _extract_mei_symbolic_note_timing(
                 inherited_dots=inherited_dots,
                 fallback=0.0,
             )
-            dur = float(dur or 0.0) * duration_scale
+            dur = 0.0 if is_grace else float(dur or 0.0) * duration_scale
             for note in _children_named(el, "note"):
                 note_dur = _mei_duration_to_quarters(
                     note,
@@ -2233,14 +2317,15 @@ def _extract_mei_symbolic_note_timing(
                     inherited_dots=el.attrib.get("dots") or inherited_dots,
                     fallback=dur / duration_scale if duration_scale else dur,
                 )
+                stored = 0.0 if is_grace else float(note_dur or 0.0) * duration_scale
                 _store_note_timing(
                     note,
                     cursor=cursor,
-                    duration=float(note_dur or 0.0) * duration_scale,
+                    duration=stored,
                     staff_n=staff_n,
                     layer_n=layer_n,
                 )
-            return cursor + dur
+            return cursor if is_grace else cursor + dur
 
         if name == "note":
             dur = _mei_duration_to_quarters(
@@ -2249,7 +2334,7 @@ def _extract_mei_symbolic_note_timing(
                 inherited_dots=inherited_dots,
                 fallback=0.0,
             )
-            dur = float(dur or 0.0) * duration_scale
+            dur = 0.0 if is_grace else float(dur or 0.0) * duration_scale
             _store_note_timing(
                 el,
                 cursor=cursor,
@@ -2257,9 +2342,11 @@ def _extract_mei_symbolic_note_timing(
                 staff_n=staff_n,
                 layer_n=layer_n,
             )
-            return cursor + dur
+            return cursor if is_grace else cursor + dur
 
         if name in {"rest", "space"}:
+            if is_grace:
+                return cursor
             dur = _mei_duration_to_quarters(
                 el,
                 inherited_dur=inherited_dur,
@@ -2269,6 +2356,8 @@ def _extract_mei_symbolic_note_timing(
             return cursor + (float(dur or 0.0) * duration_scale)
 
         if name in {"mRest", "multiRest"}:
+            if is_grace:
+                return cursor
             dur = _mei_duration_to_quarters(
                 el,
                 inherited_dur=inherited_dur,
@@ -2286,6 +2375,7 @@ def _extract_mei_symbolic_note_timing(
                 duration_scale=duration_scale,
                 staff_n=staff_n,
                 layer_n=layer_n,
+                grace=is_grace,
             )
         return cursor
 
@@ -2348,8 +2438,11 @@ def _extract_mei_tie_next_map(mei_path: str) -> Dict[str, str]:
         root = ET.parse(mei_path).getroot()
     except Exception:
         return {}
+    unselected = unselected_editorial_element_ids(root)
     out: Dict[str, str] = {}
     for el in root.iter():
+        if id(el) in unselected:
+            continue
         if _mei_local_name(el.tag) != "tie":
             continue
         start = _normalize_xml_ref(el.attrib.get("startid"))
@@ -3085,6 +3178,8 @@ def _extract_mei_events(
         if el is None:
             return None
         for child in el.iter():
+            if id(child) in unselected_ids:
+                continue
             if _local_name(child.tag) in {"note", "chord"}:
                 return child
         return None
@@ -3094,6 +3189,8 @@ def _extract_mei_events(
             return None
         last = None
         for child in el.iter():
+            if id(child) in unselected_ids:
+                continue
             if _local_name(child.tag) in {"note", "chord"}:
                 last = child
         return last
@@ -3103,6 +3200,8 @@ def _extract_mei_events(
             return 0
         count = 0
         for child in el.iter():
+            if id(child) in unselected_ids:
+                continue
             if _local_name(child.tag) in {"note", "chord"}:
                 count += 1
         return count
@@ -3111,6 +3210,8 @@ def _extract_mei_events(
         if el is None:
             return None
         for child in el.iter():
+            if id(child) in unselected_ids:
+                continue
             if _local_name(child.tag) in {"note", "chord", "rest"}:
                 return child
         return None
@@ -3120,6 +3221,8 @@ def _extract_mei_events(
             return None
         last = None
         for child in el.iter():
+            if id(child) in unselected_ids:
+                continue
             if _local_name(child.tag) in {"note", "chord", "rest"}:
                 last = child
         return last
@@ -3129,13 +3232,15 @@ def _extract_mei_events(
             return 0
         count = 0
         for child in el.iter():
+            if id(child) in unselected_ids:
+                continue
             if _local_name(child.tag) in {"note", "chord", "rest"}:
                 count += 1
         return count
 
     def _clean_text(el: Any) -> Optional[str]:
         try:
-            text = " ".join(" ".join(el.itertext()).split())
+            text = " ".join(selected_itertext(el, unselected_ids).split())
         except Exception:
             return None
         return text or None
@@ -3173,8 +3278,13 @@ def _extract_mei_events(
         return metadata
 
     xml_id_key = "{http://www.w3.org/XML/1998/namespace}id"
+    unselected_ids = unselected_editorial_element_ids(root)
     parent_map = {child: parent for parent in root.iter() for child in parent}
-    measure_elements = [el for el in root.iter() if _local_name(el.tag) == "measure"]
+    measure_elements = [
+        el
+        for el in root.iter()
+        if _local_name(el.tag) == "measure" and id(el) not in unselected_ids
+    ]
     measure_labels = _mei_event_measure_labels(root) if use_measure_labels else {}
     events: List[Dict[str, Any]] = []
     barline_ordinal = 0
@@ -3209,7 +3319,9 @@ def _extract_mei_events(
         cached = layer_index_cache.get(key)
         if cached is not None:
             return cached
-        children = list(layer_el)
+        # Expand editorial containers so a <barLine> inside a selected branch
+        # lines up with its selected musical neighbors.
+        children = list(iter_selected_children(layer_el))
         child_info: List[Dict[str, Any]] = []
         cum_note = 0
         cum_timed = 0
@@ -3223,6 +3335,8 @@ def _extract_mei_events(
             note_count = 0
             timed_count = 0
             for sub in ch.iter():
+                if id(sub) in unselected_ids:
+                    continue
                 sub_name = _local_name(sub.tag)
                 if sub_name in {"note", "chord"}:
                     if first_note is None:
@@ -3265,17 +3379,17 @@ def _extract_mei_events(
         return cached
 
     for el in root.iter():
+        if id(el) in unselected_ids:
+            continue
         tag_name = _local_name(el.tag)
         if tag_name not in _MEI_EVENT_TYPE_MAP:
             continue
 
-        # Note-internal markers (e.g. <accid> on a <note>) are already represented
-        # by the pitch row; suppress them here to avoid duplicate events.
-        if tag_name in _MEI_NOTE_INTERNAL_TAGS:
-            parent_el = parent_map.get(el)
-            parent_tag = _local_name(parent_el.tag) if parent_el is not None else ""
-            if parent_tag in {"note", "chord"}:
-                continue
+        # Note-internal markers (e.g. <accid> on a <note>, including wrapped inside
+        # a selected editorial branch) are already represented by the pitch row;
+        # suppress them here to avoid duplicate events.
+        if tag_name in _MEI_NOTE_INTERNAL_TAGS and _nearest_note_or_chord(el) is not None:
+            continue
 
         event_type = _MEI_EVENT_TYPE_MAP[tag_name]
         staff_el = _ancestor(el, "staff")
