@@ -277,8 +277,9 @@ saved responses without network access. Without `allow_upload=True` the
 call fails on the first page that has no saved response, so nothing is sent
 by accident.
 
-Boxes drawn by hand, or produced by another detector, go in the same place
-and format: `boxes/<page_id>.json` with a `measures` list of
+Boxes added by hand (typed as pixel rectangles, or copied from another
+program), or produced by another detector, go in the same place and format:
+`boxes/<page_id>.json` with a `measures` list of
 `{"ulx": …, "uly": …, "lrx": …, "lry": …}` pixel boxes. The detector pads its
 boxes, so neighbouring boxes can overlap slightly; the original geometry is
 kept.
