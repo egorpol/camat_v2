@@ -274,9 +274,9 @@ def test_unselected_accidental_does_not_carry(tmp_path: Path):
     text = _mei(
         _bar(
             "<choice>"
-            f"<sic>{_note('n1')}</sic>"
-            f'<corr>{_note("n1x", extra="accid=\'s\'")}</corr>'
-            "</choice>"
+            + "<sic>" + _note("n1") + "</sic>"
+            + "<corr>" + _note("n1x", extra='accid="s"') + "</corr>"
+            + "</choice>"
             + _note("n2")
             + _note("n3", pname="d")
             + _note("n4", pname="e")
@@ -290,9 +290,9 @@ def test_unselected_accidental_does_not_carry(tmp_path: Path):
     selected_sharp = _mei(
         _bar(
             "<choice>"
-            f'<sic>{_note("n1", extra="accid=\'s\'")}</sic>'
-            f"<corr>{_note('n1x')}</corr>"
-            "</choice>"
+            + "<sic>" + _note("n1", extra='accid="s"') + "</sic>"
+            + "<corr>" + _note("n1x") + "</corr>"
+            + "</choice>"
             + _note("n2")
             + _note("n3", pname="d")
             + _note("n4", pname="e")
@@ -308,10 +308,10 @@ def test_effective_alters_ignore_unselected_notes():
         _mei(
             _bar(
                 "<app><lem>"
-                f"{_note('keep')}"
-                "</lem><rdg>"
-                f'{_note("drop", extra="accid=\'s\'")}'
-                "</rdg></app>"
+                + _note("keep")
+                + "</lem><rdg>"
+                + _note("drop", extra='accid="s"')
+                + "</rdg></app>"
                 + _note("later")
                 + _note("n3", pname="d")
                 + _note("n4", pname="e")
@@ -336,9 +336,9 @@ def test_unselected_tie_element_does_not_attach(tmp_path: Path):
         _bar(
             _note("a", extra='tie="i"')
             + "<choice>"
-            f'<sic>{_note("b", extra="tie=\'t\'")}</sic>'
-            f'<corr>{_note("bx", pname="b", extra="tie=\'t\'")}<tie startid="#a" endid="#bx"/></corr>'
-            "</choice>"
+            + "<sic>" + _note("b", extra='tie="t"') + "</sic>"
+            + "<corr>" + _note("bx", pname="b", extra='tie="t"') + '<tie startid="#a" endid="#bx"/></corr>'
+            + "</choice>"
             + _note("c", pname="d")
             + _note("d", pname="e")
         )
@@ -354,9 +354,9 @@ def test_unselected_tie_attr_does_not_leak_across_bars(tmp_path: Path):
         tmp_path / "tie-attr.mei",
         _bar(
             "<choice>"
-            f"<sic>{_note('a')}</sic>"
-            f'<corr>{_note("ax", pname="b", extra="tie=\'i\'")}</corr>'
-            "</choice>"
+            + "<sic>" + _note("a") + "</sic>"
+            + "<corr>" + _note("ax", pname="b", extra='tie="i"') + "</corr>"
+            + "</choice>"
             + _note("b2", pname="d")
             + _note("b3", pname="e")
             + _note("b4", pname="f")
